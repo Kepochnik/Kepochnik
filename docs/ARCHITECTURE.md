@@ -344,7 +344,23 @@ opting out deletes the server row rather than hiding it.
 
 ## 10. Design foundations proposed for Phase 2
 
-Locking these alongside the architecture saves a round trip. Nothing here is implemented yet.
+**Two directions are on the table and one has to be chosen before Phase 2 starts.**
+
+*Direction A — paper and teal* (below, and in `docs/prototype.html`). Safe, warm, legible.
+Its weakness is that warm cream plus one muted accent, uniform 16–24px radii and outlined
+cards everywhere is the single most common look in generated design work right now; it
+reads as unowned.
+
+*Direction B — field log* (`docs/prototype-fieldlog.html`). The observer is a researcher of
+their own body, so the app is built as the instrument: graph paper, blue-black ink,
+vermilion stamp ink used only for marks, IBM Plex Mono for every number and label, IBM
+Plex Sans for prose, zero radii, no cards — hierarchy from rules, gutters and margins.
+The hero is a stamp rather than a blob, and pressing it files an entry. Charts are drawn
+as instrument traces on the grid, not pastel bars. The humour lives in the deadpan rigour
+applied to a silly subject, which is exactly the two-audience problem the brief poses:
+the same screen suits a meme thread and a doctor's appointment without changing register.
+
+Everything below describes direction A. Direction B's tokens live in the prototype.
 
 **Accent — deep muted teal, not mustard.** `#1F6F6B`, pressed `#175451`, tint `#DCE9E6`.
 It reads modern and ownable, sits calmly on cream, and stays credible on a page a doctor
