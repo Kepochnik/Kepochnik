@@ -6,8 +6,15 @@
  * only removes it from the aggregate that may be uploaded to the leaderboard.
  */
 
-/** Two writes closer than this are a double-fire from one physical tap, not two events. */
-export const DOUBLE_FIRE_WINDOW_MS = 350;
+/**
+ * Two writes closer than this are a double-fire from one physical tap, not two events.
+ *
+ * Kept deliberately tight. A pointer event pair from a single tap lands inside ~100ms;
+ * a person deliberately tapping fast manages roughly three per second. Driving the
+ * clickable prototype showed that a wider window silently swallows genuine taps, which
+ * is the one failure this app cannot afford.
+ */
+export const DOUBLE_FIRE_WINDOW_MS = 120;
 
 /** Rolling window used for burst detection. */
 export const BURST_WINDOW_MS = 60_000;

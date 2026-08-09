@@ -19,9 +19,15 @@ is awaiting approval. See **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** for t
 picture — local schema, server schema, repositories, state, widget sync, anti-cheat, i18n,
 and the design foundations proposed for Phase 2.
 
-**[docs/design-preview.html](docs/design-preview.html)** shows what it looks like: palette,
-type specimen, the Pip mascot, all four tabs, Track states, achievements, leaderboard,
-paywall, share cards, widgets and the motion spec. Self-contained — open it in a browser.
+Two self-contained HTML files show the product, no build required:
+
+- **[docs/prototype.html](docs/prototype.html)** — a working prototype. Tap to log, long-press
+  to backfill, swipe a row to delete, tag an event, switch tabs, hit the paywall, flip to
+  Russian or dark. Streaks, weekly averages, charts and achievements are computed from real
+  logic; state persists in the browser.
+- **[docs/design-preview.html](docs/design-preview.html)** — the spec sheet: palette, type
+  specimen, the Pip mascot, all four tabs, Track states, achievements, leaderboard, paywall,
+  share cards, widgets and the motion spec.
 
 The app does not launch yet: `src/app/` (routes) lands in Phase 2.
 

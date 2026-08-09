@@ -263,7 +263,7 @@ Pre-iOS-17 fallback: the widget deep-links `squeakly://log`, which logs and retu
 Three layers, sharing one set of constants (`src/domain/scoring.ts` ↔ the SQL function).
 
 **Layer 1 — local, `domain/integrity.ts`.**
-Writes closer than 350ms are one physical tap and are dropped entirely. Beyond 12 events
+Writes closer than 120ms are one physical tap and are dropped entirely. Beyond 12 events
 in a rolling 60s window, or a device clock that jumped backwards more than a minute, or an
 event more than 10 minutes in the future → saved and shown, flagged `suspect`, excluded
 from the uploaded score.
@@ -395,11 +395,18 @@ milestones, share cards. Nowhere else. Product-first, not mascot-first.
 6. **Satoshi is out, Onest is in** — see §10. Found while building the visual preview:
    Satoshi has no Cyrillic at all.
 
-## Visual preview
+## Visual preview and prototype
 
 `docs/design-preview.html` renders the whole thing — palette, type specimen, Pip, all four
 tabs, Track states (post-tap, empty, dark, Russian), achievements, leaderboard, paywall,
-share cards, widgets and the motion spec. Open it in any browser; it is fully self-contained.
+share cards, widgets and the motion spec.
+
+`docs/prototype.html` is the same product as a working prototype: the tap path, backfill,
+swipe-to-delete with undo, tagging, the paywall, both languages and both themes, with
+streaks, charts and achievements computed by the same logic described here. Driving it is
+what surfaced the double-fire window being too wide (§7).
+
+Both are self-contained; open either in a browser.
 
 ## 12. What I need from you to start Phase 2
 
