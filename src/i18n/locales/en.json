@@ -1,0 +1,567 @@
+{
+  "common": {
+    "appName": "Squeakly",
+    "tabs": {
+      "track": "Track",
+      "diary": "Diary",
+      "stats": "Stats",
+      "profile": "Profile"
+    },
+    "actions": {
+      "save": "Save",
+      "cancel": "Cancel",
+      "delete": "Delete",
+      "undo": "Undo",
+      "done": "Done",
+      "close": "Close",
+      "retry": "Try again",
+      "edit": "Edit",
+      "add": "Add",
+      "share": "Share",
+      "export": "Export",
+      "continue": "Continue",
+      "skip": "Skip",
+      "gotIt": "Got it",
+      "seeAll": "See all"
+    },
+    "time": {
+      "today": "Today",
+      "yesterday": "Yesterday",
+      "justNow": "Just now",
+      "at": "at {{time}}"
+    },
+    "range": {
+      "7": "7D",
+      "30": "30D",
+      "90": "90D"
+    },
+    "weekdaysShort": {
+      "0": "Sun",
+      "1": "Mon",
+      "2": "Tue",
+      "3": "Wed",
+      "4": "Thu",
+      "5": "Fri",
+      "6": "Sat"
+    },
+    "states": {
+      "loading": "One moment",
+      "errorTitle": "That didn't work",
+      "errorBody": "Something went wrong on our side. Your data is safe on this device.",
+      "offlineTitle": "You're offline",
+      "offlineBody": "Tracking works without a connection. Rankings will catch up later."
+    },
+    "pro": {
+      "badge": "Pro",
+      "locked": "Pro feature"
+    }
+  },
+
+  "onboarding": {
+    "welcome": {
+      "title": "Track it in one tap.",
+      "body": "Squeakly counts what your gut is up to. No forms, no sign-up, no lectures."
+    },
+    "privacy": {
+      "title": "Your data stays here.",
+      "body": "Events, meals and symptoms never leave this device. Rankings are optional and only ever share a nickname and a number."
+    },
+    "widget": {
+      "title": "Log without opening the app.",
+      "body": "Add the Squeakly widget to your home screen and one tap is all it takes."
+    },
+    "goal": {
+      "title": "What brings you here?",
+      "options": {
+        "curious": "Just curious",
+        "patterns": "Looking for patterns",
+        "doctor": "Preparing for a doctor"
+      },
+      "note": "This only changes what we show first. You can switch any time."
+    },
+    "meetPip": {
+      "title": "This is Pip.",
+      "body": "Pip shows up when something good happens. Otherwise Pip stays out of the way."
+    }
+  },
+
+  "track": {
+    "hero": {
+      "a11yLabel": "Log an event",
+      "a11yHint": "Double tap to log. Press and hold to add an event from earlier."
+    },
+    "today": "Today",
+    "todayCount_one": "{{count}} event today",
+    "todayCount_other": "{{count}} events today",
+    "streak": "Streak",
+    "streakDays_one": "{{count}} day",
+    "streakDays_other": "{{count}} days",
+    "streakAtRisk": "Log today to keep it",
+    "weekAverage": "Weekly avg",
+    "recent": "Today's log",
+    "cheer": {
+      "0": "Logged.",
+      "1": "Noted.",
+      "2": "On the record.",
+      "3": "Counted.",
+      "4": "Filed away.",
+      "5": "Duly noted.",
+      "6": "Recorded.",
+      "7": "Data is data."
+    },
+    "tagPanel": {
+      "title": "Add detail?",
+      "hint": "Optional — it's already saved",
+      "volume": "Volume",
+      "smell": "Smell",
+      "context": "Where"
+    },
+    "volume": {
+      "silent": "Silent",
+      "normal": "Normal",
+      "loud": "Loud"
+    },
+    "smell": {
+      "none": "None",
+      "mild": "Mild",
+      "lethal": "Lethal"
+    },
+    "context": {
+      "home": "Home",
+      "work": "Work",
+      "public": "Public",
+      "bed": "Bed",
+      "gym": "Gym"
+    },
+    "backfill": {
+      "title": "Add an earlier event",
+      "day": "Day",
+      "time": "Time",
+      "confirm": "Add event"
+    },
+    "empty": {
+      "title": "Quiet so far today",
+      "body": "Tap the button when something happens. That's the whole app."
+    },
+    "removed": "Event removed",
+    "widgetSynced_one": "{{count}} event synced from your widget",
+    "widgetSynced_other": "{{count}} events synced from your widget"
+  },
+
+  "diary": {
+    "title": "Diary",
+    "sections": {
+      "meals": "Meals",
+      "symptoms": "Symptoms",
+      "bristol": "Bristol",
+      "note": "Note"
+    },
+    "meals": {
+      "add": "Add a meal",
+      "titlePlaceholder": "What did you eat?",
+      "time": "Time",
+      "triggersLabel": "Common triggers",
+      "empty": "No meals logged for this day"
+    },
+    "triggers": {
+      "dairy": "Dairy",
+      "beans": "Beans",
+      "gluten": "Gluten",
+      "beer": "Beer",
+      "fast_food": "Fast food",
+      "carbonated": "Fizzy drinks",
+      "onion_garlic": "Onion / garlic",
+      "sweeteners": "Sweeteners"
+    },
+    "symptoms": {
+      "bloating": "Bloating",
+      "pain": "Pain",
+      "scaleHint": "1 = none, 5 = severe",
+      "notRated": "Not rated"
+    },
+    "bristol": {
+      "label": "Bristol scale",
+      "hint": "Pick the closest shape",
+      "add": "Add entry",
+      "type": "Type {{type}}",
+      "types": {
+        "1": "Separate hard lumps",
+        "2": "Lumpy and firm",
+        "3": "Firm with cracks",
+        "4": "Smooth and soft",
+        "5": "Soft blobs",
+        "6": "Fluffy pieces",
+        "7": "Entirely liquid"
+      }
+    },
+    "note": {
+      "placeholder": "Anything worth remembering about today?"
+    },
+    "empty": {
+      "title": "Nothing logged for this day",
+      "body": "Meals and symptoms help you spot patterns later. Two taps is enough."
+    },
+    "historyLocked": {
+      "title": "Older than 30 days",
+      "body": "Free keeps the last 30 days. Pro opens your full history."
+    }
+  },
+
+  "stats": {
+    "title": "Stats",
+    "summary": {
+      "total": "Total events",
+      "perDay": "Per day",
+      "activeDays": "Days logged",
+      "busiestHour": "Busiest hour",
+      "busiestDay": "Busiest day",
+      "vsPrevious": "vs previous {{count}} days"
+    },
+    "charts": {
+      "byHour": "By hour of day",
+      "byHourCaption": "When events happen across a 24-hour clock",
+      "byWeekday": "By day of week",
+      "byWeekdayCaption": "Totals for each weekday in this range",
+      "trend": "Trend",
+      "trendCaption": "Events per day across the selected range",
+      "byTag": "By tag",
+      "byTagCaption": "Only counts events you tagged",
+      "untagged": "Untagged"
+    },
+    "dimensions": {
+      "volume": "Volume",
+      "smell": "Smell",
+      "context": "Place"
+    },
+    "empty": {
+      "title": "Not enough to chart yet",
+      "body": "A few days of logging and this page gets interesting.",
+      "cta": "Go to Track"
+    },
+    "share": {
+      "title": "Share your week",
+      "templates": {
+        "clean": "Clean",
+        "funny": "Funny",
+        "minimal": "Minimal"
+      },
+      "generating": "Building your card",
+      "saved": "Saved to photos"
+    },
+    "export": {
+      "pdf": "Export PDF report",
+      "csv": "Export CSV",
+      "pdfHint": "A neutral summary you can hand to a doctor",
+      "csvHint": "Raw rows for your own analysis"
+    },
+    "lockedRange": "90 days is a Pro range"
+  },
+
+  "profile": {
+    "title": "Profile",
+    "nickname": "Nickname",
+    "editNickname": "Change nickname",
+    "stats": {
+      "total": "Total events",
+      "streak": "Best streak",
+      "percentile": "Top {{percent}}%",
+      "since": "Tracking since {{date}}"
+    },
+    "achievements": "Achievements",
+    "achievementsProgress": "{{unlocked}} of {{total}}",
+    "leaderboard": "Leaderboard",
+    "rooms": "Rooms",
+    "appearance": "Appearance",
+    "goPro": "Squeakly Pro",
+    "settings": "Settings"
+  },
+
+  "achievements": {
+    "title": "Achievements",
+    "locked": "Locked",
+    "unlockedOn": "Unlocked {{date}}",
+    "secret": "Secret",
+    "secretHint": "Keep going and you'll find out.",
+    "progress": "{{current}} / {{target}}",
+    "unlockedToast": "Achievement unlocked",
+    "items": {
+      "first_note": {
+        "title": "Ice Breaker",
+        "description": "You logged your first one. The hard part is over."
+      },
+      "ten_club": {
+        "title": "Double Digits",
+        "description": "Ten events on the record."
+      },
+      "century": {
+        "title": "Century Club",
+        "description": "One hundred logged. That's discipline."
+      },
+      "five_hundred": {
+        "title": "Five Hundred",
+        "description": "Five hundred entries. You could publish."
+      },
+      "four_digits": {
+        "title": "Four Digits",
+        "description": "A thousand events. Genuinely committed."
+      },
+      "double_digit_day": {
+        "title": "Big Day",
+        "description": "Ten in a single day. Hope everything's alright."
+      },
+      "rush_hour": {
+        "title": "Rush Hour",
+        "description": "Five inside one hour. Peak traffic."
+      },
+      "three_in_a_row": {
+        "title": "Warming Up",
+        "description": "Three days in a row."
+      },
+      "seven_day_run": {
+        "title": "Full Week",
+        "description": "Seven days without missing one."
+      },
+      "month_of_honesty": {
+        "title": "Thirty Days",
+        "description": "A month of honest tracking."
+      },
+      "hundred_days": {
+        "title": "Hundred Days",
+        "description": "One hundred days straight. Remarkable."
+      },
+      "comeback": {
+        "title": "The Comeback",
+        "description": "Back after a week away. No judgement here."
+      },
+      "night_shift": {
+        "title": "Night Shift",
+        "description": "Ten entries between midnight and 5am."
+      },
+      "dawn_patrol": {
+        "title": "Dawn Patrol",
+        "description": "Ten before 8am. Early riser."
+      },
+      "weekend_form": {
+        "title": "Weekend Form",
+        "description": "Twenty logged on weekends."
+      },
+      "pocket_scientist": {
+        "title": "Pocket Scientist",
+        "description": "Twenty-five logged straight from the widget."
+      },
+      "quiet_type": {
+        "title": "The Quiet Type",
+        "description": "Twenty-five silent entries. Stealth mode."
+      },
+      "brass_section": {
+        "title": "Brass Section",
+        "description": "Twenty-five loud ones. Bold."
+      },
+      "field_researcher": {
+        "title": "Field Researcher",
+        "description": "Logged in all five places."
+      },
+      "full_spectrum": {
+        "title": "Full Spectrum",
+        "description": "Fifty entries tagged completely. A researcher's touch."
+      },
+      "hazard_pay": {
+        "title": "Hazard Pay",
+        "description": "Ten entries marked lethal. Ventilation recommended."
+      },
+      "first_meal": {
+        "title": "Mise en Place",
+        "description": "Your first meal entry."
+      },
+      "trigger_hunter": {
+        "title": "Trigger Hunter",
+        "description": "Every trigger used at least once."
+      },
+      "careful_keeper": {
+        "title": "Careful Keeper",
+        "description": "Seven days of complete diary entries."
+      }
+    }
+  },
+
+  "leaderboard": {
+    "title": "Leaderboard",
+    "boards": {
+      "streak": "Streak",
+      "volume": "This week"
+    },
+    "optIn": {
+      "title": "Join the rankings?",
+      "body": "We'd send a nickname, your streak and your weekly count. Nothing else — no events, no tags, no diary.",
+      "confirm": "Join anonymously",
+      "decline": "Not now"
+    },
+    "yourPosition": "You",
+    "rank": "#{{rank}}",
+    "empty": {
+      "title": "Nobody here yet",
+      "body": "Be the first name on the board."
+    },
+    "report": {
+      "action": "Report",
+      "title": "Report this nickname",
+      "reasons": {
+        "offensive_nickname": "Offensive nickname",
+        "impersonation": "Pretending to be someone",
+        "spam": "Spam",
+        "other": "Something else"
+      },
+      "submitted": "Thanks — we'll take a look."
+    },
+    "rooms": {
+      "title": "Rooms",
+      "create": "Create a room",
+      "join": "Join with a code",
+      "codeLabel": "Room code",
+      "codePlaceholder": "6 characters",
+      "namePlaceholder": "Room name",
+      "members": "{{count}} of {{limit}} people",
+      "full": "This room is full",
+      "notFound": "No room with that code",
+      "leave": "Leave room",
+      "shareCode": "Share code"
+    },
+    "nickname": {
+      "title": "Your nickname",
+      "hint": "Letters and numbers, 3 to 16 characters",
+      "taken": "That one's taken",
+      "rejected": "Let's pick something else",
+      "regenerate": "Give me another"
+    }
+  },
+
+  "paywall": {
+    "title": "Squeakly Pro",
+    "subtitle": "Your whole history, proper reports, no ads.",
+    "features": {
+      "history": "Unlimited history",
+      "historyBody": "Everything you've ever logged, not just 30 days",
+      "pdf": "PDF report",
+      "pdfBody": "A clean summary to bring to an appointment",
+      "charts": "Extended charts",
+      "chartsBody": "90-day ranges and tag breakdowns",
+      "ads": "No ads",
+      "adsBody": "Diary and Stats stay clean",
+      "themes": "Button themes",
+      "themesBody": "Make the big button yours",
+      "frame": "Leaderboard frame",
+      "frameBody": "A quiet mark next to your nickname"
+    },
+    "plans": {
+      "monthly": "Monthly",
+      "monthlyPrice": "$1.99 / month",
+      "lifetime": "Lifetime",
+      "lifetimePrice": "$19.99 once",
+      "lifetimeBadge": "Best value"
+    },
+    "cta": "Go Pro",
+    "restore": "Restore purchases",
+    "terms": "Terms",
+    "privacy": "Privacy",
+    "footnote": "Cancel any time. Your data stays on your device either way."
+  },
+
+  "settings": {
+    "title": "Settings",
+    "sections": {
+      "general": "General",
+      "data": "Your data",
+      "rankings": "Rankings",
+      "about": "About"
+    },
+    "language": "Language",
+    "languageSystem": "Follow device",
+    "theme": "Theme",
+    "themeOptions": {
+      "system": "Follow device",
+      "light": "Light",
+      "dark": "Dark"
+    },
+    "haptics": "Haptics",
+    "weekStart": "Week starts on",
+    "weekStartOptions": {
+      "system": "Follow device",
+      "mon": "Monday",
+      "sun": "Sunday"
+    },
+    "reminders": "Daily reminder",
+    "remindersOff": "Off",
+    "exportCsv": "Export CSV",
+    "deleteAll": {
+      "action": "Delete all data",
+      "title": "Delete everything?",
+      "body": "This erases every event, meal and symptom on this device, and removes your entry from the rankings. It cannot be undone.",
+      "confirm": "Delete everything",
+      "done": "All data deleted"
+    },
+    "leaderboardOptOut": "Leave the rankings",
+    "restorePurchases": "Restore purchases",
+    "version": "Version {{version}}",
+    "disclaimerTitle": "A note on what this is",
+    "disclaimer": "Squeakly is a self-observation diary. It does not diagnose anything and is not medical advice."
+  },
+
+  "share": {
+    "title": "Share card",
+    "week": "This week",
+    "events": "events",
+    "streak": "day streak",
+    "bestDay": "Busiest day",
+    "tagline": "Tracked with Squeakly",
+    "funnyLine": {
+      "0": "A statistically productive week.",
+      "1": "The data speaks for itself.",
+      "2": "Peer review pending.",
+      "3": "Results are in."
+    }
+  },
+
+  "report": {
+    "title": "Symptom diary summary",
+    "subtitle": "{{from}} — {{to}}",
+    "generated": "Generated {{date}}",
+    "sections": {
+      "overview": "Overview",
+      "daily": "Daily record",
+      "bristol": "Bristol stool scale",
+      "meals": "Meals"
+    },
+    "fields": {
+      "dateRange": "Date range",
+      "totalEvents": "Gas events recorded",
+      "eventsPerDay": "Average per day",
+      "averageBloating": "Average bloating (1–5)",
+      "averagePain": "Average pain (1–5)",
+      "bristolEntries": "Bowel movements recorded",
+      "date": "Date",
+      "events": "Events",
+      "bloating": "Bloating",
+      "pain": "Pain",
+      "note": "Note",
+      "type": "Type",
+      "count": "Count",
+      "time": "Time",
+      "meal": "Meal",
+      "triggers": "Triggers"
+    },
+    "noData": "No data recorded",
+    "disclaimer": "This document is a self-observation diary compiled by the user. It is not a diagnosis and does not constitute medical advice."
+  },
+
+  "errors": {
+    "generic": "Something went wrong.",
+    "network": "No connection right now.",
+    "nicknameTaken": "That nickname is taken.",
+    "nicknameInvalid": "Use 3 to 16 letters or numbers.",
+    "roomNotFound": "No room with that code.",
+    "roomFull": "That room is full.",
+    "purchaseFailed": "The purchase didn't go through.",
+    "exportFailed": "The export couldn't be created.",
+    "rateLimited": "Too many attempts. Try again in a minute."
+  }
+}
