@@ -342,55 +342,46 @@ opting out deletes the server row rather than hiding it.
 
 ---
 
-## 10. Design foundations proposed for Phase 2
+## 10. Design foundations — decided
 
-**Two directions are on the table and one has to be chosen before Phase 2 starts.**
+Direction chosen from a six-way comparison (`docs/directions.html`): **clay**. Soft volume,
+warm white paper, a coral key you can feel yourself press. Two earlier directions —
+cream-and-teal, and an austere field log — were rejected and removed.
 
-*Direction A — paper and teal* (below, and in `docs/prototype.html`). Safe, warm, legible.
-Its weakness is that warm cream plus one muted accent, uniform 16–24px radii and outlined
-cards everywhere is the single most common look in generated design work right now; it
-reads as unowned.
+The idea is tactility. Depth is the design system, not decoration: every pressable thing
+has a hard bottom edge that collapses under the finger, every surface floats on a warm
+brown-tinted shadow, and nothing is separated by an outline. Uniform generous rounding is
+correct *here* precisely because the world is moulded rather than drawn.
 
-*Direction B — field log* (`docs/prototype-fieldlog.html`). The observer is a researcher of
-their own body, so the app is built as the instrument: graph paper, blue-black ink,
-vermilion stamp ink used only for marks, IBM Plex Mono for every number and label, IBM
-Plex Sans for prose, zero radii, no cards — hierarchy from rules, gutters and margins.
-The hero is a stamp rather than a blob, and pressing it files an entry. Charts are drawn
-as instrument traces on the grid, not pastel bars. The humour lives in the deadpan rigour
-applied to a silly subject, which is exactly the two-audience problem the brief poses:
-the same screen suits a meme thread and a doctor's appointment without changing register.
+**Light**
+`--bg #FFF6F1` · `--bg-2 #FFEFE8` · `--card #FFFFFF`
+`--ink #2A1D18` · `--ink-2 #7A6259` · `--ink-3 #A08A80` · `--hair #F5E4DB`
+`--coral #F0512A` (primary) · `--coral-d #C33517` (the pressed edge) · `--coral-l #FF8A5B` · `--coral-t #FFE2D6`
+`--berry #5B54E8` (secondary data) · `--mint #17B3A3` · `--sun #F2A413`
+`--ok #2FA36B` · `--err #E0453A`
 
-Everything below describes direction A. Direction B's tokens live in the prototype.
+**Dark** — warm, never grey:
+`--bg #1A1412` · `--bg-2 #221A17` · `--card #291F1B` · `--ink #FFF1EA` · `--hair #3A2C27`
+`--coral #FF6A45` · `--berry #8B85FF` · `--mint #33CBBA`
 
-**Accent — deep muted teal, not mustard.** `#1F6F6B`, pressed `#175451`, tint `#DCE9E6`.
-It reads modern and ownable, sits calmly on cream, and stays credible on a page a doctor
-might see. Chart supports, restrained: muted terracotta `#C2673F`, smoky olive `#7C8B5C`,
-dusty blue `#5B7C99`.
+**Elevation** — three steps, all warm-tinted, never black:
+`--sh-1 0 8px 18px -10px rgba(120,70,50,.30)` (cards)
+`--sh-2 0 16px 30px -14px rgba(120,70,50,.34)` (sheets, the tab bar)
+Pressables additionally carry `0 6px 0 0 var(--coral-d)`, which collapses to `0` on press.
 
-**Paper.** Base `#F6F1E8`, alt `#EFE8DC`, raised `#FBF8F2` — the tonal shift is what
-differentiates Track from Diary from Stats without four different themes. Ink `#171512`
-(warm, not pure black), secondary `#5A544B`, hairline `#DFD6C6`.
-Dark: `#131211` / `#1A1917` / `#201E1B`, ink `#F2ECE1`, accent lifted to `#4FA8A0`.
-States: success `#3F7D58`, warning `#B8862F`, error `#B4453A`.
+**Type — Nunito** (OFL, full Cyrillic). Rounded, warm, heavy where it counts.
+900 for the counter and headings, 800 for labels and controls, 600 for body.
+Hero counter 84pt/900, tracking −5%, per-digit columns so the odometer roll works.
 
-**Type — Onest** (OFL), *not* Satoshi. Satoshi ships no Cyrillic, which disqualifies it as
-the single family for an app whose second language is Russian — a mixed-font fallback
-would break the type system on exactly the screens we care about. Onest is the same
-contemporary, slightly warm grotesk with first-class Cyrillic and strong numerals.
-Hero counter at 72pt Bold, tracking −5%.
-One engineering note: rather than depending on the font shipping `tnum`, the hero counter
-renders **one fixed-width column per digit** — which is also what makes the odometer roll
-animation possible. Scale: 72 / 40 / 28 / 20 / 17 / 15 / 13.
+**Radii** 16 controls · 20–26 cards · 34 sheets · 58–62 the key · 999 chips and the tab bar.
 
-**Motion.** 150–250ms ease-out throughout. Hero tap fires haptics and the count in the
-same frame; the celebration variant is chosen from a pool of six (ripple ring, counter pop,
-doodle burst, wobble outline, halo pulse, spark strokes) seeded by event id so it varies
-without ever repeating twice in a row. `uiStore.reduceMotion` mirrors the OS setting.
+**Motion** — springy, `cubic-bezier(.2,1.2,.4,1)`, 180–340ms. The key sinks 6px in 90ms and
+the shadow collapses with it. Six tap reactions seeded per event: ring, counter pop, the
+word stamped upward, a wobble, radiating dots, a soft halo.
 
-**Pip** appears in five places only: onboarding, empty states, achievement unlocks, streak
-milestones, share cards. Nowhere else. Product-first, not mascot-first.
-
----
+**Pip** is a filled clay pebble with a coral sprout and a contact shadow — a moulded
+object in the same world, not a line drawing. He appears in empty states, awards,
+the paywall and share cards. Nowhere else.
 
 ## 11. Deviations you should know about
 
@@ -408,28 +399,34 @@ milestones, share cards. Nowhere else. Product-first, not mascot-first.
    matching the SDK.
 5. **The Pro leaderboard frame needs a purchase webhook** to set `profiles.is_pro`, since
    there is deliberately no client write path for it.
-6. **Satoshi is out, Onest is in** — see §10. Found while building the visual preview:
-   Satoshi has no Cyrillic at all.
+6. **Satoshi is out, Nunito is in** — see §10. Satoshi ships no Cyrillic at all, which
+   disqualifies it for an app whose second language is Russian.
 
-## Visual preview and prototype
+## Prototype
 
-`docs/design-preview.html` renders the whole thing — palette, type specimen, Pip, all four
-tabs, Track states (post-tap, empty, dark, Russian), achievements, leaderboard, paywall,
-share cards, widgets and the motion spec.
-
-`docs/prototype.html` is the same product as a working prototype: the tap path, backfill,
-swipe-to-delete with undo, tagging, the paywall, both languages and both themes, with
-streaks, charts and achievements computed by the same logic described here. Driving it is
-what surfaced the double-fire window being too wide (§7).
-
+`docs/prototype.html` is the chosen direction as a working prototype: the tap path,
+backdating, swipe-to-delete with undo, tagging, the paywall, both languages and both
+themes, with streaks, charts and achievements computed by the logic described here.
+`docs/directions.html` records the six-way comparison the direction was picked from.
 Both are self-contained; open either in a browser.
+
+Driving the prototype in Chromium has so far surfaced four real defects that were fixed
+in the spec and the code rather than papered over:
+
+- the double-fire window at 350ms silently discarded genuine taps (§7, now 120ms)
+- an `<svg>` is a replaced element, so `inset: 0` alone left an overlay at its intrinsic
+  300×150 and it showed as a bright patch in dark mode
+- log rows were flex children of a scrolling column with no `flex-shrink: 0`, so they
+  overlapped each other
+- the hero button scrolled off the top of Track. For an app whose promise is one tap in
+  under a second, the button must never leave the thumb, so Track no longer scrolls —
+  only the list of entries does.
 
 ## 12. What I need from you to start Phase 2
 
-- ✅ or changes to the accent/palette and Onest (§10, and the preview)
 - AdMob unit IDs + RevenueCat key, or a "defer ads to v1.1" decision
 - Supabase project URL + anon key, or "build leaderboards against a local stack for now"
 
-On approval, Phase 2 order: design tokens and primitives → floating pill tab bar → Track
-(hero button, counter, tag panel, motion) → Diary → Stats and charts → Profile,
-achievements, leaderboard → share cards, PDF, paywall → widgets (Swift + Kotlin).
+Phase 2 order: design tokens and primitives from §10 → the floating tab bar → Track
+(the key, counter, tag panel, motion) → Diary → Stats and charts → Profile, achievements,
+leaderboard → share cards, PDF, paywall → widgets (Swift + Kotlin).

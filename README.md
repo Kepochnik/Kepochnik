@@ -19,22 +19,16 @@ is awaiting approval. See **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** for t
 picture — local schema, server schema, repositories, state, widget sync, anti-cheat, i18n,
 and the design foundations proposed for Phase 2.
 
-Self-contained HTML, no build required. Two art directions, same product and same logic —
-one has to be picked before Phase 2:
+Self-contained HTML, no build required:
 
-- **[docs/prototype-fieldlog.html](docs/prototype-fieldlog.html)** — direction B, *field log*.
-  Graph paper, blue-black ink, vermilion stamp ink, IBM Plex Mono for all data, zero radii,
-  no cards. The hero is a stamp, not a blob.
-- **[docs/prototype.html](docs/prototype.html)** — direction A, *paper and teal*. Warm, softer,
-  more conventional.
-
-Both are working prototypes: tap to log, long-press to backdate, swipe an entry to strike it
-out, annotate, switch tabs, hit the paywall, flip to Russian or dark. Streaks, weekly
-averages, charts and awards are computed from real logic and state persists in the browser.
-
-- **[docs/design-preview.html](docs/design-preview.html)** — the spec sheet for direction A:
-  palette, type specimen, the Pip mascot, all four tabs, Track states, achievements,
-  leaderboard, paywall, share cards, widgets and the motion spec.
+- **[docs/prototype.html](docs/prototype.html)** — the working prototype in the chosen art
+  direction, *clay*: warm white paper, a coral key with real thickness that sinks under your
+  finger, rounded heavy type, soft shadows instead of outlines. Tap to log, long-press to
+  backdate, swipe an entry to delete with undo, tag an event, switch tabs, hit the paywall,
+  flip to Russian or dark. Streaks, weekly averages, charts and achievements come from real
+  logic; state persists in the browser.
+- **[docs/directions.html](docs/directions.html)** — the six-way comparison the direction was
+  picked from: the same screen in six visual languages at one scale.
 
 The app does not launch yet: `src/app/` (routes) lands in Phase 2.
 
