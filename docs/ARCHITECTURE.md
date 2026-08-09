@@ -357,8 +357,11 @@ differentiates Track from Diary from Stats without four different themes. Ink `#
 Dark: `#131211` / `#1A1917` / `#201E1B`, ink `#F2ECE1`, accent lifted to `#4FA8A0`.
 States: success `#3F7D58`, warning `#B8862F`, error `#B4453A`.
 
-**Type — Satoshi** (Fontshare, free commercial licence). Contemporary grotesk, slightly
-warm, strong numerals. Hero counter at 72pt Black, tracking −3%.
+**Type — Onest** (OFL), *not* Satoshi. Satoshi ships no Cyrillic, which disqualifies it as
+the single family for an app whose second language is Russian — a mixed-font fallback
+would break the type system on exactly the screens we care about. Onest is the same
+contemporary, slightly warm grotesk with first-class Cyrillic and strong numerals.
+Hero counter at 72pt Bold, tracking −5%.
 One engineering note: rather than depending on the font shipping `tnum`, the hero counter
 renders **one fixed-width column per digit** — which is also what makes the odometer roll
 animation possible. Scale: 72 / 40 / 28 / 20 / 17 / 15 / 13.
@@ -389,10 +392,18 @@ milestones, share cards. Nowhere else. Product-first, not mascot-first.
    matching the SDK.
 5. **The Pro leaderboard frame needs a purchase webhook** to set `profiles.is_pro`, since
    there is deliberately no client write path for it.
+6. **Satoshi is out, Onest is in** — see §10. Found while building the visual preview:
+   Satoshi has no Cyrillic at all.
+
+## Visual preview
+
+`docs/design-preview.html` renders the whole thing — palette, type specimen, Pip, all four
+tabs, Track states (post-tap, empty, dark, Russian), achievements, leaderboard, paywall,
+share cards, widgets and the motion spec. Open it in any browser; it is fully self-contained.
 
 ## 12. What I need from you to start Phase 2
 
-- ✅ or changes to the accent/palette and Satoshi (§10)
+- ✅ or changes to the accent/palette and Onest (§10, and the preview)
 - AdMob unit IDs + RevenueCat key, or a "defer ads to v1.1" decision
 - Supabase project URL + anon key, or "build leaderboards against a local stack for now"
 

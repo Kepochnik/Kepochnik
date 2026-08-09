@@ -19,6 +19,10 @@ is awaiting approval. See **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** for t
 picture — local schema, server schema, repositories, state, widget sync, anti-cheat, i18n,
 and the design foundations proposed for Phase 2.
 
+**[docs/design-preview.html](docs/design-preview.html)** shows what it looks like: palette,
+type specimen, the Pip mascot, all four tabs, Track states, achievements, leaderboard,
+paywall, share cards, widgets and the motion spec. Self-contained — open it in a browser.
+
 The app does not launch yet: `src/app/` (routes) lands in Phase 2.
 
 ## Working on it
