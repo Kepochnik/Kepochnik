@@ -53,9 +53,25 @@ header{display:flex;align-items:center;gap:18px;padding-block:22px 6px;flex-wrap
 .chip:hover{border-color:var(--brass)}
 .chip:focus-visible{outline:2px solid var(--brass-2)}
 .chip em{font-style:normal;color:var(--muted);margin-left:6px}
-.settings{margin-top:14px;display:none;gap:10px;flex-wrap:wrap;align-items:center;color:var(--muted);font-size:13px}
-.settings.open{display:flex}
-.settings input{flex:1 1 300px;background:var(--door);border:1px solid var(--line-2);border-radius:8px;color:var(--text);font:13px var(--mono);padding:9px 12px}
+.settings{margin-top:14px;display:none;grid-template-columns:auto 1fr;gap:8px 12px;align-items:center;color:var(--muted);font-size:13px}
+.settings.open{display:grid}
+.settings label{margin:0;color:var(--muted);font:13px var(--sans);text-transform:none;letter-spacing:0}
+.settings input{min-width:0;background:var(--door);border:1px solid var(--line-2);border-radius:8px;color:var(--text);font:13px var(--mono);padding:9px 12px}
+.settings .hint{grid-column:1/-1;color:var(--dim)}
+select{background:var(--door);border:1px solid var(--line-2);border-radius:999px;color:var(--text);font:600 12px var(--mono);letter-spacing:.06em;padding:9px 12px;text-transform:uppercase}
+select:focus-visible{outline:2px solid var(--brass-2)}
+.tabs{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px}
+.tab{background:transparent;border:1px solid var(--line-2);color:var(--muted);border-radius:999px;font:600 12px var(--mono);letter-spacing:.08em;text-transform:uppercase;padding:7px 12px;cursor:pointer}
+.tab[aria-selected="true"]{background:var(--panel-2);color:var(--brass);border-color:var(--brass)}
+.tab:focus-visible{outline:2px solid var(--brass-2)}
+.row input.short{flex:0 1 160px}
+.exit-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin:8px 0 12px}
+.exit-grid div{background:var(--panel-2);border-radius:10px;padding:10px 12px}
+.exit-grid b{display:block;font:900 26px/1 var(--display);letter-spacing:.02em}
+.exit-grid span{display:block;color:var(--muted);font:12px var(--mono);margin-top:4px}
+.exit-grid small{display:block;color:var(--dim);font:11px var(--mono);margin-top:4px}
+@media (max-width:720px){.exit-grid{grid-template-columns:1fr 1fr}}
+.num{font-variant-numeric:tabular-nums}
 .status{margin-top:22px;color:var(--muted);font:13px var(--mono);min-height:20px;display:flex;gap:10px;align-items:center}
 .status .dot{width:8px;height:8px;border-radius:50%;background:var(--brass);animation:pulse 1s infinite alternate}
 @keyframes pulse{from{opacity:.3}to{opacity:1}}
@@ -96,10 +112,11 @@ header{display:flex;align-items:center;gap:18px;padding-block:22px 6px;flex-wrap
 .bar{height:8px;background:var(--panel-2);border-radius:4px;overflow:hidden;margin:8px 0 14px}
 .bar i{display:block;height:100%;background:linear-gradient(90deg,var(--watch),var(--rope));transition:width .5s linear}
 @media (prefers-reduced-motion:reduce){.bar i{transition:none}}
-.buys{width:100%;border-collapse:collapse;font:13px var(--mono);margin-top:6px}
+.buys{width:100%;border-collapse:collapse;font:12px var(--mono);margin-top:6px}
 .buys th{text-align:left;color:var(--dim);font-weight:400;padding:4px 14px 4px 0;border-bottom:1px solid var(--line);white-space:nowrap}
 .buys th:last-child{padding-right:0}
-.buys td{padding:5px 14px 5px 0;border-bottom:1px solid var(--line);white-space:nowrap}
+.buys td{padding:5px 10px 5px 0;border-bottom:1px solid var(--line);white-space:nowrap}
+.buys td:nth-child(2){white-space:normal}
 .buys td:last-child{padding-right:0}
 .buys td:last-child,.buys th:last-child{text-align:right}
 .buys .exempt{color:var(--muted)}
@@ -130,6 +147,11 @@ footer b{color:var(--muted);font-weight:400}
       <p>Read-only door check for Pons V2 launches on Robinhood Chain. ID check · cover charge · house rules · dev report card.</p>
     </div>
     <div class="spacer"></div>
+    <select id="chain" aria-label="Chain">
+      <option value="robinhood">Robinhood Chain</option>
+      <option value="arc-testnet">Arc Testnet</option>
+      <option value="arc">Arc</option>
+    </select>
     <div class="mode" role="group" aria-label="Data source">
       <button type="button" id="mode-demo" aria-pressed="true">demo</button>
       <button type="button" id="mode-live" aria-pressed="false">live</button>
@@ -137,16 +159,26 @@ footer b{color:var(--muted);font-weight:400}
   </header>
 
   <section class="door" aria-labelledby="door-label">
+    <div class="tabs" role="tablist" aria-label="What to check">
+      <button class="tab" role="tab" id="tab-door" aria-selected="true" type="button">Door</button>
+      <button class="tab" role="tab" id="tab-dev" aria-selected="false" type="button">Dev</button>
+      <button class="tab" role="tab" id="tab-wallet" aria-selected="false" type="button">Wallet</button>
+      <button class="tab" role="tab" id="tab-tx" aria-selected="false" type="button">Receipt</button>
+      <button class="tab" role="tab" id="tab-plan" aria-selected="false" type="button">Plan a launch</button>
+    </div>
     <label id="door-label" for="q">At the door</label>
     <form class="row" id="form">
       <input id="q" name="q" placeholder="token or curve address, 0x…" autocomplete="off" spellcheck="false" inputmode="text">
+      <input id="q2" name="q2" class="short" placeholder="wallet 0x…" autocomplete="off" spellcheck="false" hidden>
       <button class="btn" id="go" type="submit">Check the list</button>
     </form>
     <div class="chips" id="chips"><span>try:</span></div>
     <div class="settings" id="settings">
-      <label for="rpc" style="margin:0;color:var(--muted);font:13px var(--sans);text-transform:none;letter-spacing:0">RPC URL</label>
-      <input id="rpc" placeholder="https://rpc.mainnet.chain.robinhood.com">
-      <span>Live mode reads chain 4663 straight from your browser. The public RPC may refuse browser requests; paste one that allows them, or run the CLI.</span>
+      <label for="rpc">RPC URL</label>
+      <input id="rpc" placeholder="chain default">
+      <label for="factory">factory</label>
+      <input id="factory" placeholder="chain default (required on Arc mainnet until Radian publishes it)">
+      <span class="hint" id="chain-hint">Live mode reads the chain straight from your browser. A public RPC may refuse browser requests; paste one that allows them, or run the CLI. The crew check and lookalikes use the chain's Blockscout.</span>
     </div>
     <div class="status" id="status"></div>
   </section>

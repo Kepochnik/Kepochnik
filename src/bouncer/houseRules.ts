@@ -37,6 +37,8 @@ export interface HouseRulesOptions {
   head: number;
   chunkSize?: number;
   factory?: string;
+  /** What the zero pair token is called on this chain (ETH on Robinhood Chain, USDC on Arc). */
+  native?: { symbol: string; decimals: number };
 }
 
 export async function readHouseRules(rpc: RpcClient, launch: LaunchedToken, options: HouseRulesOptions): Promise<HouseRules> {
@@ -44,7 +46,7 @@ export async function readHouseRules(rpc: RpcClient, launch: LaunchedToken, opti
   const reader = new PonsReader(rpc, factory);
   const snapshot = await reader.snapshot(launch.token, options.head);
   const native = launch.pairToken.toLowerCase() === ZERO_ADDRESS;
-  const quote = native ? { symbol: "ETH", decimals: 18, native } : { ...(await readTokenMeta(rpc, launch.pairToken, options.head)), native };
+  const quote = native ? { ...(options.native ?? { symbol: "ETH", decimals: 18 }), native } : { ...(await readTokenMeta(rpc, launch.pairToken, options.head)), native };
 
   const history = await readTape(rpc, {
     fromBlock: options.launchBlock,

@@ -1,0 +1,17 @@
+{
+  "manifest_version": 3,
+  "name": "BOUNCER · door check",
+  "version": "0.2.0",
+  "description": "Read-only door check for Pons V2 launches on Robinhood Chain and Arc: ID check, cover charge, house rules, dev report card. No wallet, no signing.",
+  "permissions": ["activeTab", "storage"],
+  "host_permissions": ["https://*/*"],
+  "action": { "default_popup": "popup.html", "default_title": "BOUNCER", "default_icon": { "32": "icon-32.png", "128": "icon-128.png" } },
+  "icons": { "32": "icon-32.png", "128": "icon-128.png" },
+  "content_scripts": [
+    {
+      "matches": ["https://ponsfamily.com/*", "https://www.ponsfamily.com/*", "https://gmgn.ai/*", "https://robinhoodchain.blockscout.com/*", "https://testnet.arcscan.app/*", "https://dexscreener.com/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}

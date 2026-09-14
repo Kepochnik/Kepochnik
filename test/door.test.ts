@@ -8,6 +8,7 @@ import { readIdCheck } from "../src/bouncer/idCheck.js";
 import { doorCard } from "../src/bouncer/card.js";
 import { renderReceipt } from "../src/receipt.js";
 import { PonsReader } from "../src/chain/reader.js";
+import { PONS_V2_FACTORY } from "../src/chain/pons.js";
 
 const opts = { devHours: 8, chunkSize: 100_000, launchSearchBlocks: 400_000 };
 
@@ -91,7 +92,7 @@ test("cover charge: terms, window and observed buys straight from the modules", 
   const rpc = demoRpc();
   const head = await rpc.getBlock("latest");
   const launch = await new PonsReader(rpc).launchedToken(DEMO.tokens.nap.token, head.number);
-  const block = await findLaunchBlock(rpc, DEMO.tokens.nap.token, head.number, 400_000, undefined, 100_000);
+  const block = await findLaunchBlock(rpc, DEMO.tokens.nap.token, head.number, 400_000, PONS_V2_FACTORY, 100_000);
   assert.equal(block, DEMO.tokens.nap.launched);
   const cover = await readCoverCharge(rpc, launch, { launchBlock: block!, head, chunkSize: 100_000 });
   assert.equal(cover.status, "closed");

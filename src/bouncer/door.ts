@@ -1,21 +1,28 @@
 /**
  * THE DOOR: one address in, one slip out. Runs the ID check, then, for a
- * registered launch, the cover charge, the house rules and the dev report
- * card, all pinned to one head block, and turns the facts into door notes.
- * A note is a fact with a level: STOP (the address is not what it claims or
- * its code can change), WATCH (a term worth reading before buying) or INFO.
- * The slip never says buy or sell. It says what is true at the door.
+ * registered launch, the cover charge, the house rules, the room, the exit
+ * door, the dev report card and, when the chain has an explorer, the crew
+ * check and the lookalikes; all pinned to one head block, then turned into
+ * door notes. A note is a fact with a level: STOP (the address is not what
+ * it claims or its code can change), WATCH (a term worth reading before
+ * buying) or INFO. The slip never says buy or sell. It says what is true
+ * at the door.
  */
-import { GraduationPhase, PHASE_LABEL, type LaunchedToken } from "../chain/pons.js";
-import { FACTORY_EVENTS, PONS_V2_FACTORY } from "../chain/pons.js";
+import type { BlockscoutClient } from "../chain/blockscout.js";
+import { DEFAULT_CHAIN, type ChainConfig } from "../chain/chains.js";
+import { FACTORY_EVENTS, GraduationPhase, PHASE_LABEL, type LaunchedToken } from "../chain/pons.js";
 import type { RpcClient } from "../chain/rpc.js";
-import { addressTopic, estimateBlocksAgo, findBlockByTimestamp, readTapeAdaptive } from "../chain/tape.js";
+import { addressTopic, findBlockByTimestamp, readTapeAdaptive } from "../chain/tape.js";
 import { formatBps, formatDuration, formatUnits, isoUtc, shortAddress } from "../format.js";
 import type { Receipt } from "../receipt.js";
 import { coverChargeLine, readCoverCharge, type CoverCharge } from "./coverCharge.js";
 import { devReportLine, readDevReport, type DevReport } from "./devReport.js";
+import { readExitDoor, type ExitDoor } from "./exitDoor.js";
 import { readHouseRules, type HouseRules } from "./houseRules.js";
 import { idFindings, readIdCheck, type IdCheck } from "./idCheck.js";
+import { lookalikeLine, readLookalikes, type LookalikeReport } from "./lookalike.js";
+import { oneCrewLine, readOneCrew, type OneCrew } from "./oneCrew.js";
+import { readRoom, roomLine, type Room } from "./room.js";
 
 export type NoteLevel = "stop" | "watch" | "info";
 
@@ -28,7 +35,7 @@ export interface DoorNote {
 export type Stamp = "ON THE LIST" | "NOT ON THE LIST";
 
 export interface DoorSlip {
-  chainId: number;
+  chain: { key: string; name: string; chainId: number; launchpad: string; native: { symbol: string; decimals: number } };
   at: { block: number; timestamp: number };
   subject: string;
   stamp: Stamp;
@@ -36,31 +43,47 @@ export interface DoorSlip {
   launchBlock: number | null;
   cover: CoverCharge | null;
   rules: HouseRules | null;
+  room: Room | null;
+  exit: ExitDoor | null;
+  crew: OneCrew | null;
+  lookalikes: LookalikeReport | null;
   dev: DevReport | null;
   notes: DoorNote[];
+  /** Sections that were asked for but could not be read, with the reason. */
+  skipped: { section: string; reason: string }[];
 }
 
 export interface DoorOptions {
+  chain?: ChainConfig;
+  /** Factory override (needed on chains whose factory is not published yet). */
+  factory?: string;
+  /** Explorer client for the crew check and lookalikes; null disables both. */
+  blockscout?: BlockscoutClient | null;
   /** How far back the dev report card looks, in hours. */
   devHours?: number;
   /** How far back to search for the launch event, in blocks. */
   launchSearchBlocks?: number;
   chunkSize?: number;
-  factory?: string;
-  /** Skip the dev report (fewer requests). */
   skipDev?: boolean;
+  skipRoom?: boolean;
+  skipCrew?: boolean;
+  skipLookalikes?: boolean;
+  /** Token amount the exit door prices; default 1% of supply. */
+  position?: bigint;
 }
 
 export async function readDoor(rpc: RpcClient, input: string, options: DoorOptions = {}): Promise<DoorSlip> {
+  const chain = options.chain ?? DEFAULT_CHAIN;
+  const factory = (options.factory ?? chain.factory ?? "").toLowerCase();
+  if (!factory) throw new Error(`${chain.name}: the launchpad factory address is not published yet; pass --factory 0x…`);
   await rpc.assertChain();
-  const chainId = await rpc.chainId();
   const headNumber = await rpc.blockNumber();
   const head = await rpc.getBlock(headNumber);
-  const factory = options.factory ?? PONS_V2_FACTORY;
+  const searchBlocks = options.launchSearchBlocks ?? Math.round(7 * 86_400 * chain.blocksPerSecond);
 
   const id = await readIdCheck(rpc, input, head.number, factory);
   const slip: DoorSlip = {
-    chainId,
+    chain: { key: chain.key, name: chain.name, chainId: chain.chainId, launchpad: chain.launchpad, native: chain.native },
     at: { block: head.number, timestamp: head.timestamp },
     subject: id.launch ? id.launch.token.toLowerCase() : id.input,
     stamp: id.registered ? "ON THE LIST" : "NOT ON THE LIST",
@@ -68,24 +91,62 @@ export async function readDoor(rpc: RpcClient, input: string, options: DoorOptio
     launchBlock: null,
     cover: null,
     rules: null,
+    room: null,
+    exit: null,
+    crew: null,
+    lookalikes: null,
     dev: null,
     notes: [],
+    skipped: [],
   };
   if (!id.launch) {
     slip.notes = doorNotes(slip);
     return slip;
   }
-
   const launch = id.launch;
-  slip.launchBlock = await findLaunchBlock(rpc, launch.token, head.number, options.launchSearchBlocks ?? estimateBlocksAgo(7 * 86_400), factory, options.chunkSize);
+  const attempt = async (section: string, run: () => Promise<void>) => {
+    try {
+      await run();
+    } catch (error) {
+      slip.skipped.push({ section, reason: error instanceof Error ? error.message : String(error) });
+    }
+  };
+
+  slip.launchBlock = await findLaunchBlock(rpc, launch.token, head.number, searchBlocks, factory, options.chunkSize);
   if (slip.launchBlock !== null) {
-    slip.cover = await readCoverCharge(rpc, launch, { launchBlock: slip.launchBlock, head, chunkSize: options.chunkSize, factory });
+    await attempt("cover charge", async () => {
+      slip.cover = await readCoverCharge(rpc, launch, { launchBlock: slip.launchBlock!, head, chunkSize: options.chunkSize, factory });
+    });
   }
-  slip.rules = await readHouseRules(rpc, launch, { launchBlock: slip.launchBlock ?? Math.max(0, head.number - (options.launchSearchBlocks ?? estimateBlocksAgo(7 * 86_400))), head: head.number, chunkSize: options.chunkSize, factory });
+  const rulesFrom = slip.launchBlock ?? Math.max(0, head.number - searchBlocks);
+  await attempt("house rules", async () => {
+    slip.rules = await readHouseRules(rpc, launch, { launchBlock: rulesFrom, head: head.number, chunkSize: options.chunkSize, factory, native: chain.native });
+  });
+  if (!options.skipRoom && slip.launchBlock !== null) {
+    await attempt("the room", async () => {
+      slip.room = await readRoom(rpc, launch, slip.launchBlock!, head.number, options.chunkSize, Math.round(60 * chain.blocksPerSecond));
+    });
+  }
+  await attempt("exit door", async () => {
+    const supply = slip.rules?.snapshot.token.totalSupply ?? slip.id.meta?.totalSupply ?? 0n;
+    slip.exit = await readExitDoor(rpc, launch, { position: options.position ?? supply / 100n, block: head.number, factory });
+  });
+  if (options.blockscout && !options.skipCrew && slip.room && slip.launchBlock !== null) {
+    await attempt("one crew", async () => {
+      slip.crew = await readOneCrew(options.blockscout!, slip.room!, slip.launchBlock!, [launch.deployer, launch.creatorFeeRecipient]);
+    });
+  }
+  if (options.blockscout && !options.skipLookalikes && slip.id.meta) {
+    await attempt("lookalikes", async () => {
+      slip.lookalikes = await readLookalikes(rpc, options.blockscout!, launch.token, slip.id.meta!.symbol, head.number, factory, searchBlocks);
+    });
+  }
   if (!options.skipDev) {
-    const hours = options.devHours ?? 24;
-    const fromBlock = await findBlockByTimestamp(rpc, head.timestamp - hours * 3600, head.number);
-    slip.dev = await readDevReport(rpc, launch.deployer, { fromBlock, toBlock: head.number, factory, chunking: options.chunkSize ? { startChunk: options.chunkSize, maxChunk: options.chunkSize } : undefined });
+    await attempt("dev report card", async () => {
+      const hours = options.devHours ?? 24;
+      const fromBlock = await findBlockByTimestamp(rpc, head.timestamp - hours * 3600, head.number);
+      slip.dev = await readDevReport(rpc, launch.deployer, { fromBlock, toBlock: head.number, factory, chunking: options.chunkSize ? { startChunk: options.chunkSize, maxChunk: options.chunkSize } : undefined });
+    });
   }
   slip.notes = doorNotes(slip);
   return slip;
@@ -95,7 +156,7 @@ export async function readDoor(rpc: RpcClient, input: string, options: DoorOptio
  * Walks backwards from the head in growing chunks until the token's
  * TokenLaunched log appears. Fresh launches are found in the first chunk.
  */
-export async function findLaunchBlock(rpc: RpcClient, token: string, head: number, maxBlocks: number, factory: string = PONS_V2_FACTORY, chunkSize?: number): Promise<number | null> {
+export async function findLaunchBlock(rpc: RpcClient, token: string, head: number, maxBlocks: number, factory: string, chunkSize?: number): Promise<number | null> {
   let to = head;
   let chunk = chunkSize ?? 20_000;
   const floor = Math.max(0, head - maxBlocks);
@@ -118,19 +179,20 @@ export function doorNotes(slip: DoorSlip): DoorNote[] {
   const notes: DoorNote[] = [];
   const t = slip.id.token;
   const findings = idFindings(slip.id);
+  const q = slip.chain.native;
   if (!slip.id.registered) {
     notes.push({
       level: "stop",
       code: "not-registered",
       text: t.code.empty
-        ? "No contract at this address on Robinhood Chain."
-        : "Not a Pons V2 launch: the factory has no record of this address, so nothing below about curves, taxes or graduation applies to it.",
+        ? `No contract at this address on ${slip.chain.name}.`
+        : `Not a ${slip.chain.launchpad} launch: the factory has no record of this address, so nothing below about curves, taxes or graduation applies to it.`,
     });
     for (const f of findings) if (!f.startsWith("no bytecode")) notes.push({ level: "stop", code: "code", text: `Code can change or vanish: ${f}.` });
     return notes;
   }
   if (slip.id.resolvedAs === "curve") notes.push({ level: "info", code: "curve-input", text: `You pasted the curve; the slip is for its token ${slip.subject}.` });
-  for (const f of findings) notes.push({ level: "watch", code: "code", text: `Unexpected for a Pons token: ${f}.` });
+  for (const f of findings) notes.push({ level: "watch", code: "code", text: `Unexpected for a launchpad token: ${f}.` });
 
   const c = slip.cover;
   if (c) {
@@ -146,7 +208,7 @@ export function doorNotes(slip: DoorSlip): DoorNote[] {
       });
     }
     if (c.termsChangedSinceLaunch) notes.push({ level: "watch", code: "terms-retuned", text: "The factory retuned its anti-snipe terms after this launch; the curve keeps the terms it launched under, which are not the ones shown." });
-  } else {
+  } else if (slip.launchBlock === null) {
     notes.push({ level: "info", code: "launch-older", text: "Launch is older than the search window, so the cover charge window is long closed and was not read." });
   }
 
@@ -157,7 +219,35 @@ export function doorNotes(slip: DoorSlip): DoorNote[] {
     if (r.deployerShareBps >= 2_000) notes.push({ level: "watch", code: "dev-holds", text: `The deployer holds ${(r.deployerShareBps / 100).toFixed(1)}% of supply.` });
     if (r.buybackEnabled) notes.push({ level: "info", code: "buyback-vests", text: "Buyback is on. Bought-back tokens are locked and vest to the creator and protocol over five years; they are not burned." });
     if (r.phase === GraduationPhase.Swept) notes.push({ level: "info", code: "swept-no-pool", text: "Swept but no pool yet: the curve is closed and the Uniswap pool has not been created." });
-    if (r.phase === GraduationPhase.PoolCreated || r.phase === GraduationPhase.Rescued) notes.push({ level: "info", code: "graduated", text: "Graduated. The pool position is held by the Pons locker; the creator cannot pull it." });
+    if (r.phase === GraduationPhase.PoolCreated || r.phase === GraduationPhase.Rescued) notes.push({ level: "info", code: "graduated", text: "Graduated. The pool position is held by the launchpad's locker; the creator cannot pull it." });
+  }
+
+  const room = slip.room;
+  if (room && room.buys > 0) {
+    if (room.devShareBps >= 5_000) notes.push({ level: "watch", code: "dev-funded", text: `The creator's own wallets funded ${(room.devShareBps / 100).toFixed(0)}% of everything bought on the curve.` });
+    if (room.sharedBlocks.length >= 3) notes.push({ level: "watch", code: "bundled-blocks", text: `${room.sharedBlocks.length} blocks had several different wallets buying in the same block, the shape of a bundled launch.` });
+    if (room.buyers >= 25 && room.devShareBps < 2_000) notes.push({ level: "info", code: "room-wide", text: `${room.buyers} distinct buyers and the creator funded ${(room.devShareBps / 100).toFixed(0)}%.` });
+  }
+
+  const crew = slip.crew;
+  if (crew) {
+    if (crew.largestCrewShareBps >= 2_500) notes.push({ level: "watch", code: "one-crew", text: `${crew.crews[0].wallets.length} of the first buyers were funded by the same address (${shortAddress(crew.crews[0].funder)}) and bought ${(crew.largestCrewShareBps / 100).toFixed(0)}% of the curve.` });
+    if (crew.fundedByCreator.length) notes.push({ level: "watch", code: "crew-creator", text: `${crew.fundedByCreator.length} of the first buyers received their ${q.symbol} from the creator's wallets before buying.` });
+    if (!crew.crews.length && crew.checked >= 5 && !crew.fundedByCreator.length) notes.push({ level: "info", code: "crew-clean", text: `${crew.checked} first buyers checked, no shared funder.` });
+  }
+
+  const l = slip.lookalikes;
+  if (l) {
+    const others = l.candidates.filter((x) => x.address !== l.subject);
+    if (l.subjectIsEarliest === false) notes.push({ level: "watch", code: "lookalike-later", text: `Another ${l.query} launched on this factory before this one (${shortAddress(l.earliest!.address)}, block ${l.earliest!.launchBlock}). Tickers are not identities; check which one the team posted.` });
+    else if (others.length) notes.push({ level: "info", code: "lookalikes", text: `${others.length} other token${others.length === 1 ? "" : "s"} called ${l.query} exist on this chain${l.subjectIsEarliest ? "; this one launched first" : ""}.` });
+  }
+
+  const e = slip.exit;
+  if (e) {
+    const whole = e.quotes.find((x) => x.shareBps === 10_000);
+    if (e.venue === "closed") notes.push({ level: "info", code: "exit-closed", text: e.note });
+    else if (whole && whole.realisedBps > 0 && whole.realisedBps < 5_000) notes.push({ level: "info", code: "exit-thin", text: `Selling 1% of supply now would realise ${(whole.realisedBps / 100).toFixed(0)}% of spot: the ${e.venue} is thin.` });
   }
 
   const d = slip.dev;
@@ -167,6 +257,7 @@ export function doorNotes(slip: DoorSlip): DoorNote[] {
     if (d.repeatedSymbols.length) notes.push({ level: "watch", code: "dev-repeat", text: `Same ticker launched more than once by this deployer: ${d.repeatedSymbols.join(", ")}.` });
     if (d.counts.graduated > 0) notes.push({ level: "info", code: "dev-graduated", text: `This deployer has ${d.counts.graduated} graduation${d.counts.graduated === 1 ? "" : "s"} in the window${d.medianSecondsToSweep !== null ? `, median ${formatDuration(d.medianSecondsToSweep)} from launch to sweep` : ""}.` });
   }
+  for (const s of slip.skipped) notes.push({ level: "info", code: "skipped", text: `${s.section} could not be read: ${s.reason}` });
   return notes;
 }
 
@@ -174,11 +265,14 @@ export function doorReceipt(slip: DoorSlip): Receipt {
   const meta = slip.id.meta;
   const launch = slip.id.launch;
   const title = meta ? `${meta.symbol} · ${meta.name}` : slip.subject;
+  const q = slip.rules?.quote ?? { symbol: slip.chain.native.symbol, decimals: slip.chain.native.decimals };
+  const amt = (v: bigint) => `${formatUnits(v, q.decimals)} ${q.symbol}`;
   const sections: Receipt["sections"] = [];
   sections.push({
     title: "ID check",
     rows: [
       { label: "address", value: slip.subject },
+      { label: "chain", value: `${slip.chain.name} (${slip.chain.chainId}) · ${slip.chain.launchpad}` },
       { label: "stamp", value: slip.stamp },
       { label: "factory record", value: slip.id.registered, note: slip.id.resolvedAs === "curve" ? "resolved from the curve" : undefined },
       { label: "token code", value: `${slip.id.token.code.bytes} bytes`, note: codeNote(slip.id.token.code.opcodes, slip.id.token.proxyImplementation) },
@@ -196,14 +290,56 @@ export function doorReceipt(slip: DoorSlip): Receipt {
         { label: "door", value: coverChargeLine(c) },
         ...c.observed.slice(0, 8).map((b, i) => ({
           label: `buy ${i + 1}`,
-          value: `${b.secondsAfterLaunch.toFixed(1)} s · ${shortAddress(b.buyer)} · paid ${(b.chargeBps / 100).toFixed(1)}%`,
+          value: `${b.secondsAfterLaunch.toFixed(1)} s · ${shortAddress(b.buyer)} · ${amt(b.quoteIn)} · paid ${(b.chargeBps / 100).toFixed(1)}%`,
           note: b.creatorWallet ? "creator wallet, exempt" : undefined,
         })),
       ],
     });
   }
-  if (slip.rules) {
-    sections.push({ title: "House rules", rows: slip.rules.rules.map((text, i) => ({ label: `${i + 1}`, value: text })) });
+  if (slip.rules) sections.push({ title: "House rules", rows: slip.rules.rules.map((text, i) => ({ label: `${i + 1}`, value: text })) });
+  if (slip.room) {
+    const r = slip.room;
+    sections.push({
+      title: "The room",
+      rows: [
+        { label: "since launch", value: roomLine(r) },
+        { label: "bought", value: `${amt(r.totalQuoteIn)} net of fees over ${r.buys} buys, ${r.sells} sells` },
+        ...r.wallets.slice(0, 6).map((w, i) => ({ label: `#${i + 1}`, value: `${shortAddress(w.address)} · in ${amt(w.quoteIn)}${w.quoteOut ? ` · out ${amt(w.quoteOut)}` : ""}`, note: w.creatorWallet ? "creator wallet" : undefined })),
+      ],
+    });
+  }
+  if (slip.exit) {
+    const e = slip.exit;
+    sections.push({
+      title: "Exit door",
+      rows: [
+        { label: "venue", value: e.venue, note: e.venue === "closed" ? undefined : `fee ${formatBps(e.feeBps)} + creator ${formatBps(e.creatorTaxBps)}` },
+        { label: "for", value: `${formatUnits(e.position, 18, 0)} tokens`, note: "1% of supply unless you passed --amount" },
+        ...e.quotes.map((x) => ({ label: `sell ${x.shareBps / 100}%`, value: `${amt(x.net)} net`, note: `${(x.realisedBps / 100).toFixed(1)}% of spot` })),
+        { label: "method", value: e.note },
+      ],
+    });
+  }
+  if (slip.crew) {
+    const c = slip.crew;
+    sections.push({
+      title: "One crew",
+      rows: [
+        { label: "first buyers", value: oneCrewLine(c) },
+        ...c.crews.slice(0, 3).map((cr, i) => ({ label: `crew ${i + 1}`, value: `${cr.wallets.length} wallets funded by ${shortAddress(cr.funder)} · ${(cr.shareBps / 100).toFixed(1)}% of the curve` })),
+        ...c.wallets.slice(0, 8).map((w) => ({ label: shortAddress(w.address), value: w.creatorWallet ? "creator wallet" : w.funder ? `funded by ${shortAddress(w.funder)} at block ${w.fundedAtBlock}` : "funding not found" })),
+      ],
+    });
+  }
+  if (slip.lookalikes) {
+    const l = slip.lookalikes;
+    sections.push({
+      title: "Lookalikes",
+      rows: [
+        { label: l.query, value: lookalikeLine(l) },
+        ...l.candidates.slice(0, 8).map((x) => ({ label: shortAddress(x.address), value: `${x.registered ? "on the list" : "not on the list"}${x.phase !== null ? ` · ${PHASE_LABEL[x.phase]}` : ""}${x.launchBlock !== null ? ` · block ${x.launchBlock}` : ""}`, note: x.address === l.subject ? "this one" : undefined })),
+      ],
+    });
   }
   if (slip.dev) {
     const d = slip.dev;
@@ -221,19 +357,16 @@ export function doorReceipt(slip: DoorSlip): Receipt {
       ],
     });
   }
-  sections.push({
-    title: "Door notes",
-    rows: slip.notes.map((n) => ({ label: n.level.toUpperCase(), value: n.text })),
-  });
+  sections.push({ title: "Door notes", rows: slip.notes.map((n) => ({ label: n.level.toUpperCase(), value: n.text })) });
   return {
     title: `BOUNCER · ${title}`,
-    subtitle: `${slip.stamp} · block ${slip.at.block} · ${isoUtc(slip.at.timestamp)}`,
+    subtitle: `${slip.stamp} · ${slip.chain.name} · block ${slip.at.block} · ${isoUtc(slip.at.timestamp)}`,
     sections,
     footnotes: [
-      "Every value was read from Robinhood Chain at the block shown. Nothing is scored, predicted or advised: the slip says what is true at the door.",
+      `Every value was read from ${slip.chain.name} at the block shown. Nothing is scored, predicted or advised: the slip says what is true at the door.`,
       ...(slip.rules ? [`Amounts in ${slip.rules.quote.symbol}; ${formatUnits(slip.rules.snapshot.token.totalSupply, slip.rules.snapshot.token.decimals, 0)} total supply.`] : []),
     ],
-    meta: { stamp: slip.stamp, block: slip.at.block, subject: slip.subject, notes: slip.notes.length },
+    meta: { stamp: slip.stamp, block: slip.at.block, subject: slip.subject, notes: slip.notes.length, chain: slip.chain.key },
   };
 }
 
@@ -247,9 +380,9 @@ function codeNote(op: { selfdestruct: number; delegatecall: number; callcode: nu
   return flags.length ? flags.join(", ") : "no SELFDESTRUCT, no DELEGATECALL, no proxy";
 }
 
-/** JSON-safe copy of the slip (bigints as decimal strings). */
-export function slipJson(slip: DoorSlip): string {
-  return JSON.stringify(slip, (_k, v: unknown) => (typeof v === "bigint" ? v.toString() : v), 2);
+/** JSON-safe copy of anything with bigints (decimal strings). */
+export function slipJson(value: unknown): string {
+  return JSON.stringify(value, (_k, v: unknown) => (typeof v === "bigint" ? v.toString() : v), 2);
 }
 
 export type { LaunchedToken };

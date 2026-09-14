@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>BOUNCER</title>
+<style>
+body{margin:0;width:420px;background:#0e0d10;color:#ece7dc;font:14px/1.5 system-ui,sans-serif;padding:14px}
+h1{font:800 18px/1 system-ui;letter-spacing:.08em;color:#c9a227;margin:0 0 8px}
+p{margin:6px 0;color:#8f8a96;font-size:13px}
+input{width:100%;box-sizing:border-box;background:#16151a;border:1px solid #39363f;border-radius:8px;color:#ece7dc;font:13px ui-monospace,Menlo,monospace;padding:9px 10px;margin:6px 0}
+button{width:100%;background:#c9a227;color:#1a1405;border:0;border-radius:8px;font:800 14px system-ui;letter-spacing:.06em;padding:11px;cursor:pointer;margin-top:6px}
+a{color:#e2c04a}
+label{display:block;font-size:12px;color:#8f8a96;margin-top:8px}
+</style>
+</head>
+<body>
+<h1>BOUNCER</h1>
+<p>Read-only door check. The popup opens the slip on the site; nothing here can sign or send.</p>
+<label for="addr">token or curve address</label>
+<input id="addr" placeholder="0x…" spellcheck="false">
+<label for="site">site URL (where the slip opens)</label>
+<input id="site" placeholder="https://kepochnik.github.io/bouncer/">
+<button id="go" type="button">Check the list</button>
+<p id="hint"></p>
+<script src="popup.js"></script>
+</body>
+</html>

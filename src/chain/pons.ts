@@ -137,6 +137,20 @@ export const FACTORY_FUNCTIONS = {
   snipeTaxStartBps: { name: "snipeTaxStartBps", inputs: [], outputs: ["uint256"] },
   snipeTaxSeconds: { name: "snipeTaxSeconds", inputs: [], outputs: ["uint256"] },
   maxCreatorTaxBps: { name: "maxCreatorTaxBps", inputs: [], outputs: ["uint256"] },
+  poolManager: { name: "poolManager", inputs: [], outputs: ["address"] },
+  memeHook: { name: "memeHook", inputs: [], outputs: ["address"] },
+  launchFee: { name: "launchFee", inputs: [], outputs: ["uint256"] },
+  launchConfigCount: { name: "launchConfigCount", inputs: [], outputs: ["uint256"] },
+  /** LaunchConfig struct: supply, curveFeeBps, phantomQuote, graduationThreshold, poolFee, tickSpacing, enabled. */
+  getLaunchConfig: { name: "getLaunchConfig", inputs: ["uint256"], outputs: ["uint256", "uint256", "uint256", "uint256", "uint24", "int24", "bool"] },
+  /** PairTokenEconomics struct: phantomQuote, graduationThreshold, decimals. */
+  pairTokenEconomics: { name: "pairTokenEconomics", inputs: ["address"], outputs: ["uint256", "uint256", "uint8"] },
+} as const satisfies Record<string, FunctionAbi>;
+
+/** PonsV2MemeHook: the fee policy the factory snapshots at launch. */
+export const HOOK_FUNCTIONS = {
+  /** FeePolicySnapshot: protocolFeeRecipient, protocolFeeShareBps, buybackBurnBps, hookFeeBps, maxInternalPriceImpactBps. */
+  currentFeePolicy: { name: "currentFeePolicy", inputs: [], outputs: ["address", "uint16", "uint16", "uint16", "uint16"] },
 } as const satisfies Record<string, FunctionAbi>;
 
 export function decodeLaunchedToken(values: unknown[]): LaunchedToken {

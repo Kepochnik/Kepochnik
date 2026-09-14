@@ -7,6 +7,8 @@
  */
 import { encodeWord, eventTopic, selector } from "../chain/abi.js";
 import { EIP1967_IMPLEMENTATION_SLOT } from "../chain/code.js";
+import { keccak256Hex } from "../chain/keccak.js";
+import { poolIdFor } from "./exitDoor.js";
 import { CURVE_EVENTS, FACTORY_EVENTS, PONS_V2_FACTORY, ROBINHOOD_CHAIN_ID, ZERO_ADDRESS } from "../chain/pons.js";
 import { RpcClient } from "../chain/rpc.js";
 import { addressTopic } from "../chain/tape.js";
@@ -40,6 +42,12 @@ const DEV_A = "0x0000000000000000000000000000000000d0e5e1";
 const DEV_B = "0x00000000000000000000000000000000000000b7";
 const DEV_C = "0x000000000000000000000000000000000000c0c0";
 const buyer = (n: number) => `0x${(0xb000 + n).toString(16).padStart(40, "0")}`;
+
+export const DEMO_POOL_MANAGER = "0x00000000000000000000000000000000000900a1";
+export const DEMO_HOOK = "0x0000000000000000000000000000000000900c00";
+/** The wallet that funded two of FRESH's first buyers minutes before launch. */
+export const DEMO_FUNDER = "0x000000000000000000000000000000000000feed";
+export const DEMO_BLOCKSCOUT = "https://demo.blockscout.invalid";
 
 /** Not a Pons launch: an upgradeable proxy token somebody named after a real one. */
 export const DEMO_IMPOSTOR = { token: "0x00000000000000000000000000000000000bad01", implementation: "0x00000000000000000000000000000000000bad02" };
@@ -138,6 +146,21 @@ export function demoFetch(): typeof fetch {
     byCurve.set(t.curve, t);
   }
   const sel = (sig: string) => selector(sig);
+  // Graduated demo pools: full-range V4 state (sqrtPriceX96, liquidity) that
+  // reproduces the seeded reserves, at the storage slots extsload reads.
+  const poolSlots = new Map<string, string>();
+  for (const t of Object.values(DEMO.tokens)) {
+    if (!t.graduated) continue;
+    const { poolId, tokenIsCurrency0 } = poolIdFor(t.token, ZERO_ADDRESS, 10_000n, 200n, DEMO_HOOK);
+    const token = t.supplyToPool ?? 0n;
+    const quote = t.raised;
+    const [amount0, amount1] = tokenIsCurrency0 ? [token, quote] : [quote, token];
+    const sqrtPriceX96 = isqrt((amount1 * 2n ** 192n) / amount0);
+    const liquidity = isqrt(amount0 * amount1);
+    const stateSlot = keccak256Hex(hexToBytesLocal(`${poolId.slice(2)}${encodeWord("uint256", 6n)}`));
+    poolSlots.set(stateSlot, `0x${encodeWord("uint256", sqrtPriceX96)}`);
+    poolSlots.set(`0x${(BigInt(stateSlot) + 3n).toString(16).padStart(64, "0")}`, `0x${encodeWord("uint256", liquidity)}`);
+  }
 
   return (async (_url: string | URL | Request, init?: RequestInit) => {
     const body = JSON.parse(String(init?.body)) as RpcJson | RpcJson[];
@@ -168,6 +191,15 @@ export function demoFetch(): typeof fetch {
           if (who === DEMO_IMPOSTOR.token) return ok(DEMO_CODE.impostor);
           return ok("0x");
         }
+        case "eth_getTransactionReceipt": {
+          const hash = (request.params as [string])[0];
+          for (const t of Object.values(DEMO.tokens)) {
+            const logs = curveLogs(t, 0, DEMO.head) as { transactionHash: string; blockNumber: string }[];
+            const hit = logs.filter((l) => l.transactionHash === hash);
+            if (hit.length) return ok({ transactionHash: hash, blockNumber: hit[0].blockNumber, from: hit[0], status: "0x1", logs: hit });
+          }
+          return ok(null);
+        }
         case "eth_getStorageAt": {
           const [who, slot] = request.params as [string, string];
           if (who.toLowerCase() === DEMO_IMPOSTOR.token && slot === EIP1967_IMPLEMENTATION_SLOT) return ok(`0x${encodeWord("address", DEMO_IMPOSTOR.implementation)}`);
@@ -184,6 +216,23 @@ export function demoFetch(): typeof fetch {
             }
             if (s === sel("snipeTaxStartBps()")) return ok(`0x${encodeWord("uint256", 9_900n)}`);
             if (s === sel("snipeTaxSeconds()")) return ok(`0x${encodeWord("uint256", 15n)}`);
+            if (s === sel("maxCreatorTaxBps()")) return ok(`0x${encodeWord("uint256", 1_000n)}`);
+            if (s === sel("poolManager()")) return ok(`0x${encodeWord("address", DEMO_POOL_MANAGER)}`);
+            if (s === sel("memeHook()")) return ok(`0x${encodeWord("address", DEMO_HOOK)}`);
+            if (s === sel("launchFee()")) return ok(`0x${encodeWord("uint256", 10n ** 15n)}`);
+            if (s === sel("launchConfigCount()")) return ok(`0x${encodeWord("uint256", 1n)}`);
+            if (s === sel("getLaunchConfig(uint256)")) {
+              return ok(`0x${[encodeWord("uint256", 10n ** 27n), encodeWord("uint256", 100n), encodeWord("uint256", 9n * 10n ** 17n), encodeWord("uint256", DEMO.threshold), encodeWord("uint24", 10_000n), encodeWord("int24", 200n), encodeWord("bool", true)].join("")}`);
+            }
+            if (s === sel("pairTokenEconomics(address)")) return ok(`0x${[encodeWord("uint256", 0n), encodeWord("uint256", 0n), encodeWord("uint8", 18n)].join("")}`);
+          }
+          if (to === DEMO_HOOK && s === sel("currentFeePolicy()")) {
+            return ok(`0x${[encodeWord("address", "0x0000000000000000000000000000000000000fee"), encodeWord("uint16", 3_000n), encodeWord("uint16", 5_000n), encodeWord("uint16", 100n), encodeWord("uint16", 300n)].join("")}`);
+          }
+          if (to === DEMO_POOL_MANAGER && s === sel("extsload(bytes32)")) {
+            const slot = `0x${call.data.slice(10, 74)}`;
+            const word = poolSlots.get(slot);
+            return ok(word ?? `0x${"0".repeat(64)}`);
           }
           const t = byToken.get(to);
           if (t) {
@@ -227,6 +276,55 @@ export function demoFetch(): typeof fetch {
       }
     });
     return new Response(JSON.stringify(Array.isArray(body) ? responses : responses[0]), { headers: { "content-type": "application/json" } });
+  }) as typeof fetch;
+}
+
+function isqrt(n: bigint): bigint {
+  if (n < 2n) return n;
+  let x = n;
+  let y = (x + 1n) / 2n;
+  while (y < x) {
+    x = y;
+    y = (x + n / x) / 2n;
+  }
+  return x;
+}
+
+function hexToBytesLocal(hex: string): Uint8Array {
+  const out = new Uint8Array(hex.length / 2);
+  for (let i = 0; i < out.length; i++) out[i] = parseInt(hex.slice(i * 2, i * 2 + 2), 16);
+  return out;
+}
+
+/**
+ * A fake Blockscout for the demo chain: FRESH's two non-creator early
+ * buyers were both funded by DEMO_FUNDER shortly before the launch; the
+ * search knows every demo token by symbol, plus the impostor.
+ */
+export function demoBlockscoutFetch(): typeof fetch {
+  const tokens = Object.values(DEMO.tokens);
+  return (async (input: string | URL | Request) => {
+    const url = new URL(String(input instanceof Request ? input.url : input));
+    const json = (body: unknown) => new Response(JSON.stringify(body), { headers: { "content-type": "application/json" } });
+    const m = url.pathname.match(/^\/api\/v2\/addresses\/(0x[0-9a-f]{40})\/transactions$/i);
+    if (m) {
+      const who = m[1].toLowerCase();
+      const fresh = DEMO.tokens.fresh;
+      const funded = new Set([buyer(900), buyer(901)]);
+      const items = funded.has(who)
+        ? [{ hash: `0xdemofund${who.slice(-4)}`, value: (10n ** 18n).toString(), block_number: fresh.launched - 400, from: { hash: DEMO_FUNDER }, to: { hash: who } }]
+        : [];
+      return json({ items, next_page_params: null });
+    }
+    if (url.pathname === "/api/v2/search") {
+      const q = (url.searchParams.get("q") ?? "").toUpperCase();
+      const items = tokens.filter((t) => t.symbol.toUpperCase() === q).map((t) => ({ type: "token", address: t.token, name: t.name, symbol: t.symbol }));
+      if (q === "SPRINT") items.push({ type: "token", address: DEMO_IMPOSTOR.token, name: "Sprint", symbol: "SPRINT" });
+      return json({ items });
+    }
+    const v = url.pathname.match(/^\/api\/v2\/smart-contracts\/(0x[0-9a-f]{40})$/i);
+    if (v) return json({ is_verified: tokens.some((t) => t.token === v[1].toLowerCase() || t.curve === v[1].toLowerCase()) });
+    return new Response("not found", { status: 404 });
   }) as typeof fetch;
 }
 

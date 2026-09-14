@@ -8,6 +8,8 @@ BOUNCER — вышибала у двери каждого запуска на Po
 
 Почему этим будут пользоваться: это не радар и не скор. Это то, что человек проверяет за 10 секунд перед покупкой, и то, что постят в ответ на «graduating tonight». Сайт работает в браузере без кошелька, CLI без ключей, всё воспроизводимо по номеру блока на штампе.
 
+**Фаза 2 (готово).** THE ROOM (кто купил, доля дева, покупки в одном блоке), EXIT DOOR (сколько получишь за 10/25/50/100% позиции, на кривой или в пуле), ONE CREW (кто из первых покупателей профинансирован одной рукой, через Blockscout), LOOKALIKES (сколько токенов с таким тикером и какой первый), POSITION (мешок кошелька), RECEIPT (чек по хешу), LAUNCH PLANNER (что будет при запуске на сегодняшних условиях фабрики), Telegram-бот, расширение для браузера, и поддержка Arc (Radian, порт Pons V2 на цепи Circle с нативным USDC).
+
 ## 2. Маскот
 
 Горилла-вышибала: чёрная футболка с красным значком, «обмотанные» тёмные очки, наушник-гарнитура из латуни, руки скрещены. 32×32 пиксель-арт, рендерится детерминированно из `scripts/draw-mascot.py`. Палитра: дверь `#0e0d10`, латунь `#c9a227`, бархатный канат `#b3122e`. Строчка лора: **«Check the list before you pay the cover.»** и **«The gorilla is the meme. The slip is the product.»**
@@ -58,6 +60,14 @@ bouncer door 0x…[CA]
 ```
 $BOUNCER is live on Pons: 0x[CA]
 the tool is the product. the token is the tip jar. the gorilla is the meme.
+```
+
+Реплай про Arc (когда Radian опубликует mainnet-фабрику):
+
+```
+same code, second chain. Radian ported Pons V2 to Arc, quoted in native USDC.
+bouncer door 0x… --chain arc
+same slip, same rules, USDC at the door.
 ```
 
 ## 4. Чек-лист
