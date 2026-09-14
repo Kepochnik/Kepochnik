@@ -72,6 +72,13 @@ select:focus-visible{outline:2px solid var(--brass-2)}
 .exit-grid small{display:block;color:var(--dim);font:11px var(--mono);margin-top:4px}
 @media (max-width:720px){.exit-grid{grid-template-columns:1fr 1fr}}
 .num{font-variant-numeric:tabular-nums}
+.watch{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.watch .ghost[aria-pressed="true"]{border-color:var(--watch);color:var(--watch)}
+.events{display:grid;gap:6px;margin-top:10px}
+.event{display:grid;grid-template-columns:auto auto 1fr;gap:10px;align-items:baseline;font:13px var(--mono);padding:6px 0;border-top:1px solid var(--line)}
+.event .k{color:var(--watch);font-weight:600}
+.event .b{color:var(--dim)}
+.event.quiet{color:var(--dim)}
 .status{margin-top:22px;color:var(--muted);font:13px var(--mono);min-height:20px;display:flex;gap:10px;align-items:center}
 .status .dot{width:8px;height:8px;border-radius:50%;background:var(--brass);animation:pulse 1s infinite alternate}
 @keyframes pulse{from{opacity:.3}to{opacity:1}}
@@ -165,6 +172,7 @@ footer b{color:var(--muted);font-weight:400}
       <button class="tab" role="tab" id="tab-wallet" aria-selected="false" type="button">Wallet</button>
       <button class="tab" role="tab" id="tab-tx" aria-selected="false" type="button">Receipt</button>
       <button class="tab" role="tab" id="tab-plan" aria-selected="false" type="button">Plan a launch</button>
+      <button class="tab" role="tab" id="tab-board" aria-selected="false" type="button">Board</button>
     </div>
     <label id="door-label" for="q">At the door</label>
     <form class="row" id="form">

@@ -9,7 +9,7 @@ import { encodeWord, eventTopic, selector } from "../chain/abi.js";
 import { EIP1967_IMPLEMENTATION_SLOT } from "../chain/code.js";
 import { keccak256Hex } from "../chain/keccak.js";
 import { poolIdFor } from "./exitDoor.js";
-import { CURVE_EVENTS, FACTORY_EVENTS, PONS_V2_FACTORY, ROBINHOOD_CHAIN_ID, ZERO_ADDRESS } from "../chain/pons.js";
+import { CURVE_EVENTS, ERC20_EVENTS, FACTORY_EVENTS, PONS_V2_FACTORY, ROBINHOOD_CHAIN_ID, ZERO_ADDRESS } from "../chain/pons.js";
 import { RpcClient } from "../chain/rpc.js";
 import { addressTopic } from "../chain/tape.js";
 
@@ -33,6 +33,10 @@ export interface DemoToken {
   sells: [number, string, bigint][];
   /** Creator fee recipient moves since launch, as [block offset, new recipient]. */
   recipientMoves?: [number, string][];
+  /** Buyback flips since launch, as [block offset, enabled]. */
+  buybackFlips?: [number, boolean][];
+  /** ERC-20 transfers the token logged, as [block offset, from, to, amount]. */
+  transfers?: [number, string, string, bigint][];
 }
 
 const ETH = 10n ** 18n;
@@ -70,8 +74,8 @@ export const DEMO = {
   tokens: {
     sprint: { token: "0x00c0ffee0000000000000000000000000000600d", curve: "0x0000c0a70000000000000000000000000000600d", deployer: DEV_A, name: "Sprint", symbol: "SPRINT", launched: HEAD - 2_600, swept: HEAD - 2_600 + 2_120, graduated: HEAD - 2_600 + 2_121, raised: 42n * 10n ** 17n, supplyToPool: 2n * 10n ** 26n, positionId: 4663n, taxBps: 300n, real: 42n * 10n ** 17n, tokenReserve: 0n, buys: sprintBuys, sells: [], recipientMoves: [[2_300, "0x000000000000000000000000000000000000f0f0"]] } as DemoToken,
     slow: { token: "0x0000000000000000000000000000000000005107", curve: "0x0000c0a70000000000000000000000000000a107", deployer: DEV_B, name: "Slow and Steady", symbol: "SLOW", launched: HEAD - 40_000, swept: HEAD - 2_800, graduated: HEAD - 2_799, raised: 42n * 10n ** 17n, supplyToPool: 2n * 10n ** 26n, positionId: 4664n, taxBps: 100n, real: 42n * 10n ** 17n, tokenReserve: 0n, buys: slowBuys, sells: [[20_000, buyer(105), 50n * 10n ** 15n]] } as DemoToken,
-    late: { token: "0x00000000000000000000000000000000000000a7", curve: "0x0000c0a7000000000000000000000000000000a7", deployer: DEV_B, name: "Late Bloomer", symbol: "LATE", launched: HEAD - 17_500, raised: 0n, taxBps: 200n, real: 31n * 10n ** 17n, tokenReserve: 3n * 10n ** 26n, buys: Array.from({ length: 60 }, (_, i) => [i * 290, buyer(200 + (i % 25)), 50n * 10n ** 15n] as [number, string, bigint]), sells: [[9_000, buyer(201), 20n * 10n ** 15n], [15_000, buyer(202), 20n * 10n ** 15n]] } as DemoToken,
-    fresh: { token: "0x00000000000000000000000000000000000f2e54", curve: "0x0000c0a7000000000000000000000000000f2e54", deployer: DEV_C, name: "Fresh Off The Curve", symbol: "FRESH", launched: HEAD - 90, raised: 0n, taxBps: 1_000n, real: 8n * 10n ** 17n, tokenReserve: 8n * 10n ** 26n, buys: freshBuys, sells: [] } as DemoToken,
+    late: { token: "0x00000000000000000000000000000000000000a7", curve: "0x0000c0a7000000000000000000000000000000a7", deployer: DEV_B, name: "Late Bloomer", symbol: "LATE", launched: HEAD - 17_500, raised: 0n, taxBps: 200n, real: 31n * 10n ** 17n, tokenReserve: 3n * 10n ** 26n, buys: Array.from({ length: 60 }, (_, i) => [i * 290, buyer(200 + (i % 25)), 50n * 10n ** 15n] as [number, string, bigint]), sells: [[9_000, buyer(201), 20n * 10n ** 15n], [15_000, buyer(202), 20n * 10n ** 15n], [17_450, DEV_B, 40n * 10n ** 15n]], buybackFlips: [[17_470, false]], transfers: [[17_400, DEV_B, "0x0000000000000000000000000000000000000ca5", 10n ** 25n], [17_450, DEV_B, "0x0000c0a7000000000000000000000000000000a7", 2n * 10n ** 24n]] } as DemoToken,
+    fresh: { token: "0x00000000000000000000000000000000000f2e54", curve: "0x0000c0a7000000000000000000000000000f2e54", deployer: DEV_C, name: "Fresh Off The Curve", symbol: "FRESH", launched: HEAD - 90, raised: 0n, taxBps: 1_000n, real: 8n * 10n ** 17n, tokenReserve: 8n * 10n ** 26n, buys: freshBuys, sells: [[85, buyer(900), 120n * 10n ** 15n], [88, buyer(901), 40n * 10n ** 15n]] } as DemoToken,
     nap: { token: "0x0000000000000000000000000000000000000d0e", curve: "0x0000c0a70000000000000000000000000000ad0e", deployer: DEV_B, name: "Nap Time", symbol: "NAP", launched: HEAD - 237_500, raised: 0n, taxBps: 500n, real: 3n * 10n ** 17n, tokenReserve: 9n * 10n ** 26n, buys: [[5, DEV_B, 300n * 10n ** 15n]], sells: [] } as DemoToken,
   },
 };
@@ -105,6 +109,11 @@ function factoryLogs(from: number, to: number) {
     }
     if (t.swept && t.swept >= from && t.swept <= to) {
       logs.push({ address: PONS_V2_FACTORY, topics: [eventTopic(FACTORY_EVENTS.LaunchSwept), addressTopic(t.token)], data: `0x${encodeWord("uint256", t.raised)}${encodeWord("uint256", t.supplyToPool ?? 0n)}`, blockNumber: `0x${t.swept.toString(16)}`, transactionHash: `0xdemo${t.symbol.toLowerCase()}sweep`, logIndex: "0x1" });
+    }
+    for (const [offset, enabled] of t.buybackFlips ?? []) {
+      const b = t.launched + offset;
+      if (b < from || b > to) continue;
+      logs.push({ address: PONS_V2_FACTORY, topics: [eventTopic(FACTORY_EVENTS.BuybackEnabledUpdated), addressTopic(t.token), addressTopic(t.deployer)], data: `0x${encodeWord("bool", enabled)}`, blockNumber: `0x${b.toString(16)}`, transactionHash: `0xdemo${t.symbol.toLowerCase()}buyback${b}`, logIndex: "0x4" });
     }
     for (const [offset, to_] of t.recipientMoves ?? []) {
       const b = t.launched + offset;
@@ -180,7 +189,16 @@ export function demoFetch(): typeof fetch {
           const f = (request.params as [{ address?: string; fromBlock: string; toBlock: string; topics?: (string | string[] | null)[] }])[0];
           const from = Number(BigInt(f.fromBlock));
           const to = Number(BigInt(f.toBlock));
-          const all = !f.address || f.address === PONS_V2_FACTORY ? factoryLogs(from, to) : (() => { const t = byCurve.get(f.address!.toLowerCase()); return t ? curveLogs(t, from, to) : []; })();
+          const address = f.address ? String(f.address).toLowerCase() : undefined;
+          const all = !address
+            ? [...factoryLogs(from, to), ...Object.values(DEMO.tokens).flatMap((t) => [...curveLogs(t, from, to), ...tokenLogs(t, from, to)])]
+            : address === PONS_V2_FACTORY
+              ? factoryLogs(from, to)
+              : byCurve.has(address)
+                ? curveLogs(byCurve.get(address)!, from, to)
+                : byToken.has(address)
+                  ? tokenLogs(byToken.get(address)!, from, to)
+                  : [];
           return ok((all as { topics: string[] }[]).filter((log) => matchesTopics(log.topics, f.topics)));
         }
         case "eth_getCode": {
@@ -326,6 +344,17 @@ export function demoBlockscoutFetch(): typeof fetch {
     if (v) return json({ is_verified: tokens.some((t) => t.token === v[1].toLowerCase() || t.curve === v[1].toLowerCase()) });
     return new Response("not found", { status: 404 });
   }) as typeof fetch;
+}
+
+function tokenLogs(t: DemoToken, from: number, to: number) {
+  const logs: unknown[] = [];
+  let index = 0;
+  for (const [offset, from_, to_, amount] of t.transfers ?? []) {
+    const b = t.launched + offset;
+    if (b < from || b > to) continue;
+    logs.push({ address: t.token, topics: [eventTopic(ERC20_EVENTS.Transfer), addressTopic(from_), addressTopic(to_)], data: `0x${encodeWord("uint256", amount)}`, blockNumber: `0x${b.toString(16)}`, transactionHash: `0xdemo${t.symbol}xfer${b}`, logIndex: `0x${(index++).toString(16)}` });
+  }
+  return logs;
 }
 
 function matchesTopics(topics: string[], filter?: (string | string[] | null)[]): boolean {
