@@ -4,7 +4,8 @@
  * bytecode at the expected address, and returns the current anti-snipe terms.
  */
 import { decodeOutputs, encodeCall } from "../chain/abi.js";
-import { FACTORY_FUNCTIONS, PONS_V2_FACTORY, ROBINHOOD_CHAIN_ID } from "../chain/pons.js";
+import { FACTORY_FUNCTIONS, PONS_V2_FACTORY } from "../chain/pons.js";
+import { chainById } from "../chain/chains.js";
 import type { RpcClient } from "../chain/rpc.js";
 import type { Receipt } from "../receipt.js";
 
@@ -21,7 +22,7 @@ export interface DoctorReport {
   errors: string[];
 }
 
-export async function runDoctor(rpc: RpcClient, now: () => number = () => Date.now()): Promise<DoctorReport> {
+export async function runDoctor(rpc: RpcClient, now: () => number = () => Date.now(), factory: string = PONS_V2_FACTORY): Promise<DoctorReport> {
   const report: DoctorReport = {
     ok: false,
     rpcUrl: rpc.activeUrl,
@@ -38,19 +39,19 @@ export async function runDoctor(rpc: RpcClient, now: () => number = () => Date.n
     const started = now();
     report.chainId = await rpc.chainId();
     report.latencyMs = now() - started;
-    if (report.chainId !== ROBINHOOD_CHAIN_ID) {
-      report.errors.push(`chain id ${report.chainId} is not Robinhood Chain (${ROBINHOOD_CHAIN_ID})`);
+    if (!chainById(report.chainId)) {
+      report.errors.push(`chain id ${report.chainId} is not one BOUNCER knows`);
     }
     const block = await rpc.getBlock("latest");
     report.latestBlock = block.number;
     report.blockTimestamp = block.timestamp;
-    const code = (await rpc.send("eth_getCode", [PONS_V2_FACTORY, "latest"])) as string;
+    const code = (await rpc.send("eth_getCode", [factory, "latest"])) as string;
     report.factoryHasCode = typeof code === "string" && code.length > 2;
-    if (!report.factoryHasCode) report.errors.push(`no bytecode at Pons V2 factory ${PONS_V2_FACTORY}`);
+    if (!report.factoryHasCode) report.errors.push(`no bytecode at the launchpad factory ${factory}`);
     const [startRaw, secondsRaw] = await rpc.callBatch(
       [
-        { to: PONS_V2_FACTORY, data: encodeCall(FACTORY_FUNCTIONS.snipeTaxStartBps, []) },
-        { to: PONS_V2_FACTORY, data: encodeCall(FACTORY_FUNCTIONS.snipeTaxSeconds, []) },
+        { to: factory, data: encodeCall(FACTORY_FUNCTIONS.snipeTaxStartBps, []) },
+        { to: factory, data: encodeCall(FACTORY_FUNCTIONS.snipeTaxSeconds, []) },
       ],
       block.number,
     );
@@ -64,25 +65,25 @@ export async function runDoctor(rpc: RpcClient, now: () => number = () => Date.n
   return report;
 }
 
-export function doctorReceipt(report: DoctorReport, toolName: string): Receipt {
+export function doctorReceipt(report: DoctorReport, toolName: string, chainName = "Robinhood Chain", factory: string = PONS_V2_FACTORY): Receipt {
   return {
     title: `${toolName} doctor`,
     subtitle: report.ok ? "read path healthy" : "read path has problems",
     sections: [
       {
-        title: "Robinhood Chain",
+        title: chainName,
         rows: [
           { label: "rpc", value: report.rpcUrl },
-          { label: "chain id", value: report.chainId, note: report.chainId === ROBINHOOD_CHAIN_ID ? "Robinhood Chain" : "unexpected" },
+          { label: "chain id", value: report.chainId, note: chainById(report.chainId ?? -1)?.name ?? "unexpected" },
           { label: "latest block", value: report.latestBlock },
           { label: "block time", value: report.blockTimestamp === null ? null : new Date(report.blockTimestamp * 1000).toISOString() },
           { label: "rpc latency", value: report.latencyMs === null ? null : `${report.latencyMs} ms` },
         ],
       },
       {
-        title: "Pons V2 factory",
+        title: "launchpad factory",
         rows: [
-          { label: "address", value: PONS_V2_FACTORY },
+          { label: "address", value: factory },
           { label: "bytecode", value: report.factoryHasCode },
           { label: "snipe tax start", value: report.snipeTaxStartBps === null ? null : `${Number(report.snipeTaxStartBps) / 100}%` },
           { label: "snipe tax window", value: report.snipeTaxSeconds === null ? null : `${report.snipeTaxSeconds}s` },

@@ -43,6 +43,35 @@ The exact shape of the decay lives in the curve contract; the slip shows the ter
 
 `TokenLaunched` logs with the deployer in `topics[3]` over the window (24 h by default; block found by binary search on timestamps), read with adaptive chunking. For each launch (newest first, 40 detailed): factory record for phase, tax and sweep time, `symbol()`, launch block header. Counts cover every launch in the window even when older ones are not listed.
 
+## The room
+
+Every `CurveBuy` and `CurveSell` the curve logged from the launch block to the head (adaptive chunks; a curve's logs are few). Per wallet: first block, buys, sells, quote in (net of fee and tax), quote out. Dev share = quote in from the deployer and fee recipient over all quote in. First minute = quote in within 60 s of blocks after launch. Shared blocks = blocks in which more than one distinct wallet bought.
+
+## Exit door
+
+| Venue | Read | Arithmetic |
+| --- | --- | --- |
+| curve | `getReserves()`, `feeBps()`, `readyToGraduate()` | `PonsV2BondingCurveMath.getAmountOut(tokensIn, tokenReserve, quoteReserve, 0)`, then `fee = gross·feeBps/1e4`, `tax = gross·creatorTaxBps/1e4`, `net = gross − fee − tax`: the curve's own `sell()`. A full curve (`readyToGraduate`) reverts sells, so the venue is "closed" until `graduate()`. |
+| pool | factory `poolManager()`, `memeHook()`; `PoolManager.extsload` of the pool's `slot0` (sqrtPriceX96) and `liquidity` at `keccak256(poolId ‖ 6)` and `+3`; hook `currentFeePolicy().hookFeeBps` | Pool id = `keccak256(abi.encode(currency0, currency1, poolFee, tickSpacing, hook))` with currencies sorted. Full-range virtual reserves `x = L·2^96/√P`, `y = L·√P/2^96`. The sale is priced as a constant-product swap on those reserves with the hook fee and the creator tax on the quote leg. An estimate: the hook policy is the live one, and any liquidity outside the locked full-range position is not modelled. |
+
+Quotes are for 10 / 25 / 50 / 100% of a position (1% of supply by default, or `--amount`). "Realised" = net over what the same tokens would fetch at the marginal price.
+
+## One crew
+
+For each of the first 12 buyers: Blockscout `/api/v2/addresses/{wallet}/transactions?filter=to`, up to three pages, earliest incoming native transfer with value > 0 before the launch block. Wallets sharing that sender form a crew; a crew's share is its quote in over the curve's total. A wallet whose funder is the deployer or the fee recipient is listed separately. A wallet with no incoming native transfer found (funded by an ERC-20, a contract or an internal transaction) counts as unresolved, never as clean.
+
+## Lookalikes
+
+Blockscout `/api/v2/search?q=SYMBOL`, kept when the symbol matches exactly, at most 8. Each candidate: factory record (registered or not, phase) and, when registered, its `TokenLaunched` block. The earliest registered launch block wins "came first". The subject is always a candidate even when the explorer has not indexed it yet.
+
+## Position and receipt
+
+Position: the curve's `CurveBuy` with `buyer = wallet` and `CurveSell` with `seller = wallet` from the launch block; `balanceOf(wallet)` at the head; the exit door for that balance. Cost basis = quote spent on buys (fees included) − quote received on sells. Receipt: the transaction's own `CurveBuy`/`CurveSell` logs; creator tax part = `quote · creatorTaxBps / 1e4` from the factory record; cover charge = `tax − creator tax part` when positive.
+
+## Launch planner
+
+Factory `getLaunchConfig(id)`, `pairTokenEconomics(pairToken)` for ERC-20 quotes, `launchFee()`, `maxCreatorTaxBps()`, the anti-snipe terms, hook `currentFeePolicy()`. Reserved tokens `= supply · phantom / (phantom + threshold)` (the curve's `initialize`), start price `= phantom / supply`, graduation price `= (phantom + threshold) / reserved`, FDV at graduation `= graduation price · supply`, creator's take if the curve fills with no sells `= threshold · creatorTaxBps / 1e4`, door charge on a sample buy in the launch second `= buy · snipeTaxStartBps / 1e4`.
+
 ## Door notes
 
 | Level | Code | When |
@@ -64,5 +93,16 @@ The exact shape of the decay lives in the curve contract; the slip shows the ter
 | WATCH | dev-serial | ≥ 5 launches in the window, none graduated |
 | WATCH | dev-repeat | the same ticker launched more than once by the deployer |
 | INFO | dev-graduated | ≥ 1 graduation in the window, with the median launch-to-sweep |
+| WATCH | dev-funded | the creator's wallets funded ≥ 50% of everything bought on the curve |
+| WATCH | bundled-blocks | ≥ 3 blocks with several distinct wallets buying at once |
+| INFO | room-wide | ≥ 25 buyers and the creator funded < 20% |
+| WATCH | one-crew | the largest crew of first buyers sharing a funder bought ≥ 25% of the curve |
+| WATCH | crew-creator | first buyers whose funds came from the creator's wallets |
+| INFO | crew-clean | ≥ 5 first buyers checked, no shared funder |
+| WATCH | lookalike-later | a registered token with the same ticker launched earlier |
+| INFO | lookalikes | other tokens with the same ticker exist |
+| INFO | exit-closed | the curve is full and waiting for graduate(), or swept without a pool |
+| INFO | exit-thin | selling 1% of supply realises < 50% of spot |
+| INFO | skipped | a section could not be read; the reason is in the note |
 
 The stamp is `ON THE LIST` when the factory record exists and `NOT ON THE LIST` otherwise. It is not a score. A launch with five WATCH notes is still on the list; the notes are what to read before paying the cover.
