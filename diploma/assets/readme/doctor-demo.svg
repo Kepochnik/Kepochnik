@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="586" height="584" viewBox="0 0 586 584" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="14">
+  <rect width="100%" height="100%" rx="12" fill="#0f1424"/>
+  <circle cx="22" cy="22" r="6" fill="#ff5f57"/><circle cx="42" cy="22" r="6" fill="#febc2e"/><circle cx="62" cy="22" r="6" fill="#28c840"/>
+  <text x="88" y="27" fill="#8a8fa8" font-size="12">diploma doctor --demo</text>
+  <line x1="0" y1="40" x2="586" y2="40" stroke="#c9962b" stroke-opacity="0.25"/>
+<text x="24" y="56" fill="#c9962b" xml:space="preserve">┌──────────────────────────────────────────────────────────────┐</text>
+<text x="24" y="76" fill="#ece6d2" xml:space="preserve">│ diploma doctor                                               │</text>
+<text x="24" y="96" fill="#ece6d2" xml:space="preserve">│ read path healthy                                            │</text>
+<text x="24" y="116" fill="#c9962b" xml:space="preserve">├──────────────────────────────────────────────────────────────┤</text>
+<text x="24" y="136" fill="#c9962b" xml:space="preserve">│ ROBINHOOD CHAIN                                              │</text>
+<text x="24" y="156" fill="#ece6d2" xml:space="preserve">│ rpc           demo://robinhood-chain                         │</text>
+<text x="24" y="176" fill="#ece6d2" xml:space="preserve">│ chain id      4663  (Robinhood Chain)                        │</text>
+<text x="24" y="196" fill="#ece6d2" xml:space="preserve">│ latest block  31337500                                       │</text>
+<text x="24" y="216" fill="#ece6d2" xml:space="preserve">│ block time    2026-09-15T00:00:00.000Z                       │</text>
+<text x="24" y="236" fill="#ece6d2" xml:space="preserve">│ rpc latency   66 ms                                          │</text>
+<text x="24" y="256" fill="#c9962b" xml:space="preserve">├──────────────────────────────────────────────────────────────┤</text>
+<text x="24" y="276" fill="#c9962b" xml:space="preserve">│ PONS V2 FACTORY                                              │</text>
+<text x="24" y="296" fill="#ece6d2" xml:space="preserve">│ address           0x7ed598bcef8bd9edd8c97a195c6d13f40801ec7e │</text>
+<text x="24" y="316" fill="#ece6d2" xml:space="preserve">│ bytecode          yes                                        │</text>
+<text x="24" y="336" fill="#ece6d2" xml:space="preserve">│ snipe tax start   99%                                        │</text>
+<text x="24" y="356" fill="#ece6d2" xml:space="preserve">│ snipe tax window  15s                                        │</text>
+<text x="24" y="376" fill="#c9962b" xml:space="preserve">├──────────────────────────────────────────────────────────────┤</text>
+<text x="24" y="396" fill="#c9962b" xml:space="preserve">│ BOUNDARIES                                                   │</text>
+<text x="24" y="416" fill="#ece6d2" xml:space="preserve">│ keys          none                                           │</text>
+<text x="24" y="436" fill="#ece6d2" xml:space="preserve">│ signing       none                                           │</text>
+<text x="24" y="456" fill="#ece6d2" xml:space="preserve">│ transactions  none                                           │</text>
+<text x="24" y="476" fill="#c9962b" xml:space="preserve">├──────────────────────────────────────────────────────────────┤</text>
+<text x="24" y="496" fill="#ece6d2" xml:space="preserve">│ Every value above was read from the chain at the moment      │</text>
+<text x="24" y="516" fill="#ece6d2" xml:space="preserve">│ shown; nothing is cached or inferred.                        │</text>
+<text x="24" y="536" fill="#c9962b" xml:space="preserve">└──────────────────────────────────────────────────────────────┘</text>
+</svg>

@@ -1,0 +1,43 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="939" height="824" viewBox="0 0 939 824" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="14">
+  <rect width="100%" height="100%" rx="12" fill="#0f1424"/>
+  <circle cx="22" cy="22" r="6" fill="#ff5f57"/><circle cx="42" cy="22" r="6" fill="#febc2e"/><circle cx="62" cy="22" r="6" fill="#28c840"/>
+  <text x="88" y="27" fill="#8a8fa8" font-size="12">diploma print --demo</text>
+  <line x1="0" y1="40" x2="939" y2="40" stroke="#c9962b" stroke-opacity="0.25"/>
+<text x="24" y="56" fill="#c9962b" xml:space="preserve">┌────────────────────────────────────────────────────────────────────────────────────────────────────────┐</text>
+<text x="24" y="76" fill="#ece6d2" xml:space="preserve">│ DIPLOMA · $SPRINT                                                                                      │</text>
+<text x="24" y="96" fill="#ece6d2" xml:space="preserve">│ class of 2026-09-14 · Pons V2 on Robinhood Chain                                                       │</text>
+<text x="24" y="116" fill="#c9962b" xml:space="preserve">├────────────────────────────────────────────────────────────────────────────────────────────────────────┤</text>
+<text x="24" y="136" fill="#c9962b" xml:space="preserve">│ THIS CERTIFIES THAT                                                                                    │</text>
+<text x="24" y="156" fill="#ece6d2" xml:space="preserve">│ token     Sprint ($SPRINT)                                                                             │</text>
+<text x="24" y="176" fill="#ece6d2" xml:space="preserve">│ contract  0x00c0ffee0000000000000000000000000000600d                                                   │</text>
+<text x="24" y="196" fill="#ece6d2" xml:space="preserve">│ deployer  0x0000000000000000000000000000000000d0e5e1                                                   │</text>
+<text x="24" y="216" fill="#c9962b" xml:space="preserve">├────────────────────────────────────────────────────────────────────────────────────────────────────────┤</text>
+<text x="24" y="236" fill="#c9962b" xml:space="preserve">│ GRADUATED                                                                                              │</text>
+<text x="24" y="256" fill="#ece6d2" xml:space="preserve">│ pool seeded     31337021  (2026-09-14T23:59:12Z)                                                       │</text>
+<text x="24" y="276" fill="#ece6d2" xml:space="preserve">│ curve swept     31337020                                                                               │</text>
+<text x="24" y="296" fill="#ece6d2" xml:space="preserve">│ launched        31334900  (2026-09-14T23:55:40Z)                                                       │</text>
+<text x="24" y="316" fill="#ece6d2" xml:space="preserve">│ raised          4.2 ETH  (seeded into the locked pool)                                                 │</text>
+<text x="24" y="336" fill="#ece6d2" xml:space="preserve">│ supply to pool  200,000,000                                                                            │</text>
+<text x="24" y="356" fill="#ece6d2" xml:space="preserve">│ v4 position     #4663  (permanently locked)                                                            │</text>
+<text x="24" y="376" fill="#c9962b" xml:space="preserve">├────────────────────────────────────────────────────────────────────────────────────────────────────────┤</text>
+<text x="24" y="396" fill="#c9962b" xml:space="preserve">│ TRANSCRIPT                                                                                             │</text>
+<text x="24" y="416" fill="#ece6d2" xml:space="preserve">│ time to graduate  212 s  (31334900 → 31337020)                                                         │</text>
+<text x="24" y="436" fill="#ece6d2" xml:space="preserve">│ buyers            9  (9 buys, 0 sells)                                                                 │</text>
+<text x="24" y="456" fill="#ece6d2" xml:space="preserve">│ quote in / out    4.032 ETH / 0 ETH                                                                    │</text>
+<text x="24" y="476" fill="#ece6d2" xml:space="preserve">│ dev funded        61.9%  (2.496 ETH)                                                                   │</text>
+<text x="24" y="496" fill="#ece6d2" xml:space="preserve">│ first minute      71.4%  (of quote in, bought within 60 s of launch)                                   │</text>
+<text x="24" y="516" fill="#ece6d2" xml:space="preserve">│ first buyers      #1 0x0000…e5e1 (dev)  #2 0x0000…b001  #3 0x0000…b002  #4 0x0000…b003  #5 0x0000…b004 │</text>
+<text x="24" y="536" fill="#c9962b" xml:space="preserve">├────────────────────────────────────────────────────────────────────────────────────────────────────────┤</text>
+<text x="24" y="556" fill="#c9962b" xml:space="preserve">│ TERMS                                                                                                  │</text>
+<text x="24" y="576" fill="#ece6d2" xml:space="preserve">│ creator tax    3%                                                                                      │</text>
+<text x="24" y="596" fill="#ece6d2" xml:space="preserve">│ buyback vault  enabled (5-year vest back to creator and protocol)                                      │</text>
+<text x="24" y="616" fill="#c9962b" xml:space="preserve">├────────────────────────────────────────────────────────────────────────────────────────────────────────┤</text>
+<text x="24" y="636" fill="#c9962b" xml:space="preserve">│ SEAL                                                                                                   │</text>
+<text x="24" y="656" fill="#ece6d2" xml:space="preserve">│ read at block  31337500                                                                                │</text>
+<text x="24" y="676" fill="#ece6d2" xml:space="preserve">│ seal           chain 4663 · H-O-O-D on a keypad                                                        │</text>
+<text x="24" y="696" fill="#ece6d2" xml:space="preserve">│ explorer       https://robinhoodchain.blockscout.com/token/0x00c0ffee0000000000000000000000000000600d  │</text>
+<text x="24" y="716" fill="#c9962b" xml:space="preserve">├────────────────────────────────────────────────────────────────────────────────────────────────────────┤</text>
+<text x="24" y="736" fill="#ece6d2" xml:space="preserve">│ A diploma is a transcript of a past event. It is not a rating, not a prediction and not a buy signal.  │</text>
+<text x="24" y="756" fill="#ece6d2" xml:space="preserve">│ No key. No signer. No transaction path. Re-run at the blocks above to reproduce every number.          │</text>
+<text x="24" y="776" fill="#c9962b" xml:space="preserve">└────────────────────────────────────────────────────────────────────────────────────────────────────────┘</text>
+</svg>

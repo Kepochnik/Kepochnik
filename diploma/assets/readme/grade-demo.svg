@@ -1,0 +1,36 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="813" height="684" viewBox="0 0 813 684" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="14">
+  <rect width="100%" height="100%" rx="12" fill="#0f1424"/>
+  <circle cx="22" cy="22" r="6" fill="#ff5f57"/><circle cx="42" cy="22" r="6" fill="#febc2e"/><circle cx="62" cy="22" r="6" fill="#28c840"/>
+  <text x="88" y="27" fill="#8a8fa8" font-size="12">diploma grade --demo</text>
+  <line x1="0" y1="40" x2="813" y2="40" stroke="#c9962b" stroke-opacity="0.25"/>
+<text x="24" y="56" fill="#c9962b" xml:space="preserve">┌─────────────────────────────────────────────────────────────────────────────────────────┐</text>
+<text x="24" y="76" fill="#ece6d2" xml:space="preserve">│ ODDS · $LATE · JUNIOR                                                                   │</text>
+<text x="24" y="96" fill="#ece6d2" xml:space="preserve">│ Late Bloomer · 0x00000000000000000000000000000000000000a7                               │</text>
+<text x="24" y="116" fill="#c9962b" xml:space="preserve">├─────────────────────────────────────────────────────────────────────────────────────────┤</text>
+<text x="24" y="136" fill="#c9962b" xml:space="preserve">│ CURVE                                                                                   │</text>
+<text x="24" y="156" fill="#ece6d2" xml:space="preserve">│ phase                 curve                                                             │</text>
+<text x="24" y="176" fill="#ece6d2" xml:space="preserve">│ fill                  [██████████████████████········] 73.8%  (real quote vs threshold) │</text>
+<text x="24" y="196" fill="#ece6d2" xml:space="preserve">│ raised so far         3.1 ETH                                                           │</text>
+<text x="24" y="216" fill="#ece6d2" xml:space="preserve">│ threshold             4.2 ETH                                                           │</text>
+<text x="24" y="236" fill="#ece6d2" xml:space="preserve">│ remaining             1.1 ETH                                                           │</text>
+<text x="24" y="256" fill="#ece6d2" xml:space="preserve">│ tokens left on curve  300,000,000                                                       │</text>
+<text x="24" y="276" fill="#ece6d2" xml:space="preserve">│ creator tax           2%                                                                │</text>
+<text x="24" y="296" fill="#ece6d2" xml:space="preserve">│ deployer holds        30,000,000  (of 1,000,000,000)                                    │</text>
+<text x="24" y="316" fill="#c9962b" xml:space="preserve">├─────────────────────────────────────────────────────────────────────────────────────────┤</text>
+<text x="24" y="336" fill="#c9962b" xml:space="preserve">│ PACE · LAST 1H                                                                          │</text>
+<text x="24" y="356" fill="#ece6d2" xml:space="preserve">│ buys / sells      60 / 2                                                                │</text>
+<text x="24" y="376" fill="#ece6d2" xml:space="preserve">│ net inflow        2.87 ETH                                                              │</text>
+<text x="24" y="396" fill="#ece6d2" xml:space="preserve">│ pace              2.87 ETH/h                                                            │</text>
+<text x="24" y="416" fill="#ece6d2" xml:space="preserve">│ last buy          39s ago                                                               │</text>
+<text x="24" y="436" fill="#ece6d2" xml:space="preserve">│ eta at this pace  22m 59s  (arithmetic, not a forecast)                                 │</text>
+<text x="24" y="456" fill="#c9962b" xml:space="preserve">├─────────────────────────────────────────────────────────────────────────────────────────┤</text>
+<text x="24" y="476" fill="#c9962b" xml:space="preserve">│ VERDICT                                                                                 │</text>
+<text x="24" y="496" fill="#ece6d2" xml:space="preserve">│ grade          JUNIOR  (73.8% of threshold, net inflow positive)                        │</text>
+<text x="24" y="516" fill="#ece6d2" xml:space="preserve">│ read at block  31337500  (2026-09-15T00:00:00Z)                                         │</text>
+<text x="24" y="536" fill="#c9962b" xml:space="preserve">├─────────────────────────────────────────────────────────────────────────────────────────┤</text>
+<text x="24" y="556" fill="#ece6d2" xml:space="preserve">│ FRESHMAN &lt; 25% · SOPHOMORE &lt; 50% · JUNIOR &lt; 75% · SENIOR ≥ 75% of the curve's own       │</text>
+<text x="24" y="576" fill="#ece6d2" xml:space="preserve">│ threshold. DROPOUT = no buy for 6h under 50%.                                           │</text>
+<text x="24" y="596" fill="#ece6d2" xml:space="preserve">│ No key. No signer. No transaction path. A grade is arithmetic on one block, not         │</text>
+<text x="24" y="616" fill="#ece6d2" xml:space="preserve">│ advice.                                                                                 │</text>
+<text x="24" y="636" fill="#c9962b" xml:space="preserve">└─────────────────────────────────────────────────────────────────────────────────────────┘</text>
+</svg>

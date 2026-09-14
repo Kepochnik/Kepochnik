@@ -1,0 +1,28 @@
+{
+  "name": "diploma",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.13"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "tsc -p tsconfig.json && node --test dist/test/*.test.js",
+    "readonly-check": "node scripts/readonly-check.mjs",
+    "check": "npm run readonly-check && npm test",
+    "demo": "npm run build --silent && node bin/diploma.mjs demo",
+    "doctor": "npm run build --silent && node bin/diploma.mjs doctor",
+    "watch": "npm run build --silent && node bin/diploma.mjs watch"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.0",
+    "typescript": "^5.6.0"
+  },
+  "version": "0.1.0",
+  "description": "Read-only graduation desk for Pons V2 curves on Robinhood Chain. Grades every curve, prints the diploma the block a token graduates, keeps the yearbook. Official CA: not launched yet.",
+  "bin": {
+    "diploma": "bin/diploma.mjs"
+  },
+  "license": "MIT",
+  "repository": "github:Kepochnik/diploma"
+}
