@@ -1,0 +1,9 @@
+# BOUNCER · limitations
+
+- **Snipe tax shape.** The factory publishes the start tax and the window; the decay curve is inside the bonding-curve contract. The slip shows the terms and what each buy in the window actually paid (from the curve's own `CurveBuy` event), not a predicted tax for a buy at second N. If the curve reports the door tax outside the `tax` field of `CurveBuy`, the "paid at the door" column would understate it; run `bouncer door` on a fresh launch and compare with the explorer before quoting a number.
+- **Launch search window.** The launch block is found by walking factory logs backwards, 7 days by default. Older launches get "launch older than the search window" instead of a cover charge section. Pass `--launch-blocks` (CLI) to widen it.
+- **Public RPC.** `rpc.mainnet.chain.robinhood.com` rate-limits bursts and caps the block span of `eth_getLogs`; the client paces requests and halves chunk sizes on range errors. A chunk that fails at the minimum size is an error, never a gap. Browser use of the public endpoint depends on its CORS policy; the site lets you paste another endpoint and stores it only in your browser.
+- **Bytecode scan.** Opcodes are counted outside PUSH immediates and the metadata trailer. A contract that hides data sections after `INVALID` (as factories embedding creation code do) can produce false positives; that is why the scan is a `WATCH` on registered Pons launches and a `STOP` only on unknown addresses.
+- **Proxies.** Only EIP-1967 (implementation and beacon slots) and EIP-1167 are recognised. A hand-rolled proxy shows up as `DELEGATECALL` instead.
+- **Dev report card.** Counts launches by deployer address only. A deployer that rotates wallets gets a clean card; that is the one-crew problem, planned as a later feature via funding-source clustering, which needs an indexer.
+- **Not an audit, not advice.** The slip says what is true at the block on the stamp. It does not say what happens next.

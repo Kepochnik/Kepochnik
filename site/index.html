@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BOUNCER</title>
+<meta name="description" content="Read-only door check for Pons V2 launches on Robinhood Chain: ID check, cover charge, house rules, dev report card. No key, no signer, no transaction path.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%230e0d10'/%3E%3Crect x='5' y='7' width='22' height='9' fill='%230a0a0e'/%3E%3Crect x='5' y='16' width='22' height='9' fill='%23757584'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Big+Shoulders+Display:wght@700;900&family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<style>
+:root{
+  --door:#0e0d10; --panel:#16151a; --panel-2:#1d1c22; --line:#2b2930; --line-2:#39363f;
+  --text:#ece7dc; --muted:#8f8a96; --dim:#5e5a66;
+  --brass:#c9a227; --brass-2:#e2c04a; --rope:#b3122e;
+  --stop:#ff5a6a; --watch:#f0a12e; --info:#8a9bb5; --ok:#5fc78a;
+  --display:"Big Shoulders Display","Arial Narrow",Impact,sans-serif;
+  --sans:"IBM Plex Sans",system-ui,-apple-system,"Segoe UI",sans-serif;
+  --mono:"IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+}
+*{box-sizing:border-box}
+html{color-scheme:dark}
+body{margin:0;background:var(--door);color:var(--text);font:15px/1.55 var(--sans);padding-block:0 64px;padding-inline:20px;-webkit-font-smoothing:antialiased}
+a{color:var(--brass-2)}
+.rope{height:4px;background:linear-gradient(90deg,var(--rope),#e0203f 40%,var(--rope));margin-inline:-20px;box-shadow:0 1px 0 #000}
+.wrap{max-width:920px;margin:0 auto}
+header{display:flex;align-items:center;gap:18px;padding-block:22px 6px;flex-wrap:wrap}
+.mark{width:56px;height:56px;image-rendering:pixelated;flex:none}
+.brand{display:flex;flex-direction:column;gap:2px;min-width:0;flex:1 1 380px}
+.brand h1{font:900 46px/0.9 var(--display);letter-spacing:.06em;margin:0;color:var(--text)}
+.brand p{margin:0;color:var(--muted);font-size:14px}
+.spacer{flex:1}
+.mode{display:inline-flex;gap:0;border:1px solid var(--line-2);border-radius:999px;overflow:hidden;font:600 12px/1 var(--mono);letter-spacing:.08em}
+.mode button{background:transparent;border:0;color:var(--muted);padding:9px 14px;cursor:pointer;text-transform:uppercase}
+.mode button[aria-pressed="true"]{background:var(--brass);color:#1a1405}
+.mode button:focus-visible{outline:2px solid var(--brass-2);outline-offset:-2px}
+.door{margin-top:26px;background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:22px}
+.door label{display:block;font:600 12px/1 var(--mono);letter-spacing:.14em;text-transform:uppercase;color:var(--brass);margin-bottom:10px}
+.row{display:flex;gap:10px;flex-wrap:wrap}
+.row input{flex:1 1 320px;min-width:0;background:var(--door);border:1px solid var(--line-2);border-radius:10px;color:var(--text);font:15px var(--mono);padding:13px 14px}
+.row input:focus-visible{outline:2px solid var(--brass);outline-offset:0;border-color:var(--brass)}
+.btn{background:var(--brass);color:#1a1405;border:0;border-radius:10px;font:900 18px/1 var(--display);letter-spacing:.1em;padding:0 22px;min-height:48px;cursor:pointer;text-transform:uppercase}
+.btn:hover{background:var(--brass-2)}
+.btn:focus-visible{outline:2px solid var(--text);outline-offset:2px}
+.btn[disabled]{opacity:.5;cursor:wait}
+.ghost{background:transparent;border:1px solid var(--line-2);color:var(--text);border-radius:8px;font:500 13px var(--sans);padding:8px 12px;cursor:pointer}
+.ghost:hover{border-color:var(--brass)}
+.ghost:focus-visible{outline:2px solid var(--brass-2);outline-offset:2px}
+.chips{display:flex;gap:8px;flex-wrap:wrap;margin-top:14px;align-items:center}
+.chips span{color:var(--dim);font-size:13px}
+.chip{background:var(--panel-2);border:1px solid var(--line-2);color:var(--text);border-radius:999px;padding:6px 12px;font:13px var(--mono);cursor:pointer}
+.chip:hover{border-color:var(--brass)}
+.chip:focus-visible{outline:2px solid var(--brass-2)}
+.chip em{font-style:normal;color:var(--muted);margin-left:6px}
+.settings{margin-top:14px;display:none;gap:10px;flex-wrap:wrap;align-items:center;color:var(--muted);font-size:13px}
+.settings.open{display:flex}
+.settings input{flex:1 1 300px;background:var(--door);border:1px solid var(--line-2);border-radius:8px;color:var(--text);font:13px var(--mono);padding:9px 12px}
+.status{margin-top:22px;color:var(--muted);font:13px var(--mono);min-height:20px;display:flex;gap:10px;align-items:center}
+.status .dot{width:8px;height:8px;border-radius:50%;background:var(--brass);animation:pulse 1s infinite alternate}
+@keyframes pulse{from{opacity:.3}to{opacity:1}}
+@media (prefers-reduced-motion:reduce){.status .dot{animation:none}}
+.error{margin-top:22px;border:1px solid #5a1c26;background:#1e1216;border-radius:12px;padding:16px 18px;color:var(--text)}
+.error strong{color:var(--stop)}
+.error p{margin:6px 0 0;color:var(--muted);font-size:14px}
+.slip{margin-top:26px;display:grid;gap:16px}
+.stamp-row{display:grid;grid-template-columns:1fr auto;gap:16px;align-items:start;background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:22px}
+.stamp-row .who{min-width:0}
+.who .sym{font:900 54px/0.9 var(--display);letter-spacing:.02em;word-break:break-word}
+.who .name{color:var(--muted);margin-top:6px;font-size:15px}
+.who .addr{font:13px var(--mono);color:var(--dim);margin-top:10px;word-break:break-all}
+.who .at{font:12px var(--mono);color:var(--dim);margin-top:4px}
+.stamp{font:900 26px/1 var(--display);letter-spacing:.14em;border:3px solid var(--brass);color:var(--brass);border-radius:8px;padding:12px 16px;transform:rotate(-6deg);white-space:nowrap;margin-top:6px}
+.stamp.no{border-color:var(--stop);color:var(--stop)}
+.notes{display:grid;gap:8px;background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:18px 22px}
+.notes h2,.sec h2{font:600 12px/1 var(--mono);letter-spacing:.14em;text-transform:uppercase;color:var(--brass);margin:0 0 8px}
+.note{display:grid;grid-template-columns:auto 1fr;gap:12px;align-items:start;padding:8px 0;border-top:1px solid var(--line)}
+.note:first-of-type{border-top:0}
+.lvl{font:600 11px/1 var(--mono);letter-spacing:.1em;padding:5px 8px;border-radius:6px;min-width:58px;text-align:center;margin-top:2px}
+.lvl.stop{background:#3a151b;color:var(--stop)}
+.lvl.watch{background:#3a2a10;color:var(--watch)}
+.lvl.info{background:#1f242c;color:var(--info)}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+@media (max-width:720px){.grid{grid-template-columns:1fr}.stamp-row{grid-template-columns:1fr}.stamp{justify-self:start;transform:rotate(-3deg)}.brand h1{font-size:38px}}
+.sec{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:18px 22px;min-width:0}
+.sec.wide{grid-column:1/-1}
+.kv{display:grid;grid-template-columns:auto 1fr;gap:6px 16px;font-size:14px}
+.kv dt{color:var(--muted);font:13px var(--mono);white-space:nowrap}
+.kv dd{margin:0;min-width:0;word-break:break-word;font-variant-numeric:tabular-nums}
+.kv dd .mono{font:13px var(--mono)}
+.big{display:flex;align-items:baseline;gap:12px;margin:6px 0 12px}
+.big b{font:900 64px/0.9 var(--display);letter-spacing:.02em;font-variant-numeric:tabular-nums}
+.big b.open{color:var(--watch)}
+.big b.closed{color:var(--ok)}
+.big span{color:var(--muted);font-size:14px}
+.bar{height:8px;background:var(--panel-2);border-radius:4px;overflow:hidden;margin:8px 0 14px}
+.bar i{display:block;height:100%;background:linear-gradient(90deg,var(--watch),var(--rope));transition:width .5s linear}
+@media (prefers-reduced-motion:reduce){.bar i{transition:none}}
+.buys{width:100%;border-collapse:collapse;font:13px var(--mono);margin-top:6px}
+.buys th{text-align:left;color:var(--dim);font-weight:400;padding:4px 14px 4px 0;border-bottom:1px solid var(--line);white-space:nowrap}
+.buys th:last-child{padding-right:0}
+.buys td{padding:5px 14px 5px 0;border-bottom:1px solid var(--line);white-space:nowrap}
+.buys td:last-child{padding-right:0}
+.buys td:last-child,.buys th:last-child{text-align:right}
+.buys .exempt{color:var(--muted)}
+.tbl{overflow-x:auto}
+.rules{margin:0;padding-left:18px;display:grid;gap:8px;font-size:14px}
+.rules li::marker{color:var(--brass);font:600 12px var(--mono)}
+.flag{display:inline-block;font:600 11px/1 var(--mono);padding:4px 7px;border-radius:5px;background:#1f242c;color:var(--info);margin-right:6px}
+.flag.bad{background:#3a151b;color:var(--stop)}
+.flag.ok{background:#12291c;color:var(--ok)}
+.actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:4px}
+.card-wrap{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:12px;display:none}
+.card-wrap.open{display:block}
+.card-wrap svg{width:100%;height:auto;display:block;border-radius:8px}
+footer{margin-top:40px;color:var(--dim);font:12px/1.7 var(--mono);display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap}
+footer b{color:var(--muted);font-weight:400}
+.sr{position:absolute;left:-9999px}
+.toast{position:fixed;left:50%;bottom:22px;transform:translateX(-50%);background:var(--brass);color:#1a1405;font:600 13px var(--mono);padding:10px 16px;border-radius:999px;opacity:0;pointer-events:none;transition:opacity .2s}
+.toast.show{opacity:1}
+</style>
+</head>
+<body>
+<div class="rope" role="presentation"></div>
+<div class="wrap">
+  <header>
+    <img class="mark" id="mark" alt="BOUNCER gorilla in shades, arms crossed" width="56" height="56" src="">
+    <div class="brand">
+      <h1>BOUNCER</h1>
+      <p>Read-only door check for Pons V2 launches on Robinhood Chain. ID check · cover charge · house rules · dev report card.</p>
+    </div>
+    <div class="spacer"></div>
+    <div class="mode" role="group" aria-label="Data source">
+      <button type="button" id="mode-demo" aria-pressed="true">demo</button>
+      <button type="button" id="mode-live" aria-pressed="false">live</button>
+    </div>
+  </header>
+
+  <section class="door" aria-labelledby="door-label">
+    <label id="door-label" for="q">At the door</label>
+    <form class="row" id="form">
+      <input id="q" name="q" placeholder="token or curve address, 0x…" autocomplete="off" spellcheck="false" inputmode="text">
+      <button class="btn" id="go" type="submit">Check the list</button>
+    </form>
+    <div class="chips" id="chips"><span>try:</span></div>
+    <div class="settings" id="settings">
+      <label for="rpc" style="margin:0;color:var(--muted);font:13px var(--sans);text-transform:none;letter-spacing:0">RPC URL</label>
+      <input id="rpc" placeholder="https://rpc.mainnet.chain.robinhood.com">
+      <span>Live mode reads chain 4663 straight from your browser. The public RPC may refuse browser requests; paste one that allows them, or run the CLI.</span>
+    </div>
+    <div class="status" id="status"></div>
+  </section>
+
+  <div id="out"></div>
+
+  <footer>
+    <span><b>no key · no signer · no transaction path</b><br>every value is read at one block; nothing is scored, predicted or advised.</span>
+    <span>github.com/Kepochnik/bouncer<br>$BOUNCER · official CA: not launched yet</span>
+  </footer>
+</div>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+<script src="app.js"></script>
+</body>
+</html>

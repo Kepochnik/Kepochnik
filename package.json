@@ -1,0 +1,29 @@
+{
+  "name": "bouncer",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Read-only door check for Pons V2 launches on Robinhood Chain: ID check, cover charge, house rules, dev report card. Official CA: not launched yet.",
+  "license": "MIT",
+  "repository": "github:Kepochnik/bouncer",
+  "engines": {
+    "node": ">=22.13"
+  },
+  "bin": {
+    "bouncer": "bin/bouncer.mjs"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "tsc -p tsconfig.json && node --test dist/test/*.test.js",
+    "readonly-check": "node scripts/readonly-check.mjs",
+    "check": "npm run readonly-check && npm test && npm run site",
+    "site": "node scripts/build-site.mjs",
+    "demo": "npm run build --silent && node bin/bouncer.mjs demo",
+    "doctor": "npm run build --silent && node bin/bouncer.mjs doctor"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.0",
+    "esbuild": "^0.25.0",
+    "typescript": "^5.6.0"
+  }
+}
