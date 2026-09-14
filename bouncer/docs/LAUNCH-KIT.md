@@ -10,6 +10,8 @@ BOUNCER — вышибала у двери каждого запуска на Po
 
 **Фаза 2 (готово).** THE ROOM (кто купил, доля дева, покупки в одном блоке), EXIT DOOR (сколько получишь за 10/25/50/100% позиции, на кривой или в пуле), ONE CREW (кто из первых покупателей профинансирован одной рукой, через Blockscout), LOOKALIKES (сколько токенов с таким тикером и какой первый), POSITION (мешок кошелька), RECEIPT (чек по хешу), LAUNCH PLANNER (что будет при запуске на сегодняшних условиях фабрики), Telegram-бот, расширение для браузера, и поддержка Arc (Radian, порт Pons V2 на цепи Circle с нативным USDC).
 
+**Фаза 3 (готово).** DEV MOVED и CREW EXIT (оповещения в терминале, в Telegram и во вкладке браузера), THE BOARD (лидерборды по деплоерам и по cover charge), read-only MCP-сервер для агентов (8 инструментов, без зависимостей).
+
 ## 2. Маскот
 
 Горилла-вышибала: чёрная футболка с красным значком, «обмотанные» тёмные очки, наушник-гарнитура из латуни, руки скрещены. 32×32 пиксель-арт, рендерится детерминированно из `scripts/draw-mascot.py`. Палитра: дверь `#0e0d10`, латунь `#c9a227`, бархатный канат `#b3122e`. Строчка лора: **«Check the list before you pay the cover.»** и **«The gorilla is the meme. The slip is the product.»**
@@ -68,6 +70,14 @@ the tool is the product. the token is the tip jar. the gorilla is the meme.
 same code, second chain. Radian ported Pons V2 to Arc, quoted in native USDC.
 bouncer door 0x… --chain arc
 same slip, same rules, USDC at the door.
+```
+
+Реплай для агентов:
+
+```
+your agent buys through Robinhood's rails? give it a bouncer first.
+read-only MCP server, 8 tools, no key, no signer:
+bouncer_check · bouncer_tax_now · bouncer_exit · bouncer_crew · bouncer_dev · bouncer_receipt · bouncer_plan · bouncer_board
 ```
 
 ## 4. Чек-лист

@@ -72,6 +72,25 @@ Position: the curve's `CurveBuy` with `buyer = wallet` and `CurveSell` with `sel
 
 Factory `getLaunchConfig(id)`, `pairTokenEconomics(pairToken)` for ERC-20 quotes, `launchFee()`, `maxCreatorTaxBps()`, the anti-snipe terms, hook `currentFeePolicy()`. Reserved tokens `= supply · phantom / (phantom + threshold)` (the curve's `initialize`), start price `= phantom / supply`, graduation price `= (phantom + threshold) / reserved`, FDV at graduation `= graduation price · supply`, creator's take if the curve fills with no sells `= threshold · creatorTaxBps / 1e4`, door charge on a sample buy in the launch second `= buy · snipeTaxStartBps / 1e4`.
 
+## Dev moved · crew exit (watch)
+
+One block window, narrow reads, events not verdicts:
+
+| Event | Read |
+| --- | --- |
+| dev-sold | the curve's `CurveSell` with `seller = deployer` |
+| dev-transferred | the token's `Transfer` with `from = deployer`, except transfers to the curve (those are the sell above) |
+| fee-recipient-moved | factory `CreatorFeeRecipientUpdated` for the token |
+| buyback-changed | factory `BuybackEnabledUpdated` for the token |
+| swept / graduated | factory `LaunchSwept` / `PoolGraduated` for the token |
+| crew-exit | `CurveSell` with `seller` in the crew, or `Transfer` with `from` in the crew (not to the curve); reported once per window when at least two crew wallets left |
+
+The crew is the set of first buyers ONE CREW found sharing a funder. The CLI polls every 5 s, the bot every 15 s, the site tab every 15 s; each keeps a cursor so an event is delivered once.
+
+## The board
+
+Factory `TokenLaunched`, `LaunchSwept`, `PoolGraduated` over the window (adaptive chunks), folded per deployer: launched, swept, graduated. "Serial" = 5 or more launches and no graduation. Cover charge: every `CurveBuy` on the chain in the window (no address filter, adaptive chunks), the curve's own `creatorTaxBps()` per curve seen, and `cover = tax − quoteIn · creatorTaxBps / 1e4` when positive, summed per curve and per buyer. Buys whose curve is not in the window's launches are still counted (the curve, not the token, is shown).
+
 ## Door notes
 
 | Level | Code | When |

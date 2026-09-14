@@ -31,6 +31,10 @@ import { MASCOT_SVG_INNER } from "./bouncer/mascot.js";
 import { readLaunchPlan } from "./bouncer/planner.js";
 import { readPosition } from "./bouncer/position.js";
 import { readTradeReceipt } from "./bouncer/txReceipt.js";
+import { readBoard } from "./bouncer/leaderboard.js";
+import { readOneCrew } from "./bouncer/oneCrew.js";
+import { readRoom } from "./bouncer/room.js";
+import { watchLaunch } from "./bouncer/watch.js";
 import { formatBps, formatDuration, formatUnits, isoUtc, shortAddress } from "./format.js";
 
 export const REPO = "github.com/Kepochnik/bouncer";
@@ -45,6 +49,8 @@ const HELP = `bouncer — read-only door check for Pons V2 launches on Robinhood
   bouncer wallet <token> <wallet>       one wallet's buys, sells, balance, cost basis and exit value on one launch
   bouncer receipt <txhash>              one trade itemised: quote, fee, creator tax, cover charge
   bouncer plan [--config 0] [--tax 100] [--quote 0x…] [--buy 0.1]   what a launch looks like under today's factory terms
+  bouncer watch <token> [--interval 5] [--crew]   DEV MOVED / CREW EXIT: one line per event, until you stop it
+  bouncer board [--hours 1] [--top 10]  the board: deployers, serial launchers, cover charge collected and paid
   bouncer demo                          offline walkthrough (synthetic, labelled DEMO)
 
   --chain ${Object.keys(CHAINS).join("|")}   which chain (default robinhood)
@@ -319,6 +325,65 @@ export async function main(argv: string[], write: (text: string) => void = (t) =
               ],
               footnotes: ["Read from the factory and the hook at the block shown; the curve arithmetic is the contract's own. Terms can be retuned by the factory owner before you launch."],
               meta: { configId: plan.configId },
+            },
+            asReceiptFormat(format),
+          ),
+        );
+        return 0;
+      }
+
+      case "watch": {
+        const token = args.positionals[0] ?? (demo ? DEMO.tokens.late.token : undefined);
+        if (!token) throw new Error("usage: bouncer watch <token> [--interval 5] [--crew] [--rounds n]");
+        const head = await rpc.blockNumber();
+        const launch = await new PonsReader(rpc, requireFactory()).launchedToken(token, head);
+        const backfill = demo ? 300_000 : flagNumber(args.flags, "backfill", Math.round(3600 * chain.blocksPerSecond));
+        let crew: string[] = [];
+        if (args.flags.crew === true && blockscout) {
+          const launchBlock = await findLaunchBlock(rpc, launch.token, head, demo ? 400_000 : Math.round(7 * 86_400 * chain.blocksPerSecond), requireFactory(), chunk);
+          if (launchBlock !== null) {
+            const room = await readRoom(rpc, launch, launchBlock, head, chunk, Math.round(60 * chain.blocksPerSecond));
+            const oneCrew = await readOneCrew(blockscout, room, launchBlock, [launch.deployer, launch.creatorFeeRecipient]);
+            crew = oneCrew.crews.flatMap((c) => c.wallets);
+            write(`crew: ${crew.length ? crew.map(shortAddress).join(", ") : "none found"}\n`);
+          }
+        }
+        write(`watching ${launch.token.toLowerCase()} on ${chain.name} from block ${Math.max(0, head - backfill)} · deployer ${shortAddress(launch.deployer)}\n`);
+        await watchLaunch(rpc, launch, {
+          fromBlock: Math.max(0, head - backfill),
+          intervalMs: flagNumber(args.flags, "interval", demo ? 0 : 5) * 1000,
+          crew,
+          factory: requireFactory(),
+          chunkSize: chunk,
+          quote: chain.native,
+          maxRounds: demo ? 1 : flagNumber(args.flags, "rounds", 0) || undefined,
+          onEvent: (e) => write(`${String(e.block).padStart(10)}  ${e.kind.padEnd(19)} ${e.text}  ${e.tx}\n`),
+          onRound: (h) => { if (args.flags.quiet !== true) write(`  · block ${h}\n`); },
+          sleep: demo ? async () => {} : undefined,
+        });
+        return 0;
+      }
+
+      case "board": {
+        const head = await rpc.getBlock("latest");
+        const fromBlock = demo ? Math.max(0, head.number - 300_000) : await findBlockByTimestamp(rpc, head.timestamp - flagNumber(args.flags, "hours", 1) * 3600, head.number);
+        const board = await readBoard(rpc, { fromBlock, toBlock: head.number, factory: requireFactory(), top: flagNumber(args.flags, "top", 10), chunkSize: chunk, skipCover: args.flags["no-cover"] === true });
+        if (format === "json") return json(board), 0;
+        const q = chain.native;
+        emit(
+          renderReceipt(
+            {
+              title: "BOUNCER · the board",
+              subtitle: `${chain.name} · blocks ${board.window.fromBlock}–${board.window.toBlock} · ${board.chunks} log reads`,
+              sections: [
+                { title: "tonight", rows: [{ label: "launches", value: board.launches }, { label: "graduations", value: board.graduations }, { label: "deployers", value: board.deployers }, { label: "cover collected", value: `${formatUnits(board.coverTotal, q.decimals)} ${q.symbol}`, note: `${board.taxedBuys} buys paid at the door` }] },
+                { title: "deployers", rows: board.topDeployers.map((r) => ({ label: shortAddress(r.deployer), value: `${r.launched} launched · ${r.graduated} graduated${r.swept - r.graduated > 0 ? ` · ${r.swept - r.graduated} swept without a pool` : ""}` })) },
+                { title: "serial, no graduation", rows: board.serial.length ? board.serial.map((r) => ({ label: shortAddress(r.deployer), value: `${r.launched} launched, none graduated` })) : [{ label: "none", value: "no deployer with 5+ launches and 0 graduations in the window" }] },
+                { title: "cover charge by curve", rows: board.topCurves.length ? board.topCurves.map((r) => ({ label: shortAddress(r.token ?? r.curve), value: `${formatUnits(r.coverCollected, q.decimals)} ${q.symbol} over ${r.taxedBuys} buys`, note: `highest ${(r.highestBps / 100).toFixed(1)}% · creator tax ${formatBps(r.creatorTaxBps)}` })) : [{ label: "none", value: board.chunks ? "no buy in the window paid above the creator rate" : "skipped" }] },
+                { title: "cover charge by wallet", rows: board.topPayers.length ? board.topPayers.map((r) => ({ label: shortAddress(r.wallet), value: `${formatUnits(r.coverPaid, q.decimals)} ${q.symbol} over ${r.buys} buys` })) : [{ label: "none", value: "nobody paid at the door in the window" }] },
+              ],
+              footnotes: ["Cover charge = the part of a buy's tax above the curve's own creator rate, as the curve's CurveBuy event reports it. Counts, not scores."],
+              meta: { launches: board.launches, graduations: board.graduations },
             },
             asReceiptFormat(format),
           ),

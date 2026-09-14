@@ -24,11 +24,13 @@ import { oneCrewLine } from "../../src/bouncer/oneCrew.js";
 import { readLaunchPlan, type LaunchPlan } from "../../src/bouncer/planner.js";
 import { readPosition, type Position } from "../../src/bouncer/position.js";
 import { roomLine } from "../../src/bouncer/room.js";
+import { readBoard, type Board } from "../../src/bouncer/leaderboard.js";
+import { readWatchEvents, type WatchEvent } from "../../src/bouncer/watch.js";
 import { readTradeReceipt, type TradeReceipt } from "../../src/bouncer/txReceipt.js";
 import { formatBps, formatDuration, formatUnits, isoUtc, shortAddress } from "../../src/format.js";
 
 type Mode = "demo" | "live";
-type View = "door" | "dev" | "wallet" | "tx" | "plan";
+type View = "door" | "dev" | "wallet" | "tx" | "plan" | "board";
 const REPO = "github.com/Kepochnik/bouncer";
 const MARK = "$BOUNCER";
 const ADDR = /^0x[0-9a-fA-F]{40}$/;
@@ -49,6 +51,7 @@ const toast = $("toast");
 let mode: Mode = "demo";
 let view: View = "door";
 let ticker: number | null = null;
+let watcher: number | null = null;
 
 function storage(key: string, value?: string): string | null {
   try {
@@ -75,20 +78,22 @@ function setMode(next: Mode, silent = false): void {
 
 function setView(next: View): void {
   view = next;
-  for (const v of ["door", "dev", "wallet", "tx", "plan"] as View[]) $(`tab-${v}`).setAttribute("aria-selected", String(v === next));
+  for (const v of ["door", "dev", "wallet", "tx", "plan", "board"] as View[]) $(`tab-${v}`).setAttribute("aria-selected", String(v === next));
   const labels: Record<View, [string, string, string]> = {
     door: ["At the door", "token or curve address, 0x…", "Check the list"],
     dev: ["The deployer", "deployer address, 0x…", "Report card"],
     wallet: ["One wallet, one launch", "token address, 0x…", "Show the bag"],
     tx: ["One trade", "transaction hash, 0x…", "Itemise"],
     plan: ["Plan a launch", "creator tax in bps (100 = 1%)", "Plan"],
+    board: ["The board", "window in hours (default 1)", "Show the board"],
   };
   $("door-label").textContent = labels[next][0];
   q.placeholder = labels[next][1];
   go.textContent = labels[next][2];
   q2.hidden = next !== "wallet";
   if (next === "plan") q.value = q.value && /^\d+$/.test(q.value) ? q.value : "100";
-  else if (/^\d+$/.test(q.value)) q.value = "";
+  else if (next === "board") q.value = q.value && /^\d+(\.\d+)?$/.test(q.value) ? q.value : "1";
+  else if (/^\d+(\.\d+)?$/.test(q.value)) q.value = "";
 }
 
 function rpcFor(): RpcClient {
@@ -119,6 +124,8 @@ const EXAMPLES: { label: string; hint: string; hash: string; value: string; valu
   { label: "wallet", hint: "a bag on LATE", hash: `#/wallet/${DEMO.tokens.late.token}/${DEMO.tokens.late.buys[1][1]}?chain=demo`, value: DEMO.tokens.late.token, value2: DEMO.tokens.late.buys[1][1], view: "wallet" },
   { label: "receipt", hint: "the sniper's buy", hash: `#/tx/0xdemoFRESH${DEMO.tokens.fresh.launched + 22}?chain=demo`, value: `0xdemoFRESH${DEMO.tokens.fresh.launched + 22}`, view: "tx" },
   { label: "plan", hint: "3% creator tax", hash: "#/plan?tax=300&chain=demo", value: "300", view: "plan" },
+  { label: "board", hint: "tonight's deployers and cover charge", hash: "#/board?chain=demo", value: "1", view: "board" },
+  { label: "watch", hint: "LATE: the dev moved", hash: `#/demo/${DEMO.tokens.late.token}?watch=1`, value: DEMO.tokens.late.token, view: "door" },
 ];
 
 function renderChips(): void {
@@ -145,6 +152,7 @@ function showToast(text: string): void {
 
 function busy(text: string): void {
   go.disabled = true;
+  stopWatch();
   status.innerHTML = `<span class="dot"></span> ${esc(text)} ${mode === "demo" ? "(demo chain, every address invented)" : `(${esc(chain().name)}, one block pinned)`}`;
   out.innerHTML = "";
   if (ticker) { clearInterval(ticker); ticker = null; }
@@ -256,6 +264,86 @@ async function runPlan(taxBps: number, params: URLSearchParams): Promise<void> {
   }
 }
 
+async function runBoard(hours: number): Promise<void> {
+  busy("reading the window…");
+  try {
+    const rpc = rpcFor();
+    const head = await rpc.getBlock("latest");
+    const fromBlock = mode === "demo" ? Math.max(0, head.number - 300_000) : await findBlockByTimestamp(rpc, head.timestamp - hours * 3600, head.number);
+    const b = await readBoard(rpc, { fromBlock, toBlock: head.number, factory: factoryFor(), top: 10, chunkSize: mode === "demo" ? 100_000 : undefined });
+    done(`blocks ${b.window.fromBlock}–${b.window.toBlock} · ${b.chunks} log reads`);
+    renderBoard(b, hours);
+  } catch (error) {
+    failed(error, "board");
+  } finally {
+    go.disabled = false;
+  }
+}
+
+function renderBoard(b: Board, hours: number): void {
+  const qd = chain().native;
+  const amt = (v: bigint) => `${formatUnits(v, qd.decimals)} ${esc(qd.symbol)}`;
+  const link = (a: string) => `<a href="#/${mode === "demo" ? "demo" : "t"}/${a}${routeChain()}">${shortAddress(a)}</a>`;
+  const dev = (a: string) => `<a href="#/dev/${a}${routeChain()}">${shortAddress(a)}</a>`;
+  out.innerHTML = `<div class="slip">
+    <div class="stamp-row"><div class="who"><div class="sym">THE BOARD</div><div class="name">${esc(chain().name)} · last ${hours} h · blocks ${b.window.fromBlock}–${b.window.toBlock}</div></div>
+      <div class="stamp">${b.launches} LAUNCHES</div></div>
+    <div class="grid">
+      <section class="sec"><h2>Tonight</h2><div class="exit-grid">
+        <div><span>launches</span><b class="num">${b.launches}</b></div>
+        <div><span>graduations</span><b class="num">${b.graduations}</b></div>
+        <div><span>deployers</span><b class="num">${b.deployers}</b></div>
+        <div><span>cover collected</span><b class="num">${formatUnits(b.coverTotal, qd.decimals, 3)}</b><span>${esc(qd.symbol)} · ${b.taxedBuys} buys</span></div>
+      </div><p style="margin:0;color:var(--dim);font-size:12px">Cover charge = the part of a buy's tax above the curve's own creator rate, as the curve's CurveBuy event reports it. Counts, not scores.</p></section>
+      <section class="sec"><h2>Deployers</h2>${b.topDeployers.length ? `<div class="tbl"><table class="buys"><thead><tr><th>deployer</th><th>launched</th><th>graduated</th><th>swept, no pool</th></tr></thead><tbody>${b.topDeployers.map((r) => `<tr><td>${dev(r.deployer)}</td><td>${r.launched}</td><td>${r.graduated}</td><td>${Math.max(0, r.swept - r.graduated)}</td></tr>`).join("")}</tbody></table></div>` : `<p style="color:var(--muted);margin:0">No launches in the window.</p>`}
+        ${b.serial.length ? `<h2 style="margin-top:14px">Serial, no graduation</h2><div class="tbl"><table class="buys"><tbody>${b.serial.map((r) => `<tr><td>${dev(r.deployer)}</td><td>${r.launched} launched, none graduated</td></tr>`).join("")}</tbody></table></div>` : ""}</section>
+      <section class="sec"><h2>Cover charge by curve</h2>${b.topCurves.length ? `<div class="tbl"><table class="buys"><thead><tr><th>token</th><th>collected</th><th>buys</th><th>highest</th><th>creator tax</th></tr></thead><tbody>${b.topCurves.map((r) => `<tr><td>${link(r.token ?? r.curve)}</td><td>${amt(r.coverCollected)}</td><td>${r.taxedBuys}</td><td>${(r.highestBps / 100).toFixed(1)}%</td><td>${formatBps(r.creatorTaxBps)}</td></tr>`).join("")}</tbody></table></div>` : `<p style="color:var(--muted);margin:0">No buy in the window paid above the creator rate.</p>`}</section>
+      <section class="sec"><h2>Cover charge by wallet</h2>${b.topPayers.length ? `<div class="tbl"><table class="buys"><thead><tr><th>wallet</th><th>paid at the door</th><th>buys</th></tr></thead><tbody>${b.topPayers.map((r) => `<tr><td>${shortAddress(r.wallet)}</td><td>${amt(r.coverPaid)}</td><td>${r.buys}</td></tr>`).join("")}</tbody></table></div>` : `<p style="color:var(--muted);margin:0">Nobody paid at the door in the window.</p>`}</section>
+    </div></div>`;
+}
+
+function stopWatch(): void {
+  if (watcher) { clearInterval(watcher); watcher = null; }
+}
+
+/** DEV MOVED / CREW EXIT in this tab: polls the head every 15 s and appends events. */
+function startWatch(slip: DoorSlip, panel: HTMLElement, button: HTMLButtonElement): void {
+  const launch = slip.id.launch!;
+  const crew = slip.crew?.crews.flatMap((c) => c.wallets) ?? [];
+  const list = panel.querySelector<HTMLElement>(".events")!;
+  let cursor = mode === "demo" ? Math.max(0, slip.at.block - 300_000) : slip.at.block + 1;
+  let rounds = 0;
+  const add = (html: string, quiet = false) => {
+    const el = document.createElement("div");
+    el.className = `event${quiet ? " quiet" : ""}`;
+    el.innerHTML = html;
+    list.prepend(el);
+    while (list.children.length > 40) list.lastElementChild?.remove();
+  };
+  const tick = async () => {
+    try {
+      const rpc = rpcFor();
+      const head = await rpc.blockNumber();
+      if (head < cursor) return;
+      const events: WatchEvent[] = await readWatchEvents(rpc, launch, { fromBlock: cursor, toBlock: head, crew, factory: factoryFor(), quote: slip.rules?.quote ?? chain().native, chunkSize: mode === "demo" ? 100_000 : undefined });
+      cursor = head + 1;
+      rounds++;
+      for (const e of events) {
+        add(`<span class="b">${e.block}</span><span class="k">${esc(e.kind)}</span><span>${esc(e.text)}</span>`);
+        try { if (Notification.permission === "granted") new Notification(`BOUNCER · ${slip.id.meta?.symbol ?? "watch"}`, { body: `${e.kind}: ${e.text}` }); } catch { /* no notifications here */ }
+      }
+      if (!events.length && rounds % 4 === 1) add(`<span class="b">${head}</span><span class="k" style="color:var(--dim)">quiet</span><span>no moves up to block ${head}</span>`, true);
+    } catch (error) {
+      add(`<span class="b">·</span><span class="k" style="color:var(--stop)">error</span><span>${esc(error instanceof Error ? error.message : String(error))}</span>`);
+    }
+  };
+  button.setAttribute("aria-pressed", "true");
+  button.textContent = "Watching · stop";
+  try { if ("Notification" in window && Notification.permission === "default") void Notification.requestPermission(); } catch { /* fine */ }
+  void tick();
+  watcher = window.setInterval(() => void tick(), mode === "demo" ? 5_000 : 15_000);
+}
+
 function bad(text: string): void {
   out.innerHTML = `<div class="error"><strong>That is not what this tab needs.</strong><p>${esc(text)}</p></div>`;
 }
@@ -362,8 +450,17 @@ function renderSlip(slip: DoorSlip): void {
     </div>
     <div class="card-wrap" id="card"></div>
     <div class="notes"><h2>Door notes</h2>${notes || `<div class="note"><span class="lvl info">info</span><span>Nothing to say. The list has this token and nothing on it needs a second look.</span></div>`}</div>
+    ${slip.id.registered ? `<section class="sec" id="watch-panel"><h2>Dev moved · crew exit</h2><div class="watch"><button class="ghost" id="act-watch" type="button" aria-pressed="false">Watch in this tab</button><span style="color:var(--muted);font-size:13px">Polls every ${mode === "demo" ? "5" : "15"} s: deployer sells or moves tokens, tax recipient moves, buyback flips, sweep, graduation${slip.crew?.crews.length ? `, ${slip.crew.crews.flatMap((c) => c.wallets).length} crew wallets leaving together` : ""}. Browser notifications if you allow them. Stops when you close the tab.</span></div><div class="events"></div></section>` : ""}
     <div class="grid">${idSection}${coverSection}${rulesSection}${exitSection}${roomSection}${crewSection}${lookSection}${slip.dev ? devSection(slip.dev, slip.subject, false) : ""}</div>
   </div>`;
+  const watchButton = document.getElementById("act-watch") as HTMLButtonElement | null;
+  if (watchButton) {
+    watchButton.addEventListener("click", () => {
+      if (watcher) { stopWatch(); watchButton.setAttribute("aria-pressed", "false"); watchButton.textContent = "Watch in this tab"; return; }
+      startWatch(slip, $("watch-panel"), watchButton);
+    });
+    if (new URLSearchParams(location.hash.split("?")[1] ?? "").get("watch") === "1") startWatch(slip, $("watch-panel"), watchButton);
+  }
 
   $("act-card").addEventListener("click", () => {
     const wrap = $("card");
@@ -544,6 +641,11 @@ function route(): void {
       q.value = params.get("tax") ?? "100";
       void runPlan(Number(params.get("tax") ?? 100), params);
       break;
+    case "board":
+      setView("board");
+      q.value = params.get("hours") ?? "1";
+      void runBoard(Number(params.get("hours") ?? 1) || 1);
+      break;
   }
 }
 
@@ -557,6 +659,7 @@ function submit(): void {
     case "wallet": hash = `#/wallet/${v}/${q2.value.trim()}${suffix}`; break;
     case "tx": hash = `#/tx/${v}${suffix}`; break;
     case "plan": hash = `#/plan?tax=${encodeURIComponent(v || "100")}&chain=${mode === "demo" ? "demo" : chain().key}`; break;
+    case "board": hash = `#/board?hours=${encodeURIComponent(v || "1")}&chain=${mode === "demo" ? "demo" : chain().key}`; break;
   }
   if (location.hash === hash) route();
   else location.hash = hash;
@@ -577,7 +680,7 @@ function boot(): void {
   });
   $("mode-demo").addEventListener("click", () => setMode("demo"));
   $("mode-live").addEventListener("click", () => setMode("live"));
-  for (const v of ["door", "dev", "wallet", "tx", "plan"] as View[]) $(`tab-${v}`).addEventListener("click", () => setView(v));
+  for (const v of ["door", "dev", "wallet", "tx", "plan", "board"] as View[]) $(`tab-${v}`).addEventListener("click", () => setView(v));
   form.addEventListener("submit", (e) => {
     e.preventDefault();
     submit();

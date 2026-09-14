@@ -1,6 +1,6 @@
 {
   "name": "bouncer",
-  "version": "0.1.0",
+  "version": "0.3.0",
   "private": true,
   "type": "module",
   "description": "Read-only door check for Pons V2 launches on Robinhood Chain: ID check, cover charge, house rules, dev report card. Official CA: not launched yet.",
@@ -10,7 +10,9 @@
     "node": ">=22.13"
   },
   "bin": {
-    "bouncer": "bin/bouncer.mjs"
+    "bouncer": "bin/bouncer.mjs",
+    "bouncer-bot": "bin/bouncer-bot.mjs",
+    "bouncer-mcp": "bin/bouncer-mcp.mjs"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
@@ -19,7 +21,9 @@
     "check": "npm run readonly-check && npm test && npm run site",
     "site": "node scripts/build-site.mjs",
     "demo": "npm run build --silent && node bin/bouncer.mjs demo",
-    "doctor": "npm run build --silent && node bin/bouncer.mjs doctor"
+    "doctor": "npm run build --silent && node bin/bouncer.mjs doctor",
+    "mcp": "npm run build --silent && node bin/bouncer-mcp.mjs",
+    "bot": "npm run build --silent && node bin/bouncer-bot.mjs"
   },
   "devDependencies": {
     "@types/node": "^22.13.0",
