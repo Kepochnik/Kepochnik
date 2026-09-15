@@ -34,12 +34,12 @@ jobs:
       - uses: actions/upload-pages-artifact@v3
         with:
           path: site/dist
+  # No `environment:` block: the github-pages environment only admits the
+  # default branch by default, which would reject the bouncer-main subtree.
   deploy:
     needs: build
     runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - id: deployment
         uses: actions/deploy-pages@v4
+      - run: echo "deployed to ${{ steps.deployment.outputs.page_url }}"
