@@ -11,6 +11,8 @@ export const ROBINHOOD_PUBLIC_RPC = "https://rpc.mainnet.chain.robinhood.com";
 export const ROBINHOOD_EXPLORER = "https://robinhoodchain.blockscout.com";
 export const PONS_V2_FACTORY = "0x7eD598BcEf8bd9Edd8C97A195C6d13f40801EC7e".toLowerCase();
 export const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
+/** Pons V1 (PonsLaunchFactory): fixed-supply tokens with a Uniswap V3 pool from the first block. */
+export const PONS_V1_FACTORY = "0xA5aAb3F0c6EeadF30Ef1D3Eb997108E976351feB".toLowerCase();
 
 /** IPonsV2LaunchFactory.LaunchedToken, field order as declared on-chain. */
 export interface LaunchedToken {
@@ -146,6 +148,63 @@ export const FACTORY_FUNCTIONS = {
   /** PairTokenEconomics struct: phantomQuote, graduationThreshold, decimals. */
   pairTokenEconomics: { name: "pairTokenEconomics", inputs: ["address"], outputs: ["uint256", "uint256", "uint8"] },
 } as const satisfies Record<string, FunctionAbi>;
+
+// ---------------------------------------------------------------------------
+// Pons V1 (PonsLaunchFactory): a different design, kept readable so a V1
+// token is "on the list" too rather than a false NOT ON THE LIST.
+// ---------------------------------------------------------------------------
+
+export interface V1LaunchedToken {
+  token: string;
+  deployer: string;
+  pairedToken: string;
+  positionManager: string;
+  positionId: bigint;
+  dexId: bigint;
+  launchConfigId: bigint;
+  restrictionsEndBlock: bigint;
+  supply: bigint;
+  isToken0: boolean;
+  poolFee: bigint;
+  exists: boolean;
+  initialBuyAmount: bigint;
+}
+
+export const V1_FACTORY_FUNCTIONS = {
+  getLaunchedToken: {
+    name: "getLaunchedToken",
+    inputs: ["address"],
+    outputs: ["address", "address", "address", "address", "uint256", "uint256", "uint256", "uint256", "uint256", "bool", "uint24", "bool", "uint256"],
+  },
+  /** pairedPrincipal, threshold, graduated */
+  graduationStatus: { name: "graduationStatus", inputs: ["address"], outputs: ["uint256", "uint256", "bool"] },
+  /** pairToken, graduationThreshold, initialTick, supply, maxWalletBps, maxTxBps, restrictionBlocks, reservedFee, enabled, routerRequiresDeadline */
+  getLaunchConfig: { name: "getLaunchConfig", inputs: ["uint256"], outputs: ["address", "uint256", "int24", "uint256", "uint16", "uint16", "uint32", "uint24", "bool", "bool"] },
+  locker: { name: "locker", inputs: [], outputs: ["address"] },
+} as const satisfies Record<string, FunctionAbi>;
+
+export const V1_FACTORY_EVENTS = {
+  TokenLaunched: {
+    name: "TokenLaunched",
+    inputs: [
+      { name: "token", type: "address", indexed: true },
+      { name: "deployer", type: "address", indexed: true },
+      { name: "dexFactory", type: "address", indexed: true },
+      { name: "pairToken", type: "address", indexed: false },
+      { name: "pool", type: "address", indexed: false },
+      { name: "dexId", type: "uint256", indexed: false },
+      { name: "launchConfigId", type: "uint256", indexed: false },
+      { name: "positionId", type: "uint256", indexed: false },
+      { name: "restrictionsEndBlock", type: "uint256", indexed: false },
+      { name: "initialBuyAmount", type: "uint256", indexed: false },
+    ],
+  },
+} as const satisfies Record<string, EventAbi>;
+
+export function decodeV1LaunchedToken(values: unknown[]): V1LaunchedToken {
+  const [token, deployer, pairedToken, positionManager, positionId, dexId, launchConfigId, restrictionsEndBlock, supply, isToken0, poolFee, exists, initialBuyAmount] = values as [string, string, string, string, bigint, bigint, bigint, bigint, bigint, boolean, bigint, boolean, bigint];
+  return { token, deployer, pairedToken, positionManager, positionId, dexId, launchConfigId, restrictionsEndBlock, supply, isToken0, poolFee, exists, initialBuyAmount };
+}
 
 /** PonsV2MemeHook: the fee policy the factory snapshots at launch. */
 export const HOOK_FUNCTIONS = {

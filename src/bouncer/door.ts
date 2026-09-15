@@ -81,7 +81,7 @@ export async function readDoor(rpc: RpcClient, input: string, options: DoorOptio
   const head = await rpc.getBlock(headNumber);
   const searchBlocks = options.launchSearchBlocks ?? Math.round(7 * 86_400 * chain.blocksPerSecond);
 
-  const id = await readIdCheck(rpc, input, head.number, factory);
+  const id = await readIdCheck(rpc, input, head.number, factory, { factoryV1: chain.factoryV1, native: chain.native });
   const slip: DoorSlip = {
     chain: { key: chain.key, name: chain.name, chainId: chain.chainId, launchpad: chain.launchpad, native: chain.native },
     at: { block: head.number, timestamp: head.timestamp },
@@ -100,6 +100,7 @@ export async function readDoor(rpc: RpcClient, input: string, options: DoorOptio
     skipped: [],
   };
   if (!id.launch) {
+    // A V1 token is on the list with its own rules; the V2 sections do not apply.
     slip.notes = doorNotes(slip);
     return slip;
   }
@@ -180,13 +181,21 @@ export function doorNotes(slip: DoorSlip): DoorNote[] {
   const t = slip.id.token;
   const findings = idFindings(slip.id);
   const q = slip.chain.native;
+  if (slip.id.v1) {
+    const v = slip.id.v1;
+    notes.push({ level: "info", code: "v1-launch", text: `This is a Pons V1 token: fixed supply, traded in a Uniswap V3 pool from the first block. There is no bonding curve, no creator tax and no door tax, so those sections are not shown.` });
+    if (v.restrictionBlocksLeft > 0 && v.config) notes.push({ level: "watch", code: "v1-caps", text: `Launch caps are still on for ${v.restrictionBlocksLeft} blocks: max ${formatBps(v.config.maxWalletBps)} of supply per wallet, ${formatBps(v.config.maxTxBps)} per trade. A buy above the cap reverts.` });
+    if (!v.status.graduated) notes.push({ level: "info", code: "v1-not-graduated", text: `Not graduated: ${formatUnits(v.status.pairedPrincipal, v.quote.decimals)} of ${formatUnits(v.status.threshold, v.quote.decimals)} ${v.quote.symbol} in the pool.` });
+    for (const f of findings) notes.push({ level: "watch", code: "code", text: `Unexpected for a launchpad token: ${f}.` });
+    return notes;
+  }
   if (!slip.id.registered) {
     notes.push({
       level: "stop",
       code: "not-registered",
       text: t.code.empty
         ? `No contract at this address on ${slip.chain.name}.`
-        : `Not a ${slip.chain.launchpad} launch: the factory has no record of this address, so nothing below about curves, taxes or graduation applies to it.`,
+        : `Not a ${slip.chain.launchpad} launch: neither the ${slip.chain.launchpad} factory${slip.chain.key === "robinhood" ? " nor the Pons V1 factory" : ""} has a record of this address. If it was launched elsewhere (another launchpad, or by hand), it is not a Pons token, whatever its name says.`,
     });
     for (const f of findings) if (!f.startsWith("no bytecode")) notes.push({ level: "stop", code: "code", text: `Code can change or vanish: ${f}.` });
     return notes;
@@ -278,6 +287,7 @@ export function doorReceipt(slip: DoorSlip): Receipt {
       { label: "token code", value: `${slip.id.token.code.bytes} bytes`, note: codeNote(slip.id.token.code.opcodes, slip.id.token.proxyImplementation) },
       ...(slip.id.curve ? [{ label: "curve code", value: `${slip.id.curve.code.bytes} bytes`, note: codeNote(slip.id.curve.code.opcodes, slip.id.curve.proxyImplementation) }] : []),
       ...(launch ? [{ label: "deployer", value: launch.deployer.toLowerCase() }, { label: "phase", value: PHASE_LABEL[launch.phase] }] : []),
+      ...(slip.id.v1 ? [{ label: "launchpad", value: "Pons V1" }, { label: "deployer", value: slip.id.v1.record.deployer.toLowerCase() }, { label: "pool", value: `Uniswap V3 position #${slip.id.v1.record.positionId}` }] : []),
     ],
   });
   if (slip.cover) {
@@ -297,6 +307,7 @@ export function doorReceipt(slip: DoorSlip): Receipt {
     });
   }
   if (slip.rules) sections.push({ title: "House rules", rows: slip.rules.rules.map((text, i) => ({ label: `${i + 1}`, value: text })) });
+  if (slip.id.v1) sections.push({ title: "House rules (Pons V1)", rows: slip.id.v1.rules.map((text, i) => ({ label: `${i + 1}`, value: text })) });
   if (slip.room) {
     const r = slip.room;
     sections.push({

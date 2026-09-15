@@ -9,7 +9,7 @@ import { encodeWord, eventTopic, selector } from "../chain/abi.js";
 import { EIP1967_IMPLEMENTATION_SLOT } from "../chain/code.js";
 import { keccak256Hex } from "../chain/keccak.js";
 import { poolIdFor } from "./exitDoor.js";
-import { CURVE_EVENTS, ERC20_EVENTS, FACTORY_EVENTS, PONS_V2_FACTORY, ROBINHOOD_CHAIN_ID, ZERO_ADDRESS } from "../chain/pons.js";
+import { CURVE_EVENTS, ERC20_EVENTS, FACTORY_EVENTS, PONS_V1_FACTORY, PONS_V2_FACTORY, ROBINHOOD_CHAIN_ID, ZERO_ADDRESS } from "../chain/pons.js";
 import { RpcClient } from "../chain/rpc.js";
 import { addressTopic } from "../chain/tape.js";
 
@@ -52,6 +52,9 @@ export const DEMO_HOOK = "0x0000000000000000000000000000000000900c00";
 /** The wallet that funded two of FRESH's first buyers minutes before launch. */
 export const DEMO_FUNDER = "0x000000000000000000000000000000000000feed";
 export const DEMO_BLOCKSCOUT = "https://demo.blockscout.invalid";
+
+/** A Pons V1 token: fixed supply in a Uniswap V3 pool, launch caps still on for 40 blocks. */
+export const DEMO_V1 = { token: "0x0000000000000000000000000000000000001d1e", deployer: "0x00000000000000000000000000000000000001d1", positionId: 777n, restrictionsEndBlock: BigInt(HEAD + 40), name: "Old School", symbol: "OLDIE" };
 
 /** Not a Pons launch: an upgradeable proxy token somebody named after a real one. */
 export const DEMO_IMPOSTOR = { token: "0x00000000000000000000000000000000000bad01", implementation: "0x00000000000000000000000000000000000bad02" };
@@ -207,6 +210,7 @@ export function demoFetch(): typeof fetch {
           if (byToken.has(who)) return ok(DEMO_CODE.ponsToken);
           if (byCurve.has(who)) return ok(DEMO_CODE.ponsCurve);
           if (who === DEMO_IMPOSTOR.token) return ok(DEMO_CODE.impostor);
+          if (who === DEMO_V1.token || who === PONS_V1_FACTORY) return ok(DEMO_CODE.ponsToken);
           return ok("0x");
         }
         case "eth_getTransactionReceipt": {
@@ -264,6 +268,22 @@ export function demoFetch(): typeof fetch {
               if (who === t.curve) return ok(`0x${encodeWord("uint256", t.tokenReserve)}`);
               return ok(`0x${encodeWord("uint256", 0n)}`);
             }
+          }
+          if (to === PONS_V1_FACTORY) {
+            if (s === sel("getLaunchedToken(address)")) {
+              const who = `0x${call.data.slice(34)}`;
+              if (who !== DEMO_V1.token) return ok(`0x${new Array(13).fill(encodeWord("uint256", 0n)).join("")}`);
+              return ok(`0x${[encodeWord("address", DEMO_V1.token), encodeWord("address", DEMO_V1.deployer), encodeWord("address", ZERO_ADDRESS), encodeWord("address", "0x0000000000000000000000000000000000009051"), encodeWord("uint256", DEMO_V1.positionId), encodeWord("uint256", 0n), encodeWord("uint256", 0n), encodeWord("uint256", DEMO_V1.restrictionsEndBlock), encodeWord("uint256", 10n ** 27n), encodeWord("bool", false), encodeWord("uint24", 10_000n), encodeWord("bool", true), encodeWord("uint256", 5n * 10n ** 16n)].join("")}`);
+            }
+            if (s === sel("graduationStatus(address)")) return ok(`0x${[encodeWord("uint256", 12n * 10n ** 17n), encodeWord("uint256", 3n * 10n ** 18n), encodeWord("bool", false)].join("")}`);
+            if (s === sel("getLaunchConfig(uint256)")) return ok(`0x${[encodeWord("address", ZERO_ADDRESS), encodeWord("uint256", 3n * 10n ** 18n), encodeWord("int24", -200_000n), encodeWord("uint256", 10n ** 27n), encodeWord("uint16", 200n), encodeWord("uint16", 100n), encodeWord("uint32", 300n), encodeWord("uint24", 10_000n), encodeWord("bool", true), encodeWord("bool", false)].join("")}`);
+            if (s === sel("locker()")) return ok(`0x${encodeWord("address", "0x00000000000000000000000000000000000010c4")}`);
+          }
+          if (to === DEMO_V1.token) {
+            if (s === sel("name()")) return ok(`0x${encodeString(DEMO_V1.name)}`);
+            if (s === sel("symbol()")) return ok(`0x${encodeString(DEMO_V1.symbol)}`);
+            if (s === sel("decimals()")) return ok(`0x${encodeWord("uint8", 18n)}`);
+            if (s === sel("totalSupply()")) return ok(`0x${encodeWord("uint256", 10n ** 27n)}`);
           }
           if (to === DEMO_IMPOSTOR.token) {
             if (s === sel("name()")) return ok(`0x${encodeString("Sprint")}`);
