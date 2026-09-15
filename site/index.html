@@ -75,6 +75,39 @@ select:focus-visible{outline:2px solid var(--brass-2)}
 .exit-grid small{display:block;color:var(--dim);font:11px var(--mono);margin-top:4px}
 @media (max-width:720px){.exit-grid{grid-template-columns:1fr 1fr}}
 .num{font-variant-numeric:tabular-nums}
+.source{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:14px;color:var(--muted);font-size:13px}
+.source b{color:var(--text);font-weight:600}
+.pill{font:600 11px var(--mono);letter-spacing:.1em;text-transform:uppercase;padding:5px 9px;border-radius:999px;background:#3a2a10;color:var(--watch)}
+.pill.live{background:#12291c;color:var(--ok)}
+.link{background:none;border:0;color:var(--muted);text-decoration:underline;text-underline-offset:3px;cursor:pointer;font:13px var(--sans);padding:4px}
+.link:hover{color:var(--brass-2)}
+.link:focus-visible{outline:2px solid var(--brass-2);border-radius:4px}
+.more{display:flex;gap:16px;flex-wrap:wrap;margin-top:6px;font-size:13px;color:var(--muted)}
+.more a{color:var(--muted)}
+.more a:hover{color:var(--brass-2)}
+.summary{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:22px}
+.summary .top{display:grid;grid-template-columns:1fr auto;gap:16px;align-items:start}
+.summary .lead{font-size:16px;line-height:1.55;margin:14px 0 0;max-width:62ch}
+.tiles{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-top:18px}
+.tile{background:var(--panel-2);border-radius:12px;padding:14px 14px 12px;min-width:0}
+.tile .l{font:600 11px var(--mono);letter-spacing:.12em;text-transform:uppercase;color:var(--muted)}
+.tile .v{font:900 34px/1 var(--display);letter-spacing:.02em;margin-top:8px;font-variant-numeric:tabular-nums;word-break:break-word}
+.tile .v.open{color:var(--watch)}.tile .v.closed{color:var(--ok)}.tile .v.bad{color:var(--stop)}
+.tile .s{color:var(--muted);font-size:12px;margin-top:6px;line-height:1.4}
+@media (max-width:720px){.tiles{grid-template-columns:1fr 1fr}.summary .top{grid-template-columns:1fr}}
+details.sec{padding:0}
+details.sec>summary{list-style:none;cursor:pointer;padding:16px 22px;display:flex;align-items:baseline;gap:12px;flex-wrap:wrap}
+details.sec>summary::-webkit-details-marker{display:none}
+details.sec>summary h2{margin:0}
+details.sec>summary .what{color:var(--muted);font-size:13px;flex:1 1 260px}
+details.sec>summary .chev{color:var(--dim);font:12px var(--mono);margin-left:auto}
+details.sec[open]>summary .chev{transform:rotate(90deg);display:inline-block}
+details.sec>summary:focus-visible{outline:2px solid var(--brass-2);border-radius:14px}
+details.sec>.body{padding:0 22px 18px}
+.stack{display:grid;gap:12px}
+.wallet-row{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
+.wallet-row input{flex:1 1 280px;min-width:0;background:var(--door);border:1px solid var(--line-2);border-radius:8px;color:var(--text);font:13px var(--mono);padding:9px 12px}
+.lvl.stop::before{content:"■ "}.lvl.watch::before{content:"▲ "}.lvl.info::before{content:"● "}
 .watch{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
 .watch .ghost[aria-pressed="true"]{border-color:var(--watch);color:var(--watch)}
 .events{display:grid;gap:6px;margin-top:10px}
@@ -156,52 +189,48 @@ footer a:hover{color:var(--brass-2)}
     <img class="mark" id="mark" alt="BOUNCER gorilla in shades, arms crossed" width="56" height="56" src="">
     <div class="brand">
       <h1>BOUNCER</h1>
-      <p>Read-only door check for Pons V2 launches on Robinhood Chain. ID check · cover charge · house rules · dev report card.</p>
+      <p>Paste a token from Pons. See what it costs to get in, what it pays to get out, and who is already inside. Read-only: no wallet, nothing to sign.</p>
     </div>
     <div class="spacer"></div>
-    <a class="ext" id="ext-link" href="https://github.com/Kepochnik/bouncer#browser-extension" target="_blank" rel="noopener" title="BOUNCER for Chrome: the slip in a popup on any token page">🧩 Chrome extension</a>
-    <select id="chain" aria-label="Chain">
-      <option value="robinhood">Robinhood Chain</option>
-      <option value="arc-testnet">Arc Testnet</option>
-      <option value="arc">Arc</option>
-    </select>
-    <div class="mode" role="group" aria-label="Data source">
-      <button type="button" id="mode-demo" aria-pressed="true">demo</button>
-      <button type="button" id="mode-live" aria-pressed="false">live</button>
-    </div>
+    <a class="ext" id="ext-link" href="https://github.com/Kepochnik/bouncer#browser-extension" target="_blank" rel="noopener" title="BOUNCER for Chrome: the same check in a popup on any token page">🧩 Chrome extension</a>
   </header>
 
   <section class="door" aria-labelledby="door-label">
-    <div class="tabs" role="tablist" aria-label="What to check">
-      <button class="tab" role="tab" id="tab-door" aria-selected="true" type="button">Door</button>
-      <button class="tab" role="tab" id="tab-dev" aria-selected="false" type="button">Dev</button>
-      <button class="tab" role="tab" id="tab-wallet" aria-selected="false" type="button">Wallet</button>
-      <button class="tab" role="tab" id="tab-tx" aria-selected="false" type="button">Receipt</button>
-      <button class="tab" role="tab" id="tab-plan" aria-selected="false" type="button">Plan a launch</button>
-      <button class="tab" role="tab" id="tab-board" aria-selected="false" type="button">Board</button>
-    </div>
-    <label id="door-label" for="q">At the door</label>
+    <label id="door-label" for="q">Token address</label>
     <form class="row" id="form">
-      <input id="q" name="q" placeholder="token or curve address, 0x…" autocomplete="off" spellcheck="false" inputmode="text">
-      <input id="q2" name="q2" class="short" placeholder="wallet 0x…" autocomplete="off" spellcheck="false" hidden>
-      <button class="btn" id="go" type="submit">Check the list</button>
+      <input id="q" name="q" placeholder="0x… (a token, its curve, a wallet or a transaction hash)" autocomplete="off" spellcheck="false" inputmode="text">
+      <button class="btn" id="go" type="submit">Check it</button>
     </form>
-    <div class="chips" id="chips"><span>try:</span></div>
+    <div class="source" id="source">
+      <span class="pill" id="source-pill">Demo data</span>
+      <span id="source-text">You are looking at an invented example chain. Switch to <b>Live</b> to check a real token.</span>
+      <div class="mode" role="group" aria-label="Data source">
+        <button type="button" id="mode-demo" aria-pressed="true">demo</button>
+        <button type="button" id="mode-live" aria-pressed="false">live</button>
+      </div>
+      <select id="chain" aria-label="Chain">
+        <option value="robinhood">Robinhood Chain</option>
+        <option value="arc-testnet">Arc Testnet</option>
+        <option value="arc">Arc</option>
+      </select>
+      <button class="link" id="settings-toggle" type="button" aria-expanded="false">Settings</button>
+    </div>
     <div class="settings" id="settings">
       <label for="rpc">RPC URL</label>
-      <input id="rpc" placeholder="chain default">
-      <label for="factory">factory</label>
-      <input id="factory" placeholder="chain default (required on Arc mainnet until Radian publishes it)">
-      <span class="hint" id="chain-hint">Live mode reads the chain straight from your browser. A public RPC may refuse browser requests; paste one that allows them, or run the CLI. The crew check and lookalikes use the chain's Blockscout.</span>
+      <input id="rpc" placeholder="leave empty for the chain's public endpoint">
+      <label for="factory">Launchpad factory</label>
+      <input id="factory" placeholder="leave empty for the chain default (Arc mainnet needs one until Radian publishes it)">
+      <span class="hint" id="chain-hint">Live mode reads the chain straight from your browser. If the public RPC refuses browser requests, paste one that allows them, or use the Chrome extension, which can call any RPC.</span>
     </div>
+    <div class="chips" id="chips"></div>
     <div class="status" id="status"></div>
   </section>
 
   <div id="out"></div>
 
   <footer>
-    <span><b>no key · no signer · no transaction path</b><br>every value is read at one block; nothing is scored, predicted or advised.</span>
-    <span><a href="https://github.com/Kepochnik/bouncer">github.com/Kepochnik/bouncer</a> · <a href="bouncer-extension.zip" download>Chrome extension (zip)</a> · <a href="https://github.com/Kepochnik/bouncer#browser-extension">install</a><br>$BOUNCER · official CA: not launched yet</span>
+    <span><b>No key · no signer · no transaction path.</b><br>Every number is read from the chain at one block. Nothing is scored, predicted or advised.</span>
+    <span><a href="https://github.com/Kepochnik/bouncer">github.com/Kepochnik/bouncer</a> · <a href="bouncer-extension.zip" download>Chrome extension (zip)</a> · <a href="https://github.com/Kepochnik/bouncer#browser-extension">how to install</a><br>$BOUNCER · official CA: not launched yet</span>
   </footer>
 </div>
 <div class="toast" id="toast" role="status" aria-live="polite"></div>

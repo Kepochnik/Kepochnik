@@ -31,6 +31,8 @@ import { formatBps, formatDuration, formatUnits, isoUtc, shortAddress } from "..
 
 type Mode = "demo" | "live";
 type View = "door" | "dev" | "wallet" | "tx" | "plan" | "board";
+type Level = "stop" | "watch" | "info";
+const LEVEL_WORD: Record<Level, string> = { stop: "Stop", watch: "Careful", info: "Note" };
 const REPO = "github.com/Kepochnik/bouncer";
 const MARK = "$BOUNCER";
 const ADDR = /^0x[0-9a-fA-F]{40}$/;
@@ -40,12 +42,14 @@ const out = $("out");
 const status = $("status");
 const form = $<HTMLFormElement>("form");
 const q = $<HTMLInputElement>("q");
-const q2 = $<HTMLInputElement>("q2");
 const go = $<HTMLButtonElement>("go");
 const rpcInput = $<HTMLInputElement>("rpc");
 const factoryInput = $<HTMLInputElement>("factory");
 const chainSelect = $<HTMLSelectElement>("chain");
 const settings = $("settings");
+const sourcePill = $("source-pill");
+const sourceText = $("source-text");
+const settingsToggle = $<HTMLButtonElement>("settings-toggle");
 const toast = $("toast");
 
 let mode: Mode = "demo";
@@ -70,30 +74,37 @@ function setMode(next: Mode, silent = false): void {
   mode = next;
   $("mode-demo").setAttribute("aria-pressed", String(next === "demo"));
   $("mode-live").setAttribute("aria-pressed", String(next === "live"));
-  settings.classList.toggle("open", next === "live");
   chainSelect.disabled = next === "demo";
+  sourcePill.textContent = next === "demo" ? "Demo data" : `Live · ${chain().name}`;
+  sourcePill.classList.toggle("live", next === "live");
+  sourceText.innerHTML = next === "demo"
+    ? "You are looking at an invented example chain. Switch to <b>Live</b> to check a real token."
+    : `Reading ${esc(chain().name)} from your browser at one block. Nothing is cached.`;
   renderChips();
   if (!silent) storage("bouncer.mode", next);
 }
 
 function setView(next: View): void {
   view = next;
-  for (const v of ["door", "dev", "wallet", "tx", "plan", "board"] as View[]) $(`tab-${v}`).setAttribute("aria-selected", String(v === next));
-  const labels: Record<View, [string, string, string]> = {
-    door: ["At the door", "token or curve address, 0x…", "Check the list"],
-    dev: ["The deployer", "deployer address, 0x…", "Report card"],
-    wallet: ["One wallet, one launch", "token address, 0x…", "Show the bag"],
-    tx: ["One trade", "transaction hash, 0x…", "Itemise"],
-    plan: ["Plan a launch", "creator tax in bps (100 = 1%)", "Plan"],
-    board: ["The board", "window in hours (default 1)", "Show the board"],
+  const labels: Record<View, string> = {
+    door: "Token address",
+    dev: "Deployer address",
+    wallet: "Token and wallet",
+    tx: "Transaction hash",
+    plan: "Plan a launch",
+    board: "Tonight's board",
   };
-  $("door-label").textContent = labels[next][0];
-  q.placeholder = labels[next][1];
-  go.textContent = labels[next][2];
-  q2.hidden = next !== "wallet";
-  if (next === "plan") q.value = q.value && /^\d+$/.test(q.value) ? q.value : "100";
-  else if (next === "board") q.value = q.value && /^\d+(\.\d+)?$/.test(q.value) ? q.value : "1";
-  else if (/^\d+(\.\d+)?$/.test(q.value)) q.value = "";
+  $("door-label").textContent = labels[next];
+}
+
+/** One box, any input: a token or curve, a transaction hash, or "token wallet". */
+function detect(raw: string): { view: View; parts: string[] } | null {
+  const parts = raw.trim().split(/[\s,]+/).filter(Boolean);
+  if (parts.length === 2 && ADDR.test(parts[0]) && ADDR.test(parts[1])) return { view: "wallet", parts };
+  if (parts.length === 1 && ADDR.test(parts[0])) return { view: "door", parts };
+  if (parts.length === 1 && /^0x[0-9a-fA-F]{64}$/.test(parts[0])) return { view: "tx", parts };
+  if (parts.length === 1 && /^0x/.test(parts[0]) && mode === "demo" && /^0xdemo/i.test(parts[0])) return { view: "tx", parts };
+  return null;
 }
 
 function rpcFor(): RpcClient {
@@ -116,32 +127,37 @@ function factoryFor(): string {
   return f.toLowerCase();
 }
 
-const EXAMPLES: { label: string; hint: string; hash: string; value: string; value2?: string; view: View }[] = [
-  { label: "FRESH", hint: "9 s old, cover charge open, one crew", hash: `#/demo/${DEMO.tokens.fresh.token}`, value: DEMO.tokens.fresh.token, view: "door" },
-  { label: "SPRINT", hint: "graduated in 212 s", hash: `#/demo/${DEMO.tokens.sprint.token}`, value: DEMO.tokens.sprint.token, view: "door" },
-  { label: "LATE", hint: "paste the curve instead", hash: `#/demo/${DEMO.tokens.late.curve}`, value: DEMO.tokens.late.curve, view: "door" },
-  { label: "SPRINT?", hint: "an impostor with the same name", hash: `#/demo/${DEMO_IMPOSTOR.token}`, value: DEMO_IMPOSTOR.token, view: "door" },
-  { label: "wallet", hint: "a bag on LATE", hash: `#/wallet/${DEMO.tokens.late.token}/${DEMO.tokens.late.buys[1][1]}?chain=demo`, value: DEMO.tokens.late.token, value2: DEMO.tokens.late.buys[1][1], view: "wallet" },
-  { label: "receipt", hint: "the sniper's buy", hash: `#/tx/0xdemoFRESH${DEMO.tokens.fresh.launched + 22}?chain=demo`, value: `0xdemoFRESH${DEMO.tokens.fresh.launched + 22}`, view: "tx" },
-  { label: "plan", hint: "3% creator tax", hash: "#/plan?tax=300&chain=demo", value: "300", view: "plan" },
-  { label: "board", hint: "tonight's deployers and cover charge", hash: "#/board?chain=demo", value: "1", view: "board" },
-  { label: "watch", hint: "LATE: the dev moved", hash: `#/demo/${DEMO.tokens.late.token}?watch=1`, value: DEMO.tokens.late.token, view: "door" },
+const EXAMPLES: { label: string; hint: string; hash: string }[] = [
+  { label: "A fresh launch", hint: "9 s old, door tax still open", hash: `#/demo/${DEMO.tokens.fresh.token}` },
+  { label: "A graduated token", hint: "filled its curve in 212 s", hash: `#/demo/${DEMO.tokens.sprint.token}` },
+  { label: "A fake copy", hint: "same name, not from the factory", hash: `#/demo/${DEMO_IMPOSTOR.token}` },
+  { label: "A dev on the move", hint: "sold and moved tokens, watch on", hash: `#/demo/${DEMO.tokens.late.token}?watch=1` },
+  { label: "A trade receipt", hint: "one buy, itemised", hash: `#/tx/0xdemoFRESH${DEMO.tokens.fresh.launched + 22}?chain=demo` },
 ];
 
 function renderChips(): void {
   const chips = $("chips");
-  chips.innerHTML = mode === "demo" ? "<span>try:</span>" : `<span>live on ${chain().name}: paste any launchpad token, curve, deployer, wallet or trade</span>`;
-  if (mode !== "demo") return;
-  for (const e of EXAMPLES) {
-    const b = document.createElement("button");
-    b.type = "button";
-    b.className = "chip";
-    b.innerHTML = `${esc(e.label)}<em>${esc(e.hint)}</em>`;
-    b.addEventListener("click", () => {
-      location.hash = e.hash;
-    });
-    chips.appendChild(b);
+  chips.innerHTML = "";
+  if (mode === "demo") {
+    const label = document.createElement("span");
+    label.textContent = "Try an example:";
+    chips.appendChild(label);
+    for (const e of EXAMPLES) {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "chip";
+      b.innerHTML = `${esc(e.label)}<em>${esc(e.hint)}</em>`;
+      b.addEventListener("click", () => {
+        location.hash = e.hash;
+      });
+      chips.appendChild(b);
+    }
   }
+  const more = document.createElement("div");
+  more.className = "more";
+  const c = mode === "demo" ? "demo" : chain().key;
+  more.innerHTML = `<span>More:</span><a href="#/board?chain=${c}">Tonight's board</a><a href="#/plan?tax=100&chain=${c}">Plan a launch</a><span>Paste "token wallet" (two addresses) to see one wallet's bag.</span>`;
+  chips.appendChild(more);
 }
 
 function showToast(text: string): void {
@@ -163,7 +179,7 @@ function failed(error: unknown, input: string): void {
   const network = /fetch|network|failed|CORS|load|abort/i.test(message) && mode === "live";
   status.textContent = "";
   out.innerHTML = `<div class="error"><strong>Could not read the chain.</strong><p>${esc(message)}</p>${
-    network ? `<p>The browser could not reach the RPC. The public endpoint may not allow browser requests: paste an RPC URL that does under <em>live</em>, or run <code>npx bouncer door ${esc(input)} --chain ${esc(chain().key)}</code> from the repo. Demo mode works offline.</p>` : ""
+    network ? `<p>The browser could not reach the RPC. Public endpoints often refuse requests from websites. Three ways out: the <a href="https://github.com/Kepochnik/bouncer#browser-extension">Chrome extension</a> (it can call any RPC), an RPC URL that allows browser requests under Settings, or the CLI: <code>npx bouncer door ${esc(input)} --chain ${esc(chain().key)}</code>. Demo mode works offline.</p>` : ""
   }</div>`;
 }
 
@@ -181,7 +197,7 @@ async function runDoor(address: string): Promise<void> {
     const slip = await readDoor(rpcFor(), address, mode === "demo"
       ? { chain: CHAINS.robinhood, factory: factoryFor(), blockscout: blockscoutFor(), devHours: 8, chunkSize: 100_000, launchSearchBlocks: 400_000 }
       : { chain: chain(), factory: factoryFor(), blockscout: blockscoutFor(), devHours: 24 });
-    done(`block ${slip.at.block} · ${isoUtc(slip.at.timestamp)} · ${slip.notes.length} door note${slip.notes.length === 1 ? "" : "s"}`);
+    done(`block ${slip.at.block} · ${isoUtc(slip.at.timestamp)} · ${slip.notes.length} thing${slip.notes.length === 1 ? "" : "s"} to know`);
     renderSlip(slip);
   } catch (error) {
     failed(error, address);
@@ -338,7 +354,7 @@ function startWatch(slip: DoorSlip, panel: HTMLElement, button: HTMLButtonElemen
     }
   };
   button.setAttribute("aria-pressed", "true");
-  button.textContent = "Watching · stop";
+  button.textContent = "Watching · click to stop";
   try { if ("Notification" in window && Notification.permission === "default") void Notification.requestPermission(); } catch { /* fine */ }
   void tick();
   watcher = window.setInterval(() => void tick(), mode === "demo" ? 5_000 : 15_000);
@@ -350,6 +366,28 @@ function bad(text: string): void {
 
 // ---------------------------------------------------------------- render
 
+function summarySentence(slip: DoorSlip): string {
+  if (!slip.id.registered) {
+    const t = slip.id.token;
+    if (t.code.empty) return `There is no contract at this address on ${slip.chain.name}.`;
+    const flags: string[] = [];
+    if (t.proxyImplementation || t.code.minimalProxyTarget) flags.push("its code can be swapped (proxy)");
+    if (t.code.opcodes.selfdestruct) flags.push("it can self-destruct");
+    if (t.code.opcodes.delegatecall) flags.push("it delegates calls");
+    return `Not a ${slip.chain.launchpad} launch: the factory never deployed this contract${flags.length ? `, and ${flags.join(", ")}` : ""}. Anything sold under this name is not the token.`;
+  }
+  const parts: string[] = [`Real ${slip.chain.launchpad} launch`];
+  const c = slip.cover;
+  if (c?.status === "open") parts.push(`the door tax is still on for ${c.secondsLeft} s (up to ${formatBps(c.terms.startBps)} of a buy goes to the creator)`);
+  else if (c?.status === "closed") parts.push("the door tax has ended");
+  if (slip.rules) parts.push(`every trade pays ${formatBps(slip.rules.totalTradeBps)} in fees`);
+  if (slip.room && slip.room.buys > 0) parts.push(`the creator funded ${(slip.room.devShareBps / 100).toFixed(0)}% of what was bought`);
+  if (slip.crew?.crews.length) parts.push(`${slip.crew.crews[0].wallets.length} early buyers share a funder`);
+  if (slip.dev) parts.push(slip.dev.counts.launched <= 1 ? "first launch from this dev" : `this dev launched ${slip.dev.counts.launched} tokens, ${slip.dev.counts.graduated} graduated`);
+  if (slip.rules?.phase === 2 || slip.rules?.phase === 3) parts.push("graduated, pool locked");
+  return parts.map((x) => x.charAt(0).toUpperCase() + x.slice(1)).join(". ") + ".";
+}
+
 function renderSlip(slip: DoorSlip): void {
   const meta = slip.id.meta;
   const c0 = chain();
@@ -358,109 +396,125 @@ function renderSlip(slip: DoorSlip): void {
   const name = meta ? esc(meta.name) : slip.id.token.code.empty ? "no contract at this address" : "unregistered contract";
   const qd = slip.rules?.quote ?? slip.chain.native;
   const amt = (v: bigint) => `${formatUnits(v, qd.decimals)} ${esc(qd.symbol)}`;
-  const notes = slip.notes.map((n) => `<div class="note"><span class="lvl ${n.level}">${n.level}</span><span>${esc(n.text)}</span></div>`).join("");
-
+  const c = slip.cover;
+  const r = slip.rules;
+  const room = slip.room;
+  const e = slip.exit;
+  const crew = slip.crew;
+  const l = slip.lookalikes;
+  const d = slip.dev;
   const t = slip.id.token;
-  const idFlags = (c: typeof t) => {
+  const registered = slip.id.registered;
+
+  // ---- the four numbers people ask for first
+  const tiles = registered
+    ? `<div class="tiles">
+        <div class="tile"><div class="l">Door tax</div><div class="v ${c?.status === "open" ? "open" : "closed"}" id="cd">${c ? (c.status === "open" ? `${c.secondsLeft}s` : c.status === "closed" ? "OFF" : "OFF") : "OFF"}</div><div class="s" id="cd-note">${c ? (c.status === "open" ? `left, then it is safe to buy` : c.status === "closed" ? `ended ${formatDuration(Math.max(0, c.head.timestamp - c.windowEndsAt))} ago` : "disabled for this launch") : "ended long ago"}</div></div>
+        <div class="tile"><div class="l">Fee per trade</div><div class="v ${r && r.totalTradeBps >= 1_000n ? "bad" : ""}">${r ? formatBps(r.totalTradeBps) : "—"}</div><div class="s">${r ? `${formatBps(r.creatorTaxBps)} of it to the creator` : ""}</div></div>
+        <div class="tile"><div class="l">${room && room.buys > 0 ? "Creator funded" : "Curve full"}</div><div class="v ${room && room.devShareBps >= 5_000 ? "bad" : ""}">${room && room.buys > 0 ? `${(room.devShareBps / 100).toFixed(0)}%` : r?.fill ? `${(r.fill.bps / 100).toFixed(0)}%` : "—"}</div><div class="s">${room && room.buys > 0 ? `of all buys · ${room.buyers} buyers` : r?.fill ? "of the way to graduation" : ""}</div></div>
+        <div class="tile"><div class="l">This dev before</div><div class="v ${d && d.counts.launched >= 5 && d.counts.graduated === 0 ? "bad" : ""}">${d ? `${d.counts.launched}` : "—"}</div><div class="s">${d ? `launch${d.counts.launched === 1 ? "" : "es"} in ${mode === "demo" ? "8" : "24"} h · ${d.counts.graduated} graduated` : ""}</div></div>
+      </div>`
+    : "";
+
+  const notes = slip.notes.map((n) => `<div class="note"><span class="lvl ${n.level}">${LEVEL_WORD[n.level as Level]}</span><span>${esc(n.text)}</span></div>`).join("");
+
+  // ---- details, plain words first
+  const idFlags = (x: typeof t) => {
     const f: string[] = [];
-    if (c.proxyImplementation) f.push(`<span class="flag bad">EIP-1967 proxy → ${shortAddress(c.proxyImplementation)}</span>`);
-    if (c.code.minimalProxyTarget) f.push(`<span class="flag bad">EIP-1167 proxy</span>`);
-    if (c.code.opcodes.selfdestruct) f.push(`<span class="flag bad">SELFDESTRUCT ×${c.code.opcodes.selfdestruct}</span>`);
-    if (c.code.opcodes.delegatecall) f.push(`<span class="flag bad">DELEGATECALL ×${c.code.opcodes.delegatecall}</span>`);
-    if (c.code.opcodes.callcode) f.push(`<span class="flag bad">CALLCODE</span>`);
-    if (c.code.opcodes.create || c.code.opcodes.create2) f.push(`<span class="flag">CREATE</span>`);
-    if (!f.length && !c.code.empty) f.push(`<span class="flag ok">no SELFDESTRUCT · no DELEGATECALL · no proxy</span>`);
+    if (x.proxyImplementation) f.push(`<span class="flag bad">upgradeable proxy → ${shortAddress(x.proxyImplementation)}</span>`);
+    if (x.code.minimalProxyTarget) f.push(`<span class="flag bad">minimal proxy</span>`);
+    if (x.code.opcodes.selfdestruct) f.push(`<span class="flag bad">can self-destruct ×${x.code.opcodes.selfdestruct}</span>`);
+    if (x.code.opcodes.delegatecall) f.push(`<span class="flag bad">DELEGATECALL ×${x.code.opcodes.delegatecall}</span>`);
+    if (x.code.opcodes.callcode) f.push(`<span class="flag bad">CALLCODE</span>`);
+    if (x.code.opcodes.create || x.code.opcodes.create2) f.push(`<span class="flag">deploys contracts</span>`);
+    if (!f.length && !x.code.empty) f.push(`<span class="flag ok">fixed code · no proxy · cannot self-destruct</span>`);
     return f.join("");
   };
-  const idSection = `<section class="sec"><h2>ID check</h2><dl class="kv">
+  const section = (id: string, title: string, what: string, body: string, open: boolean) =>
+    `<details class="sec" id="${id}"${open ? " open" : ""}><summary><h2>${title}</h2><span class="what">${what}</span><span class="chev">▶</span></summary><div class="body">${body}</div></details>`;
+
+  const idBody = `<dl class="kv">
     <dt>chain</dt><dd>${esc(slip.chain.name)} · ${esc(slip.chain.launchpad)}</dd>
-    <dt>factory record</dt><dd>${slip.id.registered ? `<span class="flag ok">registered</span> the factory deployed this token${slip.id.resolvedAs === "curve" ? " (resolved from its curve)" : ""}` : `<span class="flag bad">none</span> the factory has never seen this address`}</dd>
+    <dt>factory record</dt><dd>${registered ? `<span class="flag ok">yes</span> the launchpad's own factory deployed this token${slip.id.resolvedAs === "curve" ? " (you pasted its curve)" : ""}` : `<span class="flag bad">none</span> the factory has never seen this address`}</dd>
     <dt>token code</dt><dd>${t.code.empty ? "empty (no contract)" : `${t.code.bytes} bytes`}<br>${idFlags(t)}</dd>
     ${slip.id.curve ? `<dt>curve code</dt><dd>${slip.id.curve.code.bytes} bytes<br>${idFlags(slip.id.curve)}</dd>` : ""}
-    ${slip.id.launch ? `<dt>deployer</dt><dd><a href="#/dev/${slip.id.launch.deployer.toLowerCase()}${routeChain()}"><span class="mono">${esc(slip.id.launch.deployer.toLowerCase())}</span></a></dd><dt>phase</dt><dd>${PHASE_LABEL[slip.id.launch.phase]}</dd>` : ""}
-    ${explorer ? `<dt>explorer</dt><dd><a href="${explorer}" target="_blank" rel="noopener">${mode === "demo" ? "blockscout (demo address, will be empty)" : "blockscout"}</a></dd>` : ""}
-  </dl></section>`;
+    ${slip.id.launch ? `<dt>deployer</dt><dd><a href="#/dev/${slip.id.launch.deployer.toLowerCase()}${routeChain()}"><span class="mono">${esc(slip.id.launch.deployer.toLowerCase())}</span></a> <small style="color:var(--dim)">click for their history</small></dd><dt>stage</dt><dd>${({ curve: "on the bonding curve", swept: "curve closed, pool not created yet", pool: "graduated: trades in the locked Uniswap pool", rescued: "graduated (rescued)" } as Record<string, string>)[PHASE_LABEL[slip.id.launch.phase]] ?? PHASE_LABEL[slip.id.launch.phase]}</dd>` : ""}
+    ${explorer ? `<dt>explorer</dt><dd><a href="${explorer}" target="_blank" rel="noopener">${mode === "demo" ? "open in Blockscout (demo address, will be empty)" : "open in Blockscout"}</a></dd>` : ""}
+  </dl>`;
 
-  let coverSection = "";
-  if (slip.cover) {
-    const c = slip.cover;
+  let coverBody = "";
+  if (c) {
     const buys = c.observed
       .map((b) => `<tr class="${b.creatorWallet ? "exempt" : ""}"><td>${b.secondsAfterLaunch.toFixed(1)} s</td><td>${shortAddress(b.buyer)}${b.creatorWallet ? ' <span class="flag">creator · exempt</span>' : ""}</td><td>${amt(b.quoteIn)}</td><td>${(b.chargeBps / 100).toFixed(1)}%</td></tr>`)
       .join("");
-    coverSection = `<section class="sec"><h2>Cover charge</h2>
-      <div class="big"><b id="cd" class="${c.status}">${c.status === "open" ? `${c.secondsLeft}s` : c.status === "closed" ? "CLOSED" : "OFF"}</b><span id="cd-note">${c.status === "open" ? "left on the door tax" : c.status === "closed" ? `${formatDuration(Math.max(0, c.head.timestamp - c.windowEndsAt))} ago` : "disabled for this launch"}</span></div>
-      ${c.status === "open" ? `<div class="bar"><i id="cd-bar" style="width:${Math.round((c.secondsLeft / c.terms.seconds) * 100)}%"></i></div>` : ""}
+    coverBody = `${c.status === "open" ? `<div class="bar"><i id="cd-bar" style="width:${Math.round((c.secondsLeft / c.terms.seconds) * 100)}%"></i></div>` : ""}
       <dl class="kv">
-        <dt>terms</dt><dd>${formatBps(c.terms.startBps)} of a buy's quote in the launch second, decaying to 0 over ${c.terms.seconds} s${c.termsChangedSinceLaunch ? ' <span class="flag bad">factory retuned since launch</span>' : ""}</dd>
+        <dt>the rule</dt><dd>In the first ${c.terms.seconds} s after launch, a buy pays up to ${formatBps(c.terms.startBps)} of its money to the creator on top of normal fees, falling to zero over the window. The creator's own wallets never pay it.${c.termsChangedSinceLaunch ? ' <span class="flag bad">the factory changed these terms after this launch</span>' : ""}</dd>
         <dt>launched</dt><dd>${isoUtc(c.launch.timestamp)} · block ${c.launch.block}</dd>
-        <dt>door</dt><dd>${esc(coverChargeLine(c))}</dd>
+        <dt>now</dt><dd>${esc(coverChargeLine(c))}</dd>
       </dl>
-      ${c.observed.length ? `<div class="tbl"><table class="buys"><thead><tr><th>after launch</th><th>buyer</th><th>spent</th><th>paid at the door</th></tr></thead><tbody>${buys}</tbody></table></div>` : `<p style="color:var(--muted);font-size:13px;margin:8px 0 0">No buys landed inside the window.</p>`}
-    </section>`;
-  } else if (slip.id.registered) {
-    coverSection = `<section class="sec"><h2>Cover charge</h2><p style="color:var(--muted);margin:0">Launch is older than the search window; the door tax is long closed and was not read.</p></section>`;
+      ${c.observed.length ? `<div class="tbl"><table class="buys"><thead><tr><th>after launch</th><th>buyer</th><th>spent</th><th>paid at the door</th></tr></thead><tbody>${buys}</tbody></table></div>` : `<p style="color:var(--muted);font-size:13px;margin:8px 0 0">No buys landed inside the window.</p>`}`;
+  } else if (registered) {
+    coverBody = `<p style="color:var(--muted);margin:0">This launch is older than the search window; the door tax ended long ago and was not read.</p>`;
   }
 
-  const r = slip.rules;
-  const rulesSection = r ? `<section class="sec"><h2>House rules</h2><ol class="rules">${r.rules.map((x) => `<li>${esc(x)}</li>`).join("")}</ol></section>` : "";
+  const rulesBody = r ? `<ol class="rules">${r.rules.map((x) => `<li>${esc(x)}</li>`).join("")}</ol>` : "";
 
-  const room = slip.room;
-  const roomSection = room
-    ? `<section class="sec"><h2>The room</h2><dl class="kv">
-        <dt>since launch</dt><dd>${esc(roomLine(room))}</dd>
-        <dt>bought</dt><dd>${amt(room.totalQuoteIn)} net of fees · ${room.buys} buys · ${room.sells} sells</dd></dl>
-        ${room.wallets.length ? `<div class="tbl"><table class="buys"><thead><tr><th>wallet</th><th>in</th><th>out</th><th>buys</th></tr></thead><tbody>${room.wallets.slice(0, 8).map((w) => `<tr><td>${shortAddress(w.address)}${w.creatorWallet ? ' <span class="flag">creator</span>' : ""}</td><td>${amt(w.quoteIn)}</td><td>${w.quoteOut ? amt(w.quoteOut) : "—"}</td><td>${w.buys}</td></tr>`).join("")}</tbody></table></div>` : ""}
-      </section>`
-    : "";
-
-  const e = slip.exit;
-  const exitSection = e
-    ? `<section class="sec"><h2>Exit door</h2>
-        <p style="margin:0 0 4px;color:var(--muted);font-size:13px">Walk out now with ${formatUnits(e.position, 18, 0)} tokens (1% of supply) on the ${e.venue}${e.venue !== "closed" ? ` · fee ${formatBps(e.feeBps)} + creator ${formatBps(e.creatorTaxBps)}` : ""}</p>
-        ${e.quotes.length ? `<div class="exit-grid">${e.quotes.map((x) => `<div><span>sell ${x.shareBps / 100}%</span><b class="num">${formatUnits(x.net, qd.decimals)}</b><span>${esc(qd.symbol)} net</span><small>${(x.realisedBps / 100).toFixed(1)}% of spot</small></div>`).join("")}</div>` : ""}
+  const exitBody = e
+    ? `<p style="margin:0 0 4px;color:var(--muted);font-size:13px">If you held ${formatUnits(e.position, 18, 0)} tokens (1% of supply) and sold now on the ${e.venue === "pool" ? "pool" : "curve"}${e.venue !== "closed" ? ` · ${formatBps(e.feeBps)} fee + ${formatBps(e.creatorTaxBps)} creator tax` : ""}:</p>
+        ${e.quotes.length ? `<div class="exit-grid">${e.quotes.map((x) => `<div><span>sell ${x.shareBps / 100}%</span><b class="num">${formatUnits(x.net, qd.decimals)}</b><span>${esc(qd.symbol)} in hand</span><small>${(x.realisedBps / 100).toFixed(1)}% of the quoted price</small></div>`).join("")}</div>` : ""}
         <p style="margin:0;color:var(--dim);font-size:12px">${esc(e.note)}</p>
-      </section>`
+        <div class="wallet-row"><input id="wallet-q" placeholder="your wallet 0x… to see your own bag on this token" spellcheck="false"><button class="ghost" id="wallet-go" type="button">Show my bag</button></div>`
     : "";
 
-  const crew = slip.crew;
-  const crewSection = crew
-    ? `<section class="sec"><h2>One crew</h2><dl class="kv"><dt>first buyers</dt><dd>${esc(oneCrewLine(crew))}</dd>
-        ${crew.crews.slice(0, 3).map((cr, i) => `<dt>crew ${i + 1}</dt><dd>${cr.wallets.length} wallets funded by <span class="mono">${shortAddress(cr.funder)}</span> · ${(cr.shareBps / 100).toFixed(1)}% of the curve</dd>`).join("")}</dl>
-        <div class="tbl"><table class="buys"><thead><tr><th>wallet</th><th>funded by</th><th>bought</th></tr></thead><tbody>${crew.wallets.slice(0, 10).map((w) => `<tr><td>${shortAddress(w.address)}</td><td>${w.creatorWallet ? '<span class="flag">creator wallet</span>' : w.funder ? `${shortAddress(w.funder)} <small style="color:var(--dim)">@${w.fundedAtBlock}</small>` : '<span style="color:var(--dim)">not found</span>'}</td><td>${amt(w.quoteIn)}</td></tr>`).join("")}</tbody></table></div>
-      </section>`
+  const roomBody = room
+    ? `<dl class="kv">
+        <dt>since launch</dt><dd>${esc(roomLine(room))}</dd>
+        <dt>bought</dt><dd>${amt(room.totalQuoteIn)} after fees · ${room.buys} buys · ${room.sells} sells</dd></dl>
+        ${room.wallets.length ? `<div class="tbl"><table class="buys"><thead><tr><th>wallet</th><th>in</th><th>out</th><th>buys</th></tr></thead><tbody>${room.wallets.slice(0, 8).map((w) => `<tr><td>${shortAddress(w.address)}${w.creatorWallet ? ' <span class="flag">creator</span>' : ""}</td><td>${amt(w.quoteIn)}</td><td>${w.quoteOut ? amt(w.quoteOut) : "—"}</td><td>${w.buys}</td></tr>`).join("")}</tbody></table></div>` : ""}`
     : "";
 
-  const l = slip.lookalikes;
-  const lookSection = l
-    ? `<section class="sec"><h2>Lookalikes</h2><dl class="kv"><dt>${esc(l.query)}</dt><dd>${esc(lookalikeLine(l))}</dd></dl>
-        <div class="tbl"><table class="buys"><thead><tr><th>address</th><th>list</th><th>phase</th><th>launch block</th></tr></thead><tbody>${l.candidates.slice(0, 8).map((x) => `<tr><td><a href="#/${mode === "demo" ? "demo" : "t"}/${x.address}${routeChain()}">${shortAddress(x.address)}</a>${x.address === l.subject ? " · this one" : ""}</td><td>${x.registered ? '<span class="flag ok">on</span>' : '<span class="flag bad">not on</span>'}</td><td>${x.phase !== null ? PHASE_LABEL[x.phase] : "—"}</td><td>${x.launchBlock ?? "—"}</td></tr>`).join("")}</tbody></table></div>
-      </section>`
+  const crewBody = crew
+    ? `<dl class="kv"><dt>first buyers</dt><dd>${esc(oneCrewLine(crew))}</dd>
+        ${crew.crews.slice(0, 3).map((cr, i) => `<dt>group ${i + 1}</dt><dd>${cr.wallets.length} wallets were all funded by <span class="mono">${shortAddress(cr.funder)}</span> before the launch · together ${(cr.shareBps / 100).toFixed(1)}% of all buys</dd>`).join("")}</dl>
+        <div class="tbl"><table class="buys"><thead><tr><th>wallet</th><th>got its money from</th><th>bought</th></tr></thead><tbody>${crew.wallets.slice(0, 10).map((w) => `<tr><td>${shortAddress(w.address)}</td><td>${w.creatorWallet ? '<span class="flag">creator wallet</span>' : w.funder ? `${shortAddress(w.funder)} <small style="color:var(--dim)">@${w.fundedAtBlock}</small>` : '<span style="color:var(--dim)">not found</span>'}</td><td>${amt(w.quoteIn)}</td></tr>`).join("")}</tbody></table></div>`
     : "";
+
+  const lookBody = l
+    ? `<dl class="kv"><dt>${esc(l.query)}</dt><dd>${esc(lookalikeLine(l))}</dd></dl>
+        <div class="tbl"><table class="buys"><thead><tr><th>address</th><th>from the factory?</th><th>stage</th><th>launch block</th></tr></thead><tbody>${l.candidates.slice(0, 8).map((x) => `<tr><td><a href="#/${mode === "demo" ? "demo" : "t"}/${x.address}${routeChain()}">${shortAddress(x.address)}</a>${x.address === l.subject ? " · this one" : ""}</td><td>${x.registered ? '<span class="flag ok">yes</span>' : '<span class="flag bad">no</span>'}</td><td>${x.phase !== null ? PHASE_LABEL[x.phase] : "—"}</td><td>${x.launchBlock ?? "—"}</td></tr>`).join("")}</tbody></table></div>`
+    : "";
+
+  const watchBody = `<div class="watch"><button class="ghost" id="act-watch" type="button" aria-pressed="false">Start watching</button><span style="color:var(--muted);font-size:13px">Checks every ${mode === "demo" ? "5" : "15"} s while this tab is open: the dev selling or moving tokens, the tax recipient changing, buyback switching, graduation${crew?.crews.length ? `, and ${crew.crews.flatMap((x) => x.wallets).length} grouped wallets leaving together` : ""}. Browser notifications if you allow them.</span></div><div class="events"></div>`;
 
   out.innerHTML = `<div class="slip">
-    <div class="stamp-row">
-      <div class="who"><div class="sym">${sym}</div><div class="name">${name}</div><div class="addr">${esc(slip.subject)}</div><div class="at">${mode === "demo" ? "DEMO CHAIN · " : ""}${esc(slip.chain.name)} · block ${slip.at.block} · ${isoUtc(slip.at.timestamp)}</div>
-        <div class="actions" style="margin-top:14px">
-          <button class="ghost" id="act-card" type="button">Show card</button>
-          <button class="ghost" id="act-json" type="button">Copy JSON</button>
-          <button class="ghost" id="act-link" type="button">Copy link</button>
-        </div>
+    <div class="summary">
+      <div class="top">
+        <div class="who"><div class="sym">${sym}</div><div class="name">${name}</div><div class="addr">${esc(slip.subject)}</div><div class="at">${mode === "demo" ? "DEMO · " : ""}${esc(slip.chain.name)} · block ${slip.at.block} · ${isoUtc(slip.at.timestamp)}</div></div>
+        <div class="stamp ${slip.stamp === "ON THE LIST" ? "" : "no"}">${slip.stamp}</div>
       </div>
-      <div class="stamp ${slip.stamp === "ON THE LIST" ? "" : "no"}">${slip.stamp}</div>
+      <p class="lead">${esc(summarySentence(slip))}</p>
+      ${tiles}
+      <div class="actions" style="margin-top:16px">
+        <button class="ghost" id="act-card" type="button">Show as image</button>
+        <button class="ghost" id="act-json" type="button">Copy JSON</button>
+        <button class="ghost" id="act-link" type="button">Copy link</button>
+      </div>
     </div>
     <div class="card-wrap" id="card"></div>
-    <div class="notes"><h2>Door notes</h2>${notes || `<div class="note"><span class="lvl info">info</span><span>Nothing to say. The list has this token and nothing on it needs a second look.</span></div>`}</div>
-    ${slip.id.registered ? `<section class="sec" id="watch-panel"><h2>Dev moved · crew exit</h2><div class="watch"><button class="ghost" id="act-watch" type="button" aria-pressed="false">Watch in this tab</button><span style="color:var(--muted);font-size:13px">Polls every ${mode === "demo" ? "5" : "15"} s: deployer sells or moves tokens, tax recipient moves, buyback flips, sweep, graduation${slip.crew?.crews.length ? `, ${slip.crew.crews.flatMap((c) => c.wallets).length} crew wallets leaving together` : ""}. Browser notifications if you allow them. Stops when you close the tab.</span></div><div class="events"></div></section>` : ""}
-    <div class="grid">${idSection}${coverSection}${rulesSection}${exitSection}${roomSection}${crewSection}${lookSection}${slip.dev ? devSection(slip.dev, slip.subject, false) : ""}</div>
+    <div class="notes"><h2>What to know</h2>${notes || `<div class="note"><span class="lvl info">Note</span><span>Nothing stands out. The factory made this token and none of its terms needs a second look.</span></div>`}</div>
+    <div class="stack">
+      ${section("s-id", "Is it real?", "Did the launchpad's factory deploy this token, and can its code change later?", idBody, true)}
+      ${registered ? section("s-cover", "Door tax", `The anti-snipe tax in the first ${c?.terms.seconds ?? 15} seconds, and who paid it.`, coverBody, c?.status === "open") : ""}
+      ${r ? section("s-rules", "Fees and rules", "What every trade costs, where the creator's cut goes, what buyback really does.", rulesBody, false) : ""}
+      ${e ? section("s-exit", "Cash out now", "What you would actually get for selling part or all of a position right now.", exitBody, false) : ""}
+      ${room ? section("s-room", "Who is inside", "Every buyer since launch, how much the creator's own wallets put in, buys landing in the same block.", roomBody, false) : ""}
+      ${crew ? section("s-crew", "Same funder?", "Where the first buyers got their money. Wallets funded by one address before the launch are one group.", crewBody, false) : ""}
+      ${l ? section("s-look", "Same name", "Other tokens with this ticker on the chain, and which one launched first.", lookBody, false) : ""}
+      ${d ? section("s-dev", "This dev before", `Everything this deployer launched in the last ${mode === "demo" ? "8" : "24"} h and how it went.`, devSection(d, slip.subject, false, true), false) : ""}
+      ${registered ? section("s-watch", "Watch for changes", "Get told when the dev moves, right in this tab.", watchBody, new URLSearchParams(location.hash.split("?")[1] ?? "").get("watch") === "1") : ""}
+    </div>
   </div>`;
-  const watchButton = document.getElementById("act-watch") as HTMLButtonElement | null;
-  if (watchButton) {
-    watchButton.addEventListener("click", () => {
-      if (watcher) { stopWatch(); watchButton.setAttribute("aria-pressed", "false"); watchButton.textContent = "Watch in this tab"; return; }
-      startWatch(slip, $("watch-panel"), watchButton);
-    });
-    if (new URLSearchParams(location.hash.split("?")[1] ?? "").get("watch") === "1") startWatch(slip, $("watch-panel"), watchButton);
-  }
 
   $("act-card").addEventListener("click", () => {
     const wrap = $("card");
@@ -474,21 +528,37 @@ function renderSlip(slip: DoorSlip): void {
     const url = `${location.origin}${location.pathname}#/${mode === "demo" ? "demo" : "t"}/${slip.subject}${routeChain()}`;
     try { await navigator.clipboard.writeText(url); showToast("Link copied"); } catch { showToast(url); }
   });
+  const walletGo = document.getElementById("wallet-go");
+  if (walletGo) {
+    walletGo.addEventListener("click", () => {
+      const w = (document.getElementById("wallet-q") as HTMLInputElement).value.trim();
+      if (!ADDR.test(w)) { showToast("paste a wallet address"); return; }
+      location.hash = `#/wallet/${slip.subject}/${w.toLowerCase()}?chain=${mode === "demo" ? "demo" : chain().key}`;
+    });
+  }
+  const watchButton = document.getElementById("act-watch") as HTMLButtonElement | null;
+  if (watchButton) {
+    watchButton.addEventListener("click", () => {
+      if (watcher) { stopWatch(); watchButton.setAttribute("aria-pressed", "false"); watchButton.textContent = "Start watching"; return; }
+      startWatch(slip, $("s-watch"), watchButton);
+    });
+    if (new URLSearchParams(location.hash.split("?")[1] ?? "").get("watch") === "1") startWatch(slip, $("s-watch"), watchButton);
+  }
 
   if (slip.cover?.status === "open") {
-    const c = slip.cover;
+    const cc = slip.cover;
     const started = Date.now();
     ticker = window.setInterval(() => {
-      const left = Math.max(0, c.secondsLeft - Math.floor((Date.now() - started) / 1000));
+      const left = Math.max(0, cc.secondsLeft - Math.floor((Date.now() - started) / 1000));
       const cd = document.getElementById("cd");
       const bar = document.getElementById("cd-bar");
       const note = document.getElementById("cd-note");
       if (!cd) { if (ticker) clearInterval(ticker); return; }
-      cd.textContent = left > 0 ? `${left}s` : "CLOSED";
-      if (bar) bar.style.width = `${Math.round((left / c.terms.seconds) * 100)}%`;
+      cd.textContent = left > 0 ? `${left}s` : "OFF";
+      if (bar) bar.style.width = `${Math.round((left / cc.terms.seconds) * 100)}%`;
       if (left <= 0) {
-        cd.className = "closed";
-        if (note) note.textContent = "window closed since you loaded this slip; check again for what landed";
+        cd.className = "v closed";
+        if (note) note.textContent = "ended while you were looking; check again to see who paid";
         if (ticker) clearInterval(ticker);
         ticker = null;
       }
@@ -496,13 +566,12 @@ function renderSlip(slip: DoorSlip): void {
   }
 }
 
-function devSection(d: DevReport, subject: string | null, standalone: boolean): string {
-  return `<section class="sec wide"><h2>Dev report card</h2>
-    <dl class="kv"><dt>deployer</dt><dd><span class="mono">${esc(d.deployer)}</span></dd><dt>in window</dt><dd>${esc(devReportLine(d))}</dd>${standalone ? `<dt>blocks</dt><dd>${d.window.fromBlock}–${d.window.toBlock}</dd>` : ""}</dl>
-    ${d.launches.length ? `<div class="tbl"><table class="buys"><thead><tr><th>ticker</th><th>launched</th><th>phase</th><th>creator tax</th><th>launch → sweep</th></tr></thead><tbody>${d.launches
+function devSection(d: DevReport, subject: string | null, standalone: boolean, bodyOnly = false): string {
+  const inner = `<dl class="kv"><dt>deployer</dt><dd><span class="mono">${esc(d.deployer)}</span></dd><dt>in window</dt><dd>${esc(devReportLine(d))}</dd>${standalone ? `<dt>blocks</dt><dd>${d.window.fromBlock}–${d.window.toBlock}</dd>` : ""}</dl>
+    ${d.launches.length ? `<div class="tbl"><table class="buys"><thead><tr><th>ticker</th><th>launched</th><th>stage</th><th>creator tax</th><th>launch → sweep</th></tr></thead><tbody>${d.launches
       .map((l) => `<tr><td><a href="#/${mode === "demo" ? "demo" : "t"}/${l.token}${routeChain()}">${esc(l.symbol)}</a>${l.token === subject ? " · this one" : ""}</td><td>${isoUtc(l.launchedAt).slice(0, 16).replace("T", " ")}</td><td>${PHASE_LABEL[l.phase]}</td><td>${formatBps(l.creatorTaxBps)}</td><td>${l.secondsToSweep === null ? "—" : formatDuration(l.secondsToSweep)}</td></tr>`)
-      .join("")}</tbody></table></div>${d.truncated ? `<p style="color:var(--muted);font-size:13px">${d.counts.launched - d.launches.length} older launches counted but not listed.</p>` : ""}` : ""}
-  </section>`;
+      .join("")}</tbody></table></div>${d.truncated ? `<p style="color:var(--muted);font-size:13px">${d.counts.launched - d.launches.length} older launches counted but not listed.</p>` : ""}` : ""}`;
+  return bodyOnly ? inner : `<section class="sec wide"><h2>This dev before</h2>${inner}</section>`;
 }
 
 function renderPosition(p: Position, head: number): void {
@@ -627,8 +696,7 @@ function route(): void {
       break;
     case "wallet":
       setView("wallet");
-      q.value = parts[1] ?? "";
-      q2.value = parts[2] ?? "";
+      q.value = `${parts[1] ?? ""} ${parts[2] ?? ""}`.trim();
       void runWallet(parts[1] ?? "", parts[2] ?? "");
       break;
     case "tx":
@@ -651,15 +719,17 @@ function route(): void {
 
 function submit(): void {
   const v = q.value.trim();
-  const suffix = mode === "demo" ? "?chain=demo" : `?chain=${chain().key}`;
+  const c = mode === "demo" ? "demo" : chain().key;
   let hash: string;
-  switch (view) {
-    case "door": hash = `#/${mode === "demo" ? "demo" : "t"}/${v}${mode === "demo" ? "" : suffix}`; break;
-    case "dev": hash = `#/dev/${v}${suffix}`; break;
-    case "wallet": hash = `#/wallet/${v}/${q2.value.trim()}${suffix}`; break;
-    case "tx": hash = `#/tx/${v}${suffix}`; break;
-    case "plan": hash = `#/plan?tax=${encodeURIComponent(v || "100")}&chain=${mode === "demo" ? "demo" : chain().key}`; break;
-    case "board": hash = `#/board?hours=${encodeURIComponent(v || "1")}&chain=${mode === "demo" ? "demo" : chain().key}`; break;
+  if (view === "plan") hash = `#/plan?tax=${encodeURIComponent(v || "100")}&chain=${c}`;
+  else if (view === "board") hash = `#/board?hours=${encodeURIComponent(v || "1")}&chain=${c}`;
+  else if (view === "dev" && ADDR.test(v)) hash = `#/dev/${v.toLowerCase()}?chain=${c}`;
+  else {
+    const found = detect(v);
+    if (!found) return bad("Paste a token or curve address (0x + 40 hex characters), a transaction hash (0x + 64), or a token and a wallet address separated by a space.");
+    if (found.view === "wallet") hash = `#/wallet/${found.parts[0].toLowerCase()}/${found.parts[1].toLowerCase()}?chain=${c}`;
+    else if (found.view === "tx") hash = `#/tx/${found.parts[0]}?chain=${c}`;
+    else hash = `#/${mode === "demo" ? "demo" : "t"}/${found.parts[0].toLowerCase()}${mode === "demo" ? "" : `?chain=${c}`}`;
   }
   if (location.hash === hash) route();
   else location.hash = hash;
@@ -675,12 +745,17 @@ function boot(): void {
   chainSelect.addEventListener("change", () => {
     storage("bouncer.chain", chainSelect.value);
     const c = chainByKey(chainSelect.value);
-    $("chain-hint").textContent = `${c.name} (${c.chainId}) · ${c.launchpad} · RPC ${c.rpc[0]}${c.blockscout ? ` · explorer ${c.blockscout}` : " · no explorer known, crew check and lookalikes off"}${c.notes ? ` · ${c.notes}` : ""}`;
+    $("chain-hint").textContent = `${c.name} (${c.chainId}) · ${c.launchpad} · RPC ${c.rpc[0]}${c.blockscout ? ` · explorer ${c.blockscout}` : " · no explorer known, the funder check and same-name search are off"}${c.notes ? ` · ${c.notes}` : ""}`;
+    if (mode === "live") setMode("live", true);
     renderChips();
   });
   $("mode-demo").addEventListener("click", () => setMode("demo"));
   $("mode-live").addEventListener("click", () => setMode("live"));
-  for (const v of ["door", "dev", "wallet", "tx", "plan", "board"] as View[]) $(`tab-${v}`).addEventListener("click", () => setView(v));
+  settingsToggle.addEventListener("click", () => {
+    const open = !settings.classList.contains("open");
+    settings.classList.toggle("open", open);
+    settingsToggle.setAttribute("aria-expanded", String(open));
+  });
   form.addEventListener("submit", (e) => {
     e.preventDefault();
     submit();

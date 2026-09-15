@@ -197,49 +197,49 @@ export function doorNotes(slip: DoorSlip): DoorNote[] {
   const c = slip.cover;
   if (c) {
     if (c.status === "open") {
-      notes.push({ level: "watch", code: "cover-open", text: `Cover charge is open for ${c.secondsLeft} more s: a buy right now pays up to ${formatBps(c.terms.startBps)} of its quote to the creator on top of the fees. Wait for the door.` });
+      notes.push({ level: "watch", code: "cover-open", text: `The door tax is still on for ${c.secondsLeft} s: buying now hands up to ${formatBps(c.terms.startBps)} of your money to the creator on top of the fees. Wait for it to end.` });
     } else if (c.status === "closed") {
       const taxed = c.observed.filter((b) => !b.creatorWallet && b.chargeBps > 0);
       const highest = taxed.length ? Math.max(...taxed.map((b) => b.chargeBps)) : 0;
       notes.push({
         level: "info",
         code: "cover-closed",
-        text: `Cover charge closed ${formatDuration(Math.max(0, c.head.timestamp - c.windowEndsAt))} ago. ${c.observed.length} buy${c.observed.length === 1 ? "" : "s"} landed inside the ${c.terms.seconds} s window${taxed.length ? `, the highest paid ${(highest / 100).toFixed(1)}% at the door` : ""}.`,
+        text: `The door tax ended ${formatDuration(Math.max(0, c.head.timestamp - c.windowEndsAt))} ago. ${c.observed.length} buy${c.observed.length === 1 ? "" : "s"} landed in the first ${c.terms.seconds} s${taxed.length ? `; the highest paid ${(highest / 100).toFixed(1)}% at the door` : ""}.`,
       });
     }
-    if (c.termsChangedSinceLaunch) notes.push({ level: "watch", code: "terms-retuned", text: "The factory retuned its anti-snipe terms after this launch; the curve keeps the terms it launched under, which are not the ones shown." });
+    if (c.termsChangedSinceLaunch) notes.push({ level: "watch", code: "terms-retuned", text: "The factory changed its door-tax settings after this launch; this token keeps the settings it launched under, which are not the ones shown." });
   } else if (slip.launchBlock === null) {
-    notes.push({ level: "info", code: "launch-older", text: "Launch is older than the search window, so the cover charge window is long closed and was not read." });
+    notes.push({ level: "info", code: "launch-older", text: "This launch is older than the search window, so the door tax ended long ago and was not read." });
   }
 
   const r = slip.rules;
   if (r) {
-    if (r.totalTradeBps >= 1_000n) notes.push({ level: "watch", code: "high-tax", text: `Every curve trade pays ${formatBps(r.totalTradeBps)} of its quote leg (${formatBps(r.creatorTaxBps)} of it to the creator).` });
-    if (r.creatorFeeRecipientChanges.length) notes.push({ level: "watch", code: "fee-recipient-moved", text: `The creator moved the tax recipient ${r.creatorFeeRecipientChanges.length}× since launch, last to ${shortAddress(r.creatorFeeRecipientChanges[r.creatorFeeRecipientChanges.length - 1].to)}.` });
+    if (r.totalTradeBps >= 1_000n) notes.push({ level: "watch", code: "high-tax", text: `Every trade pays ${formatBps(r.totalTradeBps)} in fees, ${formatBps(r.creatorTaxBps)} of it to the creator.` });
+    if (r.creatorFeeRecipientChanges.length) notes.push({ level: "watch", code: "fee-recipient-moved", text: `The creator changed where their cut is paid ${r.creatorFeeRecipientChanges.length}× since launch, last to ${shortAddress(r.creatorFeeRecipientChanges[r.creatorFeeRecipientChanges.length - 1].to)}.` });
     if (r.deployerShareBps >= 2_000) notes.push({ level: "watch", code: "dev-holds", text: `The deployer holds ${(r.deployerShareBps / 100).toFixed(1)}% of supply.` });
-    if (r.buybackEnabled) notes.push({ level: "info", code: "buyback-vests", text: "Buyback is on. Bought-back tokens are locked and vest to the creator and protocol over five years; they are not burned." });
-    if (r.phase === GraduationPhase.Swept) notes.push({ level: "info", code: "swept-no-pool", text: "Swept but no pool yet: the curve is closed and the Uniswap pool has not been created." });
-    if (r.phase === GraduationPhase.PoolCreated || r.phase === GraduationPhase.Rescued) notes.push({ level: "info", code: "graduated", text: "Graduated. The pool position is held by the launchpad's locker; the creator cannot pull it." });
+    if (r.buybackEnabled) notes.push({ level: "info", code: "buyback-vests", text: "Buyback is on. It does not burn anything: bought-back tokens are locked and released to the creator and the protocol over five years." });
+    if (r.phase === GraduationPhase.Swept) notes.push({ level: "info", code: "swept-no-pool", text: "The curve is closed and the Uniswap pool has not been created yet, so nothing trades right now." });
+    if (r.phase === GraduationPhase.PoolCreated || r.phase === GraduationPhase.Rescued) notes.push({ level: "info", code: "graduated", text: "Graduated: it trades in a Uniswap pool whose liquidity is locked by the launchpad. The creator cannot pull it." });
   }
 
   const room = slip.room;
   if (room && room.buys > 0) {
-    if (room.devShareBps >= 5_000) notes.push({ level: "watch", code: "dev-funded", text: `The creator's own wallets funded ${(room.devShareBps / 100).toFixed(0)}% of everything bought on the curve.` });
-    if (room.sharedBlocks.length >= 3) notes.push({ level: "watch", code: "bundled-blocks", text: `${room.sharedBlocks.length} blocks had several different wallets buying in the same block, the shape of a bundled launch.` });
+    if (room.devShareBps >= 5_000) notes.push({ level: "watch", code: "dev-funded", text: `The creator's own wallets paid for ${(room.devShareBps / 100).toFixed(0)}% of everything bought so far.` });
+    if (room.sharedBlocks.length >= 3) notes.push({ level: "watch", code: "bundled-blocks", text: `${room.sharedBlocks.length} times, several different wallets bought in the very same block: the shape of a bundled launch.` });
     if (room.buyers >= 25 && room.devShareBps < 2_000) notes.push({ level: "info", code: "room-wide", text: `${room.buyers} distinct buyers and the creator funded ${(room.devShareBps / 100).toFixed(0)}%.` });
   }
 
   const crew = slip.crew;
   if (crew) {
-    if (crew.largestCrewShareBps >= 2_500) notes.push({ level: "watch", code: "one-crew", text: `${crew.crews[0].wallets.length} of the first buyers were funded by the same address (${shortAddress(crew.crews[0].funder)}) and bought ${(crew.largestCrewShareBps / 100).toFixed(0)}% of the curve.` });
-    if (crew.fundedByCreator.length) notes.push({ level: "watch", code: "crew-creator", text: `${crew.fundedByCreator.length} of the first buyers received their ${q.symbol} from the creator's wallets before buying.` });
+    if (crew.largestCrewShareBps >= 2_500) notes.push({ level: "watch", code: "one-crew", text: `${crew.crews[0].wallets.length} of the first buyers got their money from the same address (${shortAddress(crew.crews[0].funder)}) and together bought ${(crew.largestCrewShareBps / 100).toFixed(0)}% of everything.` });
+    if (crew.fundedByCreator.length) notes.push({ level: "watch", code: "crew-creator", text: `${crew.fundedByCreator.length} of the first buyers got their ${q.symbol} from the creator's wallets right before buying.` });
     if (!crew.crews.length && crew.checked >= 5 && !crew.fundedByCreator.length) notes.push({ level: "info", code: "crew-clean", text: `${crew.checked} first buyers checked, no shared funder.` });
   }
 
   const l = slip.lookalikes;
   if (l) {
     const others = l.candidates.filter((x) => x.address !== l.subject);
-    if (l.subjectIsEarliest === false) notes.push({ level: "watch", code: "lookalike-later", text: `Another ${l.query} launched on this factory before this one (${shortAddress(l.earliest!.address)}, block ${l.earliest!.launchBlock}). Tickers are not identities; check which one the team posted.` });
+    if (l.subjectIsEarliest === false) notes.push({ level: "watch", code: "lookalike-later", text: `Another token called ${l.query} launched before this one (${shortAddress(l.earliest!.address)}, block ${l.earliest!.launchBlock}). A name is not an identity; check which address the team posted.` });
     else if (others.length) notes.push({ level: "info", code: "lookalikes", text: `${others.length} other token${others.length === 1 ? "" : "s"} called ${l.query} exist on this chain${l.subjectIsEarliest ? "; this one launched first" : ""}.` });
   }
 
@@ -247,15 +247,15 @@ export function doorNotes(slip: DoorSlip): DoorNote[] {
   if (e) {
     const whole = e.quotes.find((x) => x.shareBps === 10_000);
     if (e.venue === "closed") notes.push({ level: "info", code: "exit-closed", text: e.note });
-    else if (whole && whole.realisedBps > 0 && whole.realisedBps < 5_000) notes.push({ level: "info", code: "exit-thin", text: `Selling 1% of supply now would realise ${(whole.realisedBps / 100).toFixed(0)}% of spot: the ${e.venue} is thin.` });
+    else if (whole && whole.realisedBps > 0 && whole.realisedBps < 5_000) notes.push({ level: "info", code: "exit-thin", text: `Selling 1% of supply now would get only ${(whole.realisedBps / 100).toFixed(0)}% of the quoted price: liquidity is thin.` });
   }
 
   const d = slip.dev;
   if (d) {
-    if (d.counts.launched === 0) notes.push({ level: "info", code: "dev-first", text: "First launch from this deployer in the window." });
-    if (d.counts.launched >= 5 && d.counts.graduated === 0) notes.push({ level: "watch", code: "dev-serial", text: `This deployer launched ${d.counts.launched} tokens in the window and none graduated.` });
-    if (d.repeatedSymbols.length) notes.push({ level: "watch", code: "dev-repeat", text: `Same ticker launched more than once by this deployer: ${d.repeatedSymbols.join(", ")}.` });
-    if (d.counts.graduated > 0) notes.push({ level: "info", code: "dev-graduated", text: `This deployer has ${d.counts.graduated} graduation${d.counts.graduated === 1 ? "" : "s"} in the window${d.medianSecondsToSweep !== null ? `, median ${formatDuration(d.medianSecondsToSweep)} from launch to sweep` : ""}.` });
+    if (d.counts.launched === 0) notes.push({ level: "info", code: "dev-first", text: "First launch from this dev in the window." });
+    if (d.counts.launched >= 5 && d.counts.graduated === 0) notes.push({ level: "watch", code: "dev-serial", text: `This dev launched ${d.counts.launched} tokens in the window and none of them graduated.` });
+    if (d.repeatedSymbols.length) notes.push({ level: "watch", code: "dev-repeat", text: `This dev launched the same ticker more than once: ${d.repeatedSymbols.join(", ")}.` });
+    if (d.counts.graduated > 0) notes.push({ level: "info", code: "dev-graduated", text: `This dev has ${d.counts.graduated} graduation${d.counts.graduated === 1 ? "" : "s"} in the window${d.medianSecondsToSweep !== null ? `, typically ${formatDuration(d.medianSecondsToSweep)} from launch to a full curve` : ""}.` });
   }
   for (const s of slip.skipped) notes.push({ level: "info", code: "skipped", text: `${s.section} could not be read: ${s.reason}` });
   return notes;
