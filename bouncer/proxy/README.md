@@ -19,6 +19,10 @@ curl -s https://bouncer-proxy.<your-name>.workers.dev/
 curl -s -X POST https://bouncer-proxy.<your-name>.workers.dev/rpc/robinhood -H 'content-type: application/json' -d '{"jsonrpc":"2.0","id":1,"method":"eth_chainId","params":[]}'
 ```
 
+## Deploy from GitHub instead (no local tools)
+
+Add two repository secrets (Settings → Secrets and variables → Actions): `CLOUDFLARE_API_TOKEN` (create one at dash.cloudflare.com → My Profile → API Tokens → "Edit Cloudflare Workers" template) and `CLOUDFLARE_ACCOUNT_ID` (on the Workers overview page). Then run the **deploy-proxy** workflow from the Actions tab; it deploys again on every change to `proxy/`.
+
 ## Point the site at it
 
 Open the site → **Settings** → **Proxy URL** → paste `https://bouncer-proxy.<your-name>.workers.dev` → check a token. The site then reads every chain through `<proxy>/rpc/<chain>` and the explorer through `<proxy>/api/<chain>/…`. The setting stays in your browser.
