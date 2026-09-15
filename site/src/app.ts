@@ -36,6 +36,9 @@ const LEVEL_WORD: Record<Level, string> = { stop: "Stop", watch: "Careful", info
 const REPO = "github.com/Kepochnik/bouncer";
 const MARK = "$BOUNCER";
 const ADDR = /^0x[0-9a-fA-F]{40}$/;
+/** The claude.ai preview sandbox blocks every network request a page makes; live mode cannot work there. */
+const SANDBOXED = /(^|\.)claude\.ai$|claudeusercontent|anthropic/.test(location.hostname);
+const HOSTED = "https://kepochnik.github.io/kepochnik/";
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 const out = $("out");
@@ -78,7 +81,9 @@ function setMode(next: Mode, silent = false): void {
   sourcePill.textContent = next === "demo" ? "Demo data" : `Live · ${chain().name}`;
   sourcePill.classList.toggle("live", next === "live");
   sourceText.innerHTML = next === "demo"
-    ? "You are looking at an invented example chain. Switch to <b>Live</b> to check a real token."
+    ? SANDBOXED
+      ? `You are looking at an invented example chain. This preview on claude.ai cannot reach the internet, so <b>Live</b> is off here: use the <a href="${HOSTED}">hosted site</a>, the Chrome extension or the CLI for real tokens.`
+      : "You are looking at an invented example chain. Switch to <b>Live</b> to check a real token."
     : `Reading ${esc(chain().name)} from your browser at one block. Nothing is cached.`;
   renderChips();
   if (!silent) storage("bouncer.mode", next);
@@ -180,7 +185,9 @@ function failed(error: unknown, input: string): void {
   const network = /fetch|network|failed|CORS|load|abort/i.test(message) && mode === "live";
   status.textContent = "";
   out.innerHTML = `<div class="error"><strong>Could not read the chain.</strong><p>${esc(message)}</p>${
-    network ? `<p>The browser could not reach the RPC. Public endpoints often refuse requests from websites. Three ways out: the <a href="https://github.com/Kepochnik/bouncer#browser-extension">Chrome extension</a> (it can call any RPC), an RPC URL that allows browser requests under Settings, or the CLI: <code>npx bouncer door ${esc(input)} --chain ${esc(chain().key)}</code>. Demo mode works offline.</p>` : ""
+    SANDBOXED
+      ? `<p>This is the claude.ai preview: the sandbox blocks every request a page makes, so no RPC can be reached from here, whatever its settings. Real tokens work on the <a href="${HOSTED}">hosted site</a>, in the <a href="https://github.com/Kepochnik/bouncer#browser-extension">Chrome extension</a> (it can call any RPC), or in the CLI: <code>npx bouncer door ${esc(input)} --chain ${esc(chain().key)}</code>.</p>`
+      : network ? `<p>The browser could not reach the RPC. Public endpoints often refuse requests from websites. Three ways out: the <a href="https://github.com/Kepochnik/bouncer#browser-extension">Chrome extension</a> (it can call any RPC), an RPC URL that allows browser requests under Settings, or the CLI: <code>npx bouncer door ${esc(input)} --chain ${esc(chain().key)}</code>. Demo mode works offline.</p>` : ""
   }</div>`;
 }
 
@@ -782,6 +789,11 @@ function boot(): void {
   });
   $("mode-demo").addEventListener("click", () => setMode("demo"));
   $("mode-live").addEventListener("click", () => setMode("live"));
+  if (SANDBOXED) {
+    const live = $<HTMLButtonElement>("mode-live");
+    live.disabled = true;
+    live.title = "Live mode cannot run inside the claude.ai preview: the sandbox blocks network requests. Use the hosted site or the Chrome extension.";
+  }
   settingsToggle.addEventListener("click", () => {
     const open = !settings.classList.contains("open");
     settings.classList.toggle("open", open);
@@ -792,7 +804,7 @@ function boot(): void {
     submit();
   });
   window.addEventListener("hashchange", route);
-  setMode((storage("bouncer.mode") as Mode | null) ?? "demo", true);
+  setMode(SANDBOXED ? "demo" : ((storage("bouncer.mode") as Mode | null) ?? "demo"), true);
   setView("door");
   if (location.hash) route();
   else {
