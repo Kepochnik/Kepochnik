@@ -34,6 +34,8 @@ header{display:flex;align-items:center;gap:18px;padding-block:22px 6px;flex-wrap
 .mode{display:inline-flex;gap:0;border:1px solid var(--line-2);border-radius:999px;overflow:hidden;font:600 12px/1 var(--mono);letter-spacing:.08em}
 .mode button{background:transparent;border:0;color:var(--muted);padding:9px 14px;cursor:pointer;text-transform:uppercase}
 .mode button[aria-pressed="true"]{background:var(--brass);color:#1a1405}
+.mode button[disabled]{opacity:.4;cursor:not-allowed}
+.source a{color:var(--brass-2)}
 .mode button:focus-visible{outline:2px solid var(--brass-2);outline-offset:-2px}
 .door{margin-top:26px;background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:22px}
 .door label{display:block;font:600 12px/1 var(--mono);letter-spacing:.14em;text-transform:uppercase;color:var(--brass);margin-bottom:10px}
