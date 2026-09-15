@@ -1,0 +1,4 @@
+name = "bouncer-proxy"
+main = "worker.mjs"
+compatibility_date = "2025-06-01"
+workers_dev = true

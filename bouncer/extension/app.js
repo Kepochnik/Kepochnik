@@ -2631,6 +2631,7 @@
   var ADDR = /^0x[0-9a-fA-F]{40}$/;
   var SANDBOXED = /(^|\.)claude\.ai$|claudeusercontent|anthropic/.test(location.hostname);
   var HOSTED = "https://kepochnik.github.io/kepochnik/";
+  var DEFAULT_PROXY = "";
   var $ = (id) => document.getElementById(id);
   var out = $("out");
   var status = $("status");
@@ -2638,6 +2639,7 @@
   var q = $("q");
   var go = $("go");
   var rpcInput = $("rpc");
+  var proxyInput = $("proxy");
   var factoryInput = $("factory");
   var chainSelect = $("chain");
   var settings = $("settings");
@@ -2691,16 +2693,23 @@
     if (parts.length === 1 && /^0x/.test(parts[0]) && mode === "demo" && /^0xdemo/i.test(parts[0])) return { view: "tx", parts };
     return null;
   }
+  function proxyBase() {
+    return (proxyInput.value.trim() || DEFAULT_PROXY).replace(/\/$/, "");
+  }
   function rpcFor() {
     if (mode === "demo") return demoRpc();
     const c = chain();
     const url = rpcInput.value.trim();
-    return new RpcClient({ urls: url ? [url] : c.rpc, expectedChainId: c.chainId, minSpacingMs: 120 });
+    const proxy = proxyBase();
+    const urls = url ? [url] : proxy ? [`${proxy}/rpc/${c.key}`, ...c.rpc] : c.rpc;
+    return new RpcClient({ urls, expectedChainId: c.chainId, minSpacingMs: 120 });
   }
   function blockscoutFor() {
     if (mode === "demo") return new BlockscoutClient({ baseUrl: DEMO_BLOCKSCOUT, fetchImpl: demoBlockscoutFetch() });
     const c = chain();
-    return c.blockscout ? new BlockscoutClient({ baseUrl: c.blockscout }) : null;
+    if (!c.blockscout) return null;
+    const proxy = proxyBase();
+    return new BlockscoutClient({ baseUrl: proxy ? `${proxy}/api/${c.key}` : c.blockscout });
   }
   function factoryFor() {
     const c = chain();
@@ -2759,7 +2768,7 @@
     const message = error instanceof Error ? error.message : String(error);
     const network = /fetch|network|failed|CORS|load|abort/i.test(message) && mode === "live";
     status.textContent = "";
-    out.innerHTML = `<div class="error"><strong>Could not read the chain.</strong><p>${esc2(message)}</p>${SANDBOXED ? `<p>This is the claude.ai preview: the sandbox blocks every request a page makes, so no RPC can be reached from here, whatever its settings. Real tokens work on the <a href="${HOSTED}">hosted site</a>, in the <a href="https://github.com/Kepochnik/bouncer#browser-extension">Chrome extension</a> (it can call any RPC), or in the CLI: <code>npx bouncer door ${esc2(input)} --chain ${esc2(chain().key)}</code>.</p>` : network ? `<p>The browser could not reach the RPC. Public endpoints often refuse requests from websites. Three ways out: the <a href="https://github.com/Kepochnik/bouncer#browser-extension">Chrome extension</a> (it can call any RPC), an RPC URL that allows browser requests under Settings, or the CLI: <code>npx bouncer door ${esc2(input)} --chain ${esc2(chain().key)}</code>. Demo mode works offline.</p>` : ""}</div>`;
+    out.innerHTML = `<div class="error"><strong>Could not read the chain.</strong><p>${esc2(message)}</p>${SANDBOXED ? `<p>This is the claude.ai preview: the sandbox blocks every request a page makes, so no RPC can be reached from here, whatever its settings. Real tokens work on the <a href="${HOSTED}">hosted site</a>, in the <a href="https://github.com/Kepochnik/bouncer#browser-extension">Chrome extension</a> (it can call any RPC), or in the CLI: <code>npx bouncer door ${esc2(input)} --chain ${esc2(chain().key)}</code>.</p>` : network ? `<p>The browser could not reach the RPC. Public endpoints often refuse requests from websites. Three ways out: deploy the read-only <a href="https://github.com/Kepochnik/bouncer/tree/main/proxy">proxy</a> (3 minutes, free) and paste its URL under Settings \u2192 Proxy URL; the <a href="https://github.com/Kepochnik/bouncer#browser-extension">Chrome extension</a> (it can call any RPC); or the CLI: <code>npx bouncer door ${esc2(input)} --chain ${esc2(chain().key)}</code>. Demo mode works offline.</p>` : ""}</div>`;
   }
   function done(text) {
     go.disabled = false;
@@ -3310,6 +3319,8 @@
   function boot() {
     $("mark").src = `data:image/svg+xml;utf8,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" shape-rendering="crispEdges">${MASCOT_SVG_INNER}</svg>`)}`;
     rpcInput.value = storage("bouncer.rpc") ?? "";
+    proxyInput.value = storage("bouncer.proxy") ?? "";
+    proxyInput.addEventListener("change", () => storage("bouncer.proxy", proxyInput.value.trim()));
     factoryInput.value = storage("bouncer.factory") ?? "";
     chainSelect.value = storage("bouncer.chain") ?? "robinhood";
     rpcInput.addEventListener("change", () => storage("bouncer.rpc", rpcInput.value.trim()));

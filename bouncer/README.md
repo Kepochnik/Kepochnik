@@ -133,6 +133,10 @@ Every command takes `--chain robinhood|arc-testnet|arc`, `--factory <address>`, 
 
 Radian is a faithful port of the Pons V2 contracts on Circle's Arc, quoted in native USDC. The read path is identical, so BOUNCER runs there with `--chain arc-testnet` (chain 5042002, Radian's published factory) today and `--chain arc --factory 0x…` on mainnet (chain 5042, opens 2026-09-16) as soon as Radian publishes its mainnet factory. The site has the same selector. Amounts print in USDC; the table of chains, RPCs, explorers and factories is [docs/CHAINS.md](docs/CHAINS.md).
 
+## The proxy (when a public RPC refuses browsers)
+
+Public RPCs often answer servers but not web pages ("Failed to fetch" in the browser). `proxy/` is a Cloudflare Worker that forwards read-only JSON-RPC and two explorer routes with CORS headers; nothing else passes. `cd proxy && npx wrangler login && npx wrangler deploy`, then paste the printed URL under Settings → Proxy URL on the site (or set `DEFAULT_PROXY` in `site/src/app.ts` to make it the default). Details in [proxy/README.md](proxy/README.md).
+
 ## Telegram bot
 
 ```bash
@@ -197,6 +201,7 @@ src/chain/chains.ts         Robinhood Chain, Arc Testnet, Arc
 src/chain/blockscout.ts     the smallest Blockscout v2 client
 src/bot/telegram.ts         the Telegram bot
 extension/                  Manifest V3 browser extension
+proxy/                      Cloudflare Worker: read-only JSON-RPC + explorer proxy with CORS
 site/                       the browser app (index.html + src/app.ts), built by scripts/build-site.mjs
 scripts/                    read-only check, mascot renderer, site build, terminal → SVG
 test/                       offline tests against the demo chain
