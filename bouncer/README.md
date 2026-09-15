@@ -143,24 +143,18 @@ Long polling, no webhook, no library. `/ca <token|curve>` prints the slip, `/dev
 
 ## Browser extension
 
-`extension/` is a Manifest V3 extension. On ponsfamily.com, gmgn.ai, dexscreener.com and the Blockscout explorers it pins a small `🦍 BOUNCER · check the list` badge that opens the slip for the address in the page URL; the popup takes any address (pre-filled from the current tab) and opens it on the site. It reads the URL and nothing else: no wallet, no page storage, no injected requests. Load it unpacked from `chrome://extensions` (Chrome, Brave, Arc, Edge) and set the site URL in the popup once.
+The whole site in a Chrome popup, with one thing a web page cannot do: an extension page may call any RPC directly, so the public endpoints answer it even when they refuse browser requests from a website. Open it on a token page (ponsfamily.com, gmgn.ai, dexscreener.com, the Blockscout explorers) and the slip for the address in the URL opens in live mode on the matching chain. A small `🦍 BOUNCER · check the list` badge is pinned on those pages too. It reads the page URL and nothing else: no wallet, no page storage, no injected requests.
 
-## How it reads the chain
+<p align="center"><img src="assets/readme/extension.png" width="100%" alt="the BOUNCER popup on a token page: the slip in a 560 px column, cover charge countdown, door notes" /></p>
 
-```mermaid
-flowchart LR
-  A[address] --> F["factory getLaunchedToken<br/>(or curve.token() first)"]
-  F --> C["eth_getCode + EIP-1967 slots<br/>opcode walk"]
-  F --> L["TokenLaunched for the token<br/>→ launch block + timestamp"]
-  L --> T["factory terms + retune logs<br/>curve CurveBuy inside the window"]
-  F --> H["curve state, fee-recipient and buyback logs"]
-  F --> D["TokenLaunched by deployer<br/>over 24 h, adaptive chunks"]
-  C & T & H & D --> S["slip: stamp + door notes<br/>text · markdown · json · svg"]
-```
+**Install (Chrome, Brave, Arc, Edge; Manifest V3):**
 
-- Factory `0x7eD598BcEf8bd9Edd8C97A195C6d13f40801EC7e` on chain `4663`, public RPC `https://rpc.mainnet.chain.robinhood.com` (override with `RPC_URL`, fallbacks with `RPC_FALLBACK_URLS`).
-- Every `eth_call` in one slip is pinned to one block. Logs are read in chunks the endpoint tolerates, with pacing and backoff on 429; narrow reads use adaptive chunking that halves on a range error. A chunk that fails is an error, never a zero.
-- The rule for every line: [docs/RULES.md](docs/RULES.md). Known gaps: [docs/LIMITATIONS.md](docs/LIMITATIONS.md).
+1. Download `bouncer-extension.zip` from the site footer (or build it: `npm run site` writes `site/dist/bouncer-extension.zip`), or use the `extension/` folder of this repo as is.
+2. Open `chrome://extensions`, turn on **Developer mode** (top right).
+3. Drag the zip onto the page, or **Load unpacked** and pick the `extension/` folder.
+4. Pin BOUNCER in the toolbar. Click it on any token page.
+
+The popup keeps its own settings (chain, RPC, factory) in the extension's storage. Not on the Chrome Web Store yet: the listing needs a developer account; the zip is the same code, unsigned.
 
 ## Prior art, named
 

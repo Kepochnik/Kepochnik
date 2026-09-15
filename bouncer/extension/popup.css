@@ -1,0 +1,10 @@
+/* Popup-only overrides: a fixed width, one column, no remote fonts. */
+body{width:560px;min-height:640px;max-height:600px;overflow-y:auto;padding-inline:14px}
+.grid{grid-template-columns:1fr}
+.stamp-row{grid-template-columns:1fr}
+.stamp{justify-self:start;transform:rotate(-3deg)}
+.brand h1{font-size:34px}
+.chips{display:none}
+header{padding-block:14px 4px}
+.mark{width:40px;height:40px}
+.ext{display:none}
