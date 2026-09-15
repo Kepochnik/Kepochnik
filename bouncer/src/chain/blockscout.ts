@@ -32,7 +32,7 @@ export class BlockscoutClient {
 
   constructor(options: BlockscoutOptions) {
     this.baseUrl = options.baseUrl.replace(/\/$/, "");
-    this.fetchImpl = options.fetchImpl ?? fetch;
+    this.fetchImpl = options.fetchImpl ?? ((input: RequestInfo | URL, init?: RequestInit) => fetch(input, init));
     this.timeoutMs = options.timeoutMs ?? 15_000;
   }
 

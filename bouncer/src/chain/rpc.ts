@@ -70,7 +70,7 @@ export class RpcClient {
     this.urls = options.urls;
     this.expectedChainId = options.expectedChainId;
     this.timeoutMs = options.timeoutMs ?? 15_000;
-    this.fetchImpl = options.fetchImpl ?? fetch;
+    this.fetchImpl = options.fetchImpl ?? ((input: RequestInfo | URL, init?: RequestInit) => fetch(input, init));
     this.minSpacingMs = options.minSpacingMs ?? (options.fetchImpl ? 0 : 120);
     this.rateLimitRetries = options.rateLimitRetries ?? 3;
   }

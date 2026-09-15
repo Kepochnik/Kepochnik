@@ -7,7 +7,7 @@
     timeoutMs;
     constructor(options) {
       this.baseUrl = options.baseUrl.replace(/\/$/, "");
-      this.fetchImpl = options.fetchImpl ?? fetch;
+      this.fetchImpl = options.fetchImpl ?? ((input, init) => fetch(input, init));
       this.timeoutMs = options.timeoutMs ?? 15e3;
     }
     async get(path) {
@@ -774,7 +774,7 @@
       this.urls = options.urls;
       this.expectedChainId = options.expectedChainId;
       this.timeoutMs = options.timeoutMs ?? 15e3;
-      this.fetchImpl = options.fetchImpl ?? fetch;
+      this.fetchImpl = options.fetchImpl ?? ((input, init) => fetch(input, init));
       this.minSpacingMs = options.minSpacingMs ?? (options.fetchImpl ? 0 : 120);
       this.rateLimitRetries = options.rateLimitRetries ?? 3;
     }
