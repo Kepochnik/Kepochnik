@@ -1,11 +1,12 @@
 name: pages
 
-# Builds the site and publishes it to GitHub Pages. Runs on the standalone
-# repo's main branch and on the bouncer-main subtree branch of a monorepo;
-# configure-pages turns Pages on for the repository the first time.
+# Builds the site and publishes it to GitHub Pages from the standalone
+# repo's main branch; configure-pages turns Pages on the first time. Inside
+# the Kepochnik monorepo the same deploy runs from bouncer-pages.yml on the
+# default branch (the github-pages environment only admits that branch).
 on:
   push:
-    branches: [main, bouncer-main]
+    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -34,12 +35,12 @@ jobs:
       - uses: actions/upload-pages-artifact@v3
         with:
           path: site/dist
-  # No `environment:` block: the github-pages environment only admits the
-  # default branch by default, which would reject the bouncer-main subtree.
   deploy:
     needs: build
     runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - id: deployment
         uses: actions/deploy-pages@v4
-      - run: echo "deployed to ${{ steps.deployment.outputs.page_url }}"
