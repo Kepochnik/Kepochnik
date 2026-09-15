@@ -15,6 +15,8 @@ export interface ChainConfig {
   blockscout: string | null;
   /** Launchpad factory (PonsV2LaunchFactory or its port), lower-cased, or null when not published yet. */
   factory: string | null;
+  /** The older Pons V1 factory on this chain, when there is one; V1 tokens are read from it so they are not called impostors. */
+  factoryV1?: string;
   launchpad: string;
   native: { symbol: string; decimals: number };
   /** Roughly how many blocks per second, for "the last N hours" estimates before pinning to headers. */
@@ -30,6 +32,7 @@ export const CHAINS: Record<string, ChainConfig> = {
     rpc: ["https://rpc.mainnet.chain.robinhood.com"],
     blockscout: "https://robinhoodchain.blockscout.com",
     factory: "0x7eD598BcEf8bd9Edd8C97A195C6d13f40801EC7e".toLowerCase(),
+    factoryV1: "0xA5aAb3F0c6EeadF30Ef1D3Eb997108E976351feB".toLowerCase(),
     launchpad: "Pons V2",
     native: { symbol: "ETH", decimals: 18 },
     blocksPerSecond: 10,

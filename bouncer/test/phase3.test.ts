@@ -5,7 +5,8 @@ import { BlockscoutClient } from "../src/chain/blockscout.js";
 import { CHAINS } from "../src/chain/chains.js";
 import { PONS_V2_FACTORY } from "../src/chain/pons.js";
 import { PonsReader } from "../src/chain/reader.js";
-import { DEMO, DEMO_BLOCKSCOUT, demoBlockscoutFetch, demoRpc } from "../src/bouncer/demo.js";
+import { DEMO, DEMO_BLOCKSCOUT, DEMO_V1, demoBlockscoutFetch, demoRpc } from "../src/bouncer/demo.js";
+import { readDoor } from "../src/bouncer/door.js";
 import { readBoard } from "../src/bouncer/leaderboard.js";
 import { readWatchEvents, watchLaunch } from "../src/bouncer/watch.js";
 import { handleCommand, tickWatches, type Watch } from "../src/bot/telegram.js";
@@ -130,4 +131,19 @@ test("bot: /watch registers, a tick delivers the crew exit, /unwatch clears", as
   assert.equal(watches.length, 0);
   const board = await handleCommand("/board 1", chain, () => {}, { ...options }, ctx).catch((e: Error) => e.message);
   assert.ok(typeof board === "string");
+});
+
+test("a Pons V1 token is on the list with its own rules, not bounced", async () => {
+  const slip = await readDoor(demoRpc(), DEMO_V1.token, { chain: CHAINS.robinhood, factory: PONS_V2_FACTORY, blockscout: null, chunkSize: 100_000, launchSearchBlocks: 400_000 });
+  assert.equal(slip.stamp, "ON THE LIST");
+  assert.equal(slip.id.launchpad, "v1");
+  assert.equal(slip.id.v1?.record.positionId, 777n);
+  assert.equal(slip.id.v1?.restrictionBlocksLeft, 40);
+  assert.equal(slip.cover, null);
+  assert.ok(slip.notes.some((n) => n.code === "v1-launch"));
+  assert.ok(slip.notes.some((n) => n.code === "v1-caps"));
+  assert.ok(slip.id.v1!.rules.some((r) => /Uniswap V3/.test(r)));
+  const unknown = await readDoor(demoRpc(), "0x00000000000000000000000000000000000bad01", { chain: CHAINS.robinhood, factory: PONS_V2_FACTORY, blockscout: null, chunkSize: 100_000, launchSearchBlocks: 400_000 });
+  assert.equal(unknown.stamp, "NOT ON THE LIST");
+  assert.match(unknown.notes[0].text, /nor the Pons V1 factory/);
 });

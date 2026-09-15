@@ -11,6 +11,7 @@ import { EIP1967_BEACON_SLOT, EIP1967_IMPLEMENTATION_SLOT, scanBytecode, storage
 import { CURVE_FUNCTIONS, ERC20_FUNCTIONS, ZERO_ADDRESS, type LaunchedToken } from "../chain/pons.js";
 import { NotAPonsLaunch, PonsReader, type TokenMeta } from "../chain/reader.js";
 import type { RpcClient } from "../chain/rpc.js";
+import { readV1Launch, type V1Launch } from "./v1.js";
 
 export interface ContractId {
   address: string;
@@ -26,13 +27,21 @@ export interface IdCheck {
   /** How the input was resolved: given a token, given its curve, or neither. */
   resolvedAs: "token" | "curve" | "unknown";
   registered: boolean;
+  /** Which launchpad generation the factory record came from. */
+  launchpad: "v2" | "v1" | null;
   launch: LaunchedToken | null;
+  v1: V1Launch | null;
   token: ContractId;
   meta: TokenMeta | null;
   curve: ContractId | null;
 }
 
-export async function readIdCheck(rpc: RpcClient, input: string, block: number, factory?: string): Promise<IdCheck> {
+export interface IdCheckOptions {
+  factoryV1?: string;
+  native?: { symbol: string; decimals: number };
+}
+
+export async function readIdCheck(rpc: RpcClient, input: string, block: number, factory?: string, options: IdCheckOptions = {}): Promise<IdCheck> {
   if (!isAddress(input)) throw new Error(`${input} is not an address`);
   const address = normalizeAddress(input);
   const reader = new PonsReader(rpc, factory);
@@ -59,12 +68,22 @@ export async function readIdCheck(rpc: RpcClient, input: string, block: number, 
     }
   }
 
+  let v1: V1Launch | null = null;
+  if (!launch && options.factoryV1) {
+    try {
+      v1 = await readV1Launch(rpc, options.factoryV1, address, block, options.native ?? { symbol: "ETH", decimals: 18 });
+      if (v1) resolvedAs = "token";
+    } catch {
+      v1 = null;
+    }
+  }
+
   const tokenAddress = launch ? launch.token.toLowerCase() : address;
   const token = await readContractId(rpc, tokenAddress, block);
   const curve = launch ? await readContractId(rpc, launch.curve.toLowerCase(), block) : null;
   const meta = token.code.empty ? null : await readMetaSafely(rpc, tokenAddress, block);
 
-  return { input: address, resolvedAs, registered: launch !== null, launch, token, meta, curve };
+  return { input: address, resolvedAs, registered: launch !== null || v1 !== null, launchpad: launch ? "v2" : v1 ? "v1" : null, launch, v1, token, meta, curve };
 }
 
 export async function readContractId(rpc: RpcClient, address: string, block: number): Promise<ContractId> {

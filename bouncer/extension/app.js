@@ -70,6 +70,7 @@
       rpc: ["https://rpc.mainnet.chain.robinhood.com"],
       blockscout: "https://robinhoodchain.blockscout.com",
       factory: "0x7eD598BcEf8bd9Edd8C97A195C6d13f40801EC7e".toLowerCase(),
+      factoryV1: "0xA5aAb3F0c6EeadF30Ef1D3Eb997108E976351feB".toLowerCase(),
       launchpad: "Pons V2",
       native: { symbol: "ETH", decimals: 18 },
       blocksPerSecond: 10
@@ -111,6 +112,7 @@
   var ROBINHOOD_CHAIN_ID = 4663;
   var PONS_V2_FACTORY = "0x7eD598BcEf8bd9Edd8C97A195C6d13f40801EC7e".toLowerCase();
   var ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
+  var PONS_V1_FACTORY = "0xA5aAb3F0c6EeadF30Ef1D3Eb997108E976351feB".toLowerCase();
   var PHASE_LABEL = {
     [0 /* NotGraduated */]: "curve",
     [1 /* Swept */]: "swept",
@@ -228,6 +230,22 @@
     /** PairTokenEconomics struct: phantomQuote, graduationThreshold, decimals. */
     pairTokenEconomics: { name: "pairTokenEconomics", inputs: ["address"], outputs: ["uint256", "uint256", "uint8"] }
   };
+  var V1_FACTORY_FUNCTIONS = {
+    getLaunchedToken: {
+      name: "getLaunchedToken",
+      inputs: ["address"],
+      outputs: ["address", "address", "address", "address", "uint256", "uint256", "uint256", "uint256", "uint256", "bool", "uint24", "bool", "uint256"]
+    },
+    /** pairedPrincipal, threshold, graduated */
+    graduationStatus: { name: "graduationStatus", inputs: ["address"], outputs: ["uint256", "uint256", "bool"] },
+    /** pairToken, graduationThreshold, initialTick, supply, maxWalletBps, maxTxBps, restrictionBlocks, reservedFee, enabled, routerRequiresDeadline */
+    getLaunchConfig: { name: "getLaunchConfig", inputs: ["uint256"], outputs: ["address", "uint256", "int24", "uint256", "uint16", "uint16", "uint32", "uint24", "bool", "bool"] },
+    locker: { name: "locker", inputs: [], outputs: ["address"] }
+  };
+  function decodeV1LaunchedToken(values) {
+    const [token, deployer, pairedToken, positionManager, positionId, dexId, launchConfigId, restrictionsEndBlock, supply, isToken0, poolFee, exists, initialBuyAmount] = values;
+    return { token, deployer, pairedToken, positionManager, positionId, dexId, launchConfigId, restrictionsEndBlock, supply, isToken0, poolFee, exists, initialBuyAmount };
+  }
   var HOOK_FUNCTIONS = {
     /** FeePolicySnapshot: protocolFeeRecipient, protocolFeeShareBps, buybackBurnBps, hookFeeBps, maxInternalPriceImpactBps. */
     currentFeePolicy: { name: "currentFeePolicy", inputs: [], outputs: ["address", "uint16", "uint16", "uint16", "uint16"] }
@@ -1429,6 +1447,7 @@
   var DEMO_HOOK = "0x0000000000000000000000000000000000900c00";
   var DEMO_FUNDER = "0x000000000000000000000000000000000000feed";
   var DEMO_BLOCKSCOUT = "https://demo.blockscout.invalid";
+  var DEMO_V1 = { token: "0x0000000000000000000000000000000000001d1e", deployer: "0x00000000000000000000000000000000000001d1", positionId: 777n, restrictionsEndBlock: BigInt(HEAD + 40), name: "Old School", symbol: "OLDIE" };
   var DEMO_IMPOSTOR = { token: "0x00000000000000000000000000000000000bad01", implementation: "0x00000000000000000000000000000000000bad02" };
   var freshBuys = [[1, DEV_C, 400n * 10n ** 15n], [22, buyer(900), 300n * 10n ** 15n, 6e3], [70, buyer(901), 100n * 10n ** 15n, 1900]];
   var sprintBuys = [[3, DEV_A, 2600n * 10n ** 15n]];
@@ -1570,6 +1589,7 @@
             if (byToken.has(who)) return ok(DEMO_CODE.ponsToken);
             if (byCurve.has(who)) return ok(DEMO_CODE.ponsCurve);
             if (who === DEMO_IMPOSTOR.token) return ok(DEMO_CODE.impostor);
+            if (who === DEMO_V1.token || who === PONS_V1_FACTORY) return ok(DEMO_CODE.ponsToken);
             return ok("0x");
           }
           case "eth_getTransactionReceipt": {
@@ -1627,6 +1647,22 @@
                 if (who === t.curve) return ok(`0x${encodeWord("uint256", t.tokenReserve)}`);
                 return ok(`0x${encodeWord("uint256", 0n)}`);
               }
+            }
+            if (to === PONS_V1_FACTORY) {
+              if (s === sel("getLaunchedToken(address)")) {
+                const who = `0x${call.data.slice(34)}`;
+                if (who !== DEMO_V1.token) return ok(`0x${new Array(13).fill(encodeWord("uint256", 0n)).join("")}`);
+                return ok(`0x${[encodeWord("address", DEMO_V1.token), encodeWord("address", DEMO_V1.deployer), encodeWord("address", ZERO_ADDRESS), encodeWord("address", "0x0000000000000000000000000000000000009051"), encodeWord("uint256", DEMO_V1.positionId), encodeWord("uint256", 0n), encodeWord("uint256", 0n), encodeWord("uint256", DEMO_V1.restrictionsEndBlock), encodeWord("uint256", 10n ** 27n), encodeWord("bool", false), encodeWord("uint24", 10000n), encodeWord("bool", true), encodeWord("uint256", 5n * 10n ** 16n)].join("")}`);
+              }
+              if (s === sel("graduationStatus(address)")) return ok(`0x${[encodeWord("uint256", 12n * 10n ** 17n), encodeWord("uint256", 3n * 10n ** 18n), encodeWord("bool", false)].join("")}`);
+              if (s === sel("getLaunchConfig(uint256)")) return ok(`0x${[encodeWord("address", ZERO_ADDRESS), encodeWord("uint256", 3n * 10n ** 18n), encodeWord("int24", -200000n), encodeWord("uint256", 10n ** 27n), encodeWord("uint16", 200n), encodeWord("uint16", 100n), encodeWord("uint32", 300n), encodeWord("uint24", 10000n), encodeWord("bool", true), encodeWord("bool", false)].join("")}`);
+              if (s === sel("locker()")) return ok(`0x${encodeWord("address", "0x00000000000000000000000000000000000010c4")}`);
+            }
+            if (to === DEMO_V1.token) {
+              if (s === sel("name()")) return ok(`0x${encodeString(DEMO_V1.name)}`);
+              if (s === sel("symbol()")) return ok(`0x${encodeString(DEMO_V1.symbol)}`);
+              if (s === sel("decimals()")) return ok(`0x${encodeWord("uint8", 18n)}`);
+              if (s === sel("totalSupply()")) return ok(`0x${encodeWord("uint256", 10n ** 27n)}`);
             }
             if (to === DEMO_IMPOSTOR.token) {
               if (s === sel("name()")) return ok(`0x${encodeString("Sprint")}`);
@@ -1795,8 +1831,71 @@
     return out2;
   }
 
+  // src/bouncer/v1.ts
+  async function readV1Launch(rpc, factory, token, block, native) {
+    const [raw] = await rpc.callBatch([{ to: factory, data: encodeCall(V1_FACTORY_FUNCTIONS.getLaunchedToken, [token]) }], block);
+    const record = decodeV1LaunchedToken(decodeOutputs(V1_FACTORY_FUNCTIONS.getLaunchedToken, raw));
+    if (!record.exists) return null;
+    const [statusRaw, configRaw, lockerRaw] = await rpc.callBatch(
+      [
+        { to: factory, data: encodeCall(V1_FACTORY_FUNCTIONS.graduationStatus, [token]) },
+        { to: factory, data: encodeCall(V1_FACTORY_FUNCTIONS.getLaunchConfig, [record.launchConfigId]) },
+        { to: factory, data: encodeCall(V1_FACTORY_FUNCTIONS.locker, []) }
+      ],
+      block
+    ).catch(() => [null, null, null]);
+    const [pairedPrincipal, threshold, graduated] = statusRaw ? decodeOutputs(V1_FACTORY_FUNCTIONS.graduationStatus, statusRaw) : [0n, 0n, false];
+    let config = null;
+    if (configRaw) {
+      try {
+        const c = decodeOutputs(V1_FACTORY_FUNCTIONS.getLaunchConfig, configRaw);
+        config = { maxWalletBps: c[4], maxTxBps: c[5], restrictionBlocks: c[6], reservedFee: c[7], supply: c[3] };
+      } catch {
+        config = null;
+      }
+    }
+    let locker = null;
+    if (lockerRaw) {
+      try {
+        locker = decodeOutputs(V1_FACTORY_FUNCTIONS.locker, lockerRaw)[0].toLowerCase();
+      } catch {
+        locker = null;
+      }
+    }
+    const pairedNative = record.pairedToken.toLowerCase() === ZERO_ADDRESS;
+    let quote = native;
+    if (!pairedNative) {
+      try {
+        quote = await readTokenMeta(rpc, record.pairedToken, block);
+      } catch {
+        quote = { symbol: `${record.pairedToken.slice(0, 8)}\u2026`, decimals: 18 };
+      }
+    }
+    const restrictionBlocksLeft = Math.max(0, Number(record.restrictionsEndBlock) - block);
+    const launch = { factory, record, quote, status: { pairedPrincipal, threshold, graduated }, config, locker, restrictionBlocksLeft, rules: [] };
+    launch.rules = v1RulesInWords(launch, block);
+    return launch;
+  }
+  function v1RulesInWords(l, block) {
+    const out2 = [];
+    const q2 = l.quote;
+    out2.push(`Pons V1 launch: the whole supply of ${formatUnits(l.record.supply, 18, 0)} tokens was paired into a Uniswap V3 pool (fee ${Number(l.record.poolFee) / 1e4}%) at launch. There is no bonding curve; it has traded in the pool from the first block.`);
+    if (l.config) {
+      out2.push(
+        l.restrictionBlocksLeft > 0 ? `Launch caps are still on for ${l.restrictionBlocksLeft} more blocks (until block ${l.record.restrictionsEndBlock}): no wallet may hold more than ${formatBps(l.config.maxWalletBps)} of supply and no single trade may move more than ${formatBps(l.config.maxTxBps)}.` : `The launch caps (max ${formatBps(l.config.maxWalletBps)} per wallet, ${formatBps(l.config.maxTxBps)} per trade for ${l.config.restrictionBlocks} blocks) lifted at block ${l.record.restrictionsEndBlock}.`
+      );
+    }
+    out2.push(
+      l.status.graduated ? `Graduated: the pool holds ${formatUnits(l.status.pairedPrincipal, q2.decimals)} ${q2.symbol} of principal, past the ${formatUnits(l.status.threshold, q2.decimals)} ${q2.symbol} threshold.` : `Not graduated yet: ${formatUnits(l.status.pairedPrincipal, q2.decimals)} of the ${formatUnits(l.status.threshold, q2.decimals)} ${q2.symbol} threshold is in the pool.`
+    );
+    out2.push(`The liquidity position (#${l.record.positionId}) is held by the launchpad's locker${l.locker ? ` ${l.locker}` : ""}; the creator cannot pull it.`);
+    if (l.record.initialBuyAmount > 0n) out2.push(`The deployer bought ${formatUnits(l.record.initialBuyAmount, q2.decimals)} ${q2.symbol} worth in the launch transaction.`);
+    out2.push(`Read at block ${block}. V1 has no creator tax and no door tax; V2 tools (curve, cover charge, exit door) do not apply.`);
+    return out2;
+  }
+
   // src/bouncer/idCheck.ts
-  async function readIdCheck(rpc, input, block, factory) {
+  async function readIdCheck(rpc, input, block, factory, options = {}) {
     if (!isAddress(input)) throw new Error(`${input} is not an address`);
     const address = normalizeAddress(input);
     const reader = new PonsReader(rpc, factory);
@@ -1820,11 +1919,20 @@
         }
       }
     }
+    let v1 = null;
+    if (!launch && options.factoryV1) {
+      try {
+        v1 = await readV1Launch(rpc, options.factoryV1, address, block, options.native ?? { symbol: "ETH", decimals: 18 });
+        if (v1) resolvedAs = "token";
+      } catch {
+        v1 = null;
+      }
+    }
     const tokenAddress = launch ? launch.token.toLowerCase() : address;
     const token = await readContractId(rpc, tokenAddress, block);
     const curve = launch ? await readContractId(rpc, launch.curve.toLowerCase(), block) : null;
     const meta = token.code.empty ? null : await readMetaSafely(rpc, tokenAddress, block);
-    return { input: address, resolvedAs, registered: launch !== null, launch, token, meta, curve };
+    return { input: address, resolvedAs, registered: launch !== null || v1 !== null, launchpad: launch ? "v2" : v1 ? "v1" : null, launch, v1, token, meta, curve };
   }
   async function readContractId(rpc, address, block) {
     const code = scanBytecode(await rpc.getCode(address, block));
@@ -2033,7 +2141,7 @@
     const headNumber = await rpc.blockNumber();
     const head = await rpc.getBlock(headNumber);
     const searchBlocks = options.launchSearchBlocks ?? Math.round(7 * 86400 * chain2.blocksPerSecond);
-    const id = await readIdCheck(rpc, input, head.number, factory);
+    const id = await readIdCheck(rpc, input, head.number, factory, { factoryV1: chain2.factoryV1, native: chain2.native });
     const slip = {
       chain: { key: chain2.key, name: chain2.name, chainId: chain2.chainId, launchpad: chain2.launchpad, native: chain2.native },
       at: { block: head.number, timestamp: head.timestamp },
@@ -2125,11 +2233,19 @@
     const t = slip.id.token;
     const findings = idFindings(slip.id);
     const q2 = slip.chain.native;
+    if (slip.id.v1) {
+      const v = slip.id.v1;
+      notes.push({ level: "info", code: "v1-launch", text: `This is a Pons V1 token: fixed supply, traded in a Uniswap V3 pool from the first block. There is no bonding curve, no creator tax and no door tax, so those sections are not shown.` });
+      if (v.restrictionBlocksLeft > 0 && v.config) notes.push({ level: "watch", code: "v1-caps", text: `Launch caps are still on for ${v.restrictionBlocksLeft} blocks: max ${formatBps(v.config.maxWalletBps)} of supply per wallet, ${formatBps(v.config.maxTxBps)} per trade. A buy above the cap reverts.` });
+      if (!v.status.graduated) notes.push({ level: "info", code: "v1-not-graduated", text: `Not graduated: ${formatUnits(v.status.pairedPrincipal, v.quote.decimals)} of ${formatUnits(v.status.threshold, v.quote.decimals)} ${v.quote.symbol} in the pool.` });
+      for (const f of findings) notes.push({ level: "watch", code: "code", text: `Unexpected for a launchpad token: ${f}.` });
+      return notes;
+    }
     if (!slip.id.registered) {
       notes.push({
         level: "stop",
         code: "not-registered",
-        text: t.code.empty ? `No contract at this address on ${slip.chain.name}.` : `Not a ${slip.chain.launchpad} launch: the factory has no record of this address, so nothing below about curves, taxes or graduation applies to it.`
+        text: t.code.empty ? `No contract at this address on ${slip.chain.name}.` : `Not a ${slip.chain.launchpad} launch: neither the ${slip.chain.launchpad} factory${slip.chain.key === "robinhood" ? " nor the Pons V1 factory" : ""} has a record of this address. If it was launched elsewhere (another launchpad, or by hand), it is not a Pons token, whatever its name says.`
       });
       for (const f of findings) if (!f.startsWith("no bytecode")) notes.push({ level: "stop", code: "code", text: `Code can change or vanish: ${f}.` });
       return notes;
@@ -2595,7 +2711,8 @@
     { label: "A graduated token", hint: "filled its curve in 212 s", hash: `#/demo/${DEMO.tokens.sprint.token}` },
     { label: "A fake copy", hint: "same name, not from the factory", hash: `#/demo/${DEMO_IMPOSTOR.token}` },
     { label: "A dev on the move", hint: "sold and moved tokens, watch on", hash: `#/demo/${DEMO.tokens.late.token}?watch=1` },
-    { label: "A trade receipt", hint: "one buy, itemised", hash: `#/tx/0xdemoFRESH${DEMO.tokens.fresh.launched + 22}?chain=demo` }
+    { label: "A trade receipt", hint: "one buy, itemised", hash: `#/tx/0xdemoFRESH${DEMO.tokens.fresh.launched + 22}?chain=demo` },
+    { label: "A Pons V1 token", hint: "the older launchpad, caps still on", hash: `#/demo/${DEMO_V1.token}` }
   ];
   function renderChips() {
     const chips = $("chips");
@@ -2646,8 +2763,18 @@
     go.disabled = false;
     status.textContent = `${mode === "demo" ? "DEMO \xB7 " : `${chain().name} \xB7 `}${text}`;
   }
+  function isDemoAddress(address) {
+    const a = address.toLowerCase();
+    return Object.values(DEMO.tokens).some((t) => t.token === a || t.curve === a || t.deployer === a) || a === DEMO_IMPOSTOR.token || a === DEMO_V1.token || a === DEMO_V1.deployer || a === "0x000000000000000000000000000000000000dead";
+  }
   async function runDoor(address) {
     if (!ADDR.test(address)) return bad("Paste a 20-byte hex address: the token or its bonding curve, 0x followed by 40 hex characters.");
+    if (mode === "demo" && !isDemoAddress(address)) {
+      setMode("live");
+      showToast(`Real address: switched to live on ${chain().name}`);
+      location.hash = `#/t/${address.toLowerCase()}?chain=${chain().key}`;
+      return;
+    }
     busy("reading the chain at the door\u2026");
     try {
       const slip = await readDoor(rpcFor(), address, mode === "demo" ? { chain: CHAINS.robinhood, factory: factoryFor(), blockscout: blockscoutFor(), devHours: 8, chunkSize: 1e5, launchSearchBlocks: 4e5 } : { chain: chain(), factory: factoryFor(), blockscout: blockscoutFor(), devHours: 24 });
@@ -2817,6 +2944,13 @@
     out.innerHTML = `<div class="error"><strong>That is not what this tab needs.</strong><p>${esc2(text)}</p></div>`;
   }
   function summarySentence(slip) {
+    if (slip.id.v1) {
+      const v = slip.id.v1;
+      const parts2 = ["Real Pons V1 launch: fixed supply, trading in a Uniswap V3 pool since block one, liquidity locked"];
+      if (v.restrictionBlocksLeft > 0 && v.config) parts2.push(`launch caps are on for ${v.restrictionBlocksLeft} more blocks (max ${formatBps(v.config.maxWalletBps)} per wallet)`);
+      parts2.push(v.status.graduated ? "graduated" : `${formatUnits(v.status.pairedPrincipal, v.quote.decimals)} of ${formatUnits(v.status.threshold, v.quote.decimals)} ${v.quote.symbol} towards graduation`);
+      return parts2.map((x) => x.charAt(0).toUpperCase() + x.slice(1)).join(". ") + ".";
+    }
     if (!slip.id.registered) {
       const t = slip.id.token;
       if (t.code.empty) return `There is no contract at this address on ${slip.chain.name}.`;
@@ -2854,7 +2988,13 @@
     const d = slip.dev;
     const t = slip.id.token;
     const registered = slip.id.registered;
-    const tiles = registered ? `<div class="tiles">
+    const v1 = slip.id.v1;
+    const tiles = v1 ? `<div class="tiles">
+        <div class="tile"><div class="l">Launch caps</div><div class="v ${v1.restrictionBlocksLeft > 0 ? "open" : "closed"}">${v1.restrictionBlocksLeft > 0 ? `${v1.restrictionBlocksLeft}` : "OFF"}</div><div class="s">${v1.restrictionBlocksLeft > 0 ? `blocks left \xB7 max ${v1.config ? formatBps(v1.config.maxWalletBps) : "?"} per wallet` : "wallet and trade caps lifted"}</div></div>
+        <div class="tile"><div class="l">Pool fee</div><div class="v">${Number(v1.record.poolFee) / 1e4}%</div><div class="s">Uniswap V3 \xB7 position #${v1.record.positionId} locked</div></div>
+        <div class="tile"><div class="l">Towards graduation</div><div class="v">${v1.status.threshold === 0n ? "\u2014" : `${Number(v1.status.pairedPrincipal * 100n / v1.status.threshold)}%`}</div><div class="s">${formatUnits(v1.status.pairedPrincipal, v1.quote.decimals)} of ${formatUnits(v1.status.threshold, v1.quote.decimals)} ${esc2(v1.quote.symbol)}${v1.status.graduated ? " \xB7 graduated" : ""}</div></div>
+        <div class="tile"><div class="l">Dev bought at launch</div><div class="v">${formatUnits(v1.record.initialBuyAmount, v1.quote.decimals, 3)}</div><div class="s">${esc2(v1.quote.symbol)} in the launch transaction</div></div>
+      </div>` : registered ? `<div class="tiles">
         <div class="tile"><div class="l">Door tax</div><div class="v ${c?.status === "open" ? "open" : "closed"}" id="cd">${c ? c.status === "open" ? `${c.secondsLeft}s` : c.status === "closed" ? "OFF" : "OFF" : "OFF"}</div><div class="s" id="cd-note">${c ? c.status === "open" ? `left, then it is safe to buy` : c.status === "closed" ? `ended ${formatDuration(Math.max(0, c.head.timestamp - c.windowEndsAt))} ago` : "disabled for this launch" : "ended long ago"}</div></div>
         <div class="tile"><div class="l">Fee per trade</div><div class="v ${r && r.totalTradeBps >= 1000n ? "bad" : ""}">${r ? formatBps(r.totalTradeBps) : "\u2014"}</div><div class="s">${r ? `${formatBps(r.creatorTaxBps)} of it to the creator` : ""}</div></div>
         <div class="tile"><div class="l">${room && room.buys > 0 ? "Creator funded" : "Curve full"}</div><div class="v ${room && room.devShareBps >= 5e3 ? "bad" : ""}">${room && room.buys > 0 ? `${(room.devShareBps / 100).toFixed(0)}%` : r?.fill ? `${(r.fill.bps / 100).toFixed(0)}%` : "\u2014"}</div><div class="s">${room && room.buys > 0 ? `of all buys \xB7 ${room.buyers} buyers` : r?.fill ? "of the way to graduation" : ""}</div></div>
@@ -2875,9 +3015,10 @@
     const section = (id, title, what, body, open) => `<details class="sec" id="${id}"${open ? " open" : ""}><summary><h2>${title}</h2><span class="what">${what}</span><span class="chev">\u25B6</span></summary><div class="body">${body}</div></details>`;
     const idBody = `<dl class="kv">
     <dt>chain</dt><dd>${esc2(slip.chain.name)} \xB7 ${esc2(slip.chain.launchpad)}</dd>
-    <dt>factory record</dt><dd>${registered ? `<span class="flag ok">yes</span> the launchpad's own factory deployed this token${slip.id.resolvedAs === "curve" ? " (you pasted its curve)" : ""}` : `<span class="flag bad">none</span> the factory has never seen this address`}</dd>
+    <dt>factory record</dt><dd>${registered ? `<span class="flag ok">yes</span> ${v1 ? "the Pons V1 factory" : "the launchpad's own factory"} deployed this token${slip.id.resolvedAs === "curve" ? " (you pasted its curve)" : ""}` : `<span class="flag bad">none</span> neither the ${esc2(slip.chain.launchpad)} factory${slip.chain.key === "robinhood" ? " nor the Pons V1 factory" : ""} has seen this address`}</dd>
     <dt>token code</dt><dd>${t.code.empty ? "empty (no contract)" : `${t.code.bytes} bytes`}<br>${idFlags(t)}</dd>
     ${slip.id.curve ? `<dt>curve code</dt><dd>${slip.id.curve.code.bytes} bytes<br>${idFlags(slip.id.curve)}</dd>` : ""}
+    ${v1 ? `<dt>launchpad</dt><dd>Pons V1</dd><dt>deployer</dt><dd><span class="mono">${esc2(v1.record.deployer.toLowerCase())}</span></dd>` : ""}
     ${slip.id.launch ? `<dt>deployer</dt><dd><a href="#/dev/${slip.id.launch.deployer.toLowerCase()}${routeChain()}"><span class="mono">${esc2(slip.id.launch.deployer.toLowerCase())}</span></a> <small style="color:var(--dim)">click for their history</small></dd><dt>stage</dt><dd>${{ curve: "on the bonding curve", swept: "curve closed, pool not created yet", pool: "graduated: trades in the locked Uniswap pool", rescued: "graduated (rescued)" }[PHASE_LABEL[slip.id.launch.phase]] ?? PHASE_LABEL[slip.id.launch.phase]}</dd>` : ""}
     ${explorer ? `<dt>explorer</dt><dd><a href="${explorer}" target="_blank" rel="noopener">${mode === "demo" ? "open in Blockscout (demo address, will be empty)" : "open in Blockscout"}</a></dd>` : ""}
   </dl>`;
@@ -2927,14 +3068,15 @@
     <div class="notes"><h2>What to know</h2>${notes || `<div class="note"><span class="lvl info">Note</span><span>Nothing stands out. The factory made this token and none of its terms needs a second look.</span></div>`}</div>
     <div class="stack">
       ${section("s-id", "Is it real?", "Did the launchpad's factory deploy this token, and can its code change later?", idBody, true)}
-      ${registered ? section("s-cover", "Door tax", `The anti-snipe tax in the first ${c?.terms.seconds ?? 15} seconds, and who paid it.`, coverBody, c?.status === "open") : ""}
+      ${registered && !v1 ? section("s-cover", "Door tax", `The anti-snipe tax in the first ${c?.terms.seconds ?? 15} seconds, and who paid it.`, coverBody, c?.status === "open") : ""}
       ${r ? section("s-rules", "Fees and rules", "What every trade costs, where the creator's cut goes, what buyback really does.", rulesBody, false) : ""}
+      ${v1 ? section("s-v1", "Rules (Pons V1)", "How this older kind of launch works: pool from block one, launch caps, locked liquidity.", `<ol class="rules">${v1.rules.map((x) => `<li>${esc2(x)}</li>`).join("")}</ol>`, true) : ""}
       ${e ? section("s-exit", "Cash out now", "What you would actually get for selling part or all of a position right now.", exitBody, false) : ""}
       ${room ? section("s-room", "Who is inside", "Every buyer since launch, how much the creator's own wallets put in, buys landing in the same block.", roomBody, false) : ""}
       ${crew ? section("s-crew", "Same funder?", "Where the first buyers got their money. Wallets funded by one address before the launch are one group.", crewBody, false) : ""}
       ${l ? section("s-look", "Same name", "Other tokens with this ticker on the chain, and which one launched first.", lookBody, false) : ""}
       ${d ? section("s-dev", "This dev before", `Everything this deployer launched in the last ${mode === "demo" ? "8" : "24"} h and how it went.`, devSection(d, slip.subject, false, true), false) : ""}
-      ${registered ? section("s-watch", "Watch for changes", "Get told when the dev moves, right in this tab.", watchBody, new URLSearchParams(location.hash.split("?")[1] ?? "").get("watch") === "1") : ""}
+      ${registered && !v1 ? section("s-watch", "Watch for changes", "Get told when the dev moves, right in this tab.", watchBody, new URLSearchParams(location.hash.split("?")[1] ?? "").get("watch") === "1") : ""}
     </div>
   </div>`;
     $("act-card").addEventListener("click", () => {

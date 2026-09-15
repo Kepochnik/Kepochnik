@@ -15,7 +15,7 @@ import { RpcClient } from "../../src/chain/rpc.js";
 import { findBlockByTimestamp } from "../../src/chain/tape.js";
 import { doorCard } from "../../src/bouncer/card.js";
 import { coverChargeLine } from "../../src/bouncer/coverCharge.js";
-import { DEMO, DEMO_BLOCKSCOUT, DEMO_IMPOSTOR, demoBlockscoutFetch, demoRpc } from "../../src/bouncer/demo.js";
+import { DEMO, DEMO_BLOCKSCOUT, DEMO_IMPOSTOR, DEMO_V1, demoBlockscoutFetch, demoRpc } from "../../src/bouncer/demo.js";
 import { devReportLine, readDevReport, type DevReport } from "../../src/bouncer/devReport.js";
 import { findLaunchBlock, readDoor, slipJson, type DoorSlip } from "../../src/bouncer/door.js";
 import { lookalikeLine } from "../../src/bouncer/lookalike.js";
@@ -133,6 +133,7 @@ const EXAMPLES: { label: string; hint: string; hash: string }[] = [
   { label: "A fake copy", hint: "same name, not from the factory", hash: `#/demo/${DEMO_IMPOSTOR.token}` },
   { label: "A dev on the move", hint: "sold and moved tokens, watch on", hash: `#/demo/${DEMO.tokens.late.token}?watch=1` },
   { label: "A trade receipt", hint: "one buy, itemised", hash: `#/tx/0xdemoFRESH${DEMO.tokens.fresh.launched + 22}?chain=demo` },
+  { label: "A Pons V1 token", hint: "the older launchpad, caps still on", hash: `#/demo/${DEMO_V1.token}` },
 ];
 
 function renderChips(): void {
@@ -190,8 +191,21 @@ function done(text: string): void {
 
 // ---------------------------------------------------------------- views
 
+/** Addresses the demo chain knows; anything else is a real address and needs a real chain. */
+function isDemoAddress(address: string): boolean {
+  const a = address.toLowerCase();
+  return Object.values(DEMO.tokens).some((t) => t.token === a || t.curve === a || t.deployer === a) || a === DEMO_IMPOSTOR.token || a === DEMO_V1.token || a === DEMO_V1.deployer || a === "0x000000000000000000000000000000000000dead";
+}
+
 async function runDoor(address: string): Promise<void> {
   if (!ADDR.test(address)) return bad("Paste a 20-byte hex address: the token or its bonding curve, 0x followed by 40 hex characters.");
+  if (mode === "demo" && !isDemoAddress(address)) {
+    // A real address pasted into the demo: the demo chain would call it an impostor. Go live instead.
+    setMode("live");
+    showToast(`Real address: switched to live on ${chain().name}`);
+    location.hash = `#/t/${address.toLowerCase()}?chain=${chain().key}`;
+    return;
+  }
   busy("reading the chain at the door…");
   try {
     const slip = await readDoor(rpcFor(), address, mode === "demo"
@@ -367,6 +381,13 @@ function bad(text: string): void {
 // ---------------------------------------------------------------- render
 
 function summarySentence(slip: DoorSlip): string {
+  if (slip.id.v1) {
+    const v = slip.id.v1;
+    const parts = ["Real Pons V1 launch: fixed supply, trading in a Uniswap V3 pool since block one, liquidity locked"];
+    if (v.restrictionBlocksLeft > 0 && v.config) parts.push(`launch caps are on for ${v.restrictionBlocksLeft} more blocks (max ${formatBps(v.config.maxWalletBps)} per wallet)`);
+    parts.push(v.status.graduated ? "graduated" : `${formatUnits(v.status.pairedPrincipal, v.quote.decimals)} of ${formatUnits(v.status.threshold, v.quote.decimals)} ${v.quote.symbol} towards graduation`);
+    return parts.map((x) => x.charAt(0).toUpperCase() + x.slice(1)).join(". ") + ".";
+  }
   if (!slip.id.registered) {
     const t = slip.id.token;
     if (t.code.empty) return `There is no contract at this address on ${slip.chain.name}.`;
@@ -407,7 +428,15 @@ function renderSlip(slip: DoorSlip): void {
   const registered = slip.id.registered;
 
   // ---- the four numbers people ask for first
-  const tiles = registered
+  const v1 = slip.id.v1;
+  const tiles = v1
+    ? `<div class="tiles">
+        <div class="tile"><div class="l">Launch caps</div><div class="v ${v1.restrictionBlocksLeft > 0 ? "open" : "closed"}">${v1.restrictionBlocksLeft > 0 ? `${v1.restrictionBlocksLeft}` : "OFF"}</div><div class="s">${v1.restrictionBlocksLeft > 0 ? `blocks left · max ${v1.config ? formatBps(v1.config.maxWalletBps) : "?"} per wallet` : "wallet and trade caps lifted"}</div></div>
+        <div class="tile"><div class="l">Pool fee</div><div class="v">${Number(v1.record.poolFee) / 10_000}%</div><div class="s">Uniswap V3 · position #${v1.record.positionId} locked</div></div>
+        <div class="tile"><div class="l">Towards graduation</div><div class="v">${v1.status.threshold === 0n ? "—" : `${Number((v1.status.pairedPrincipal * 100n) / v1.status.threshold)}%`}</div><div class="s">${formatUnits(v1.status.pairedPrincipal, v1.quote.decimals)} of ${formatUnits(v1.status.threshold, v1.quote.decimals)} ${esc(v1.quote.symbol)}${v1.status.graduated ? " · graduated" : ""}</div></div>
+        <div class="tile"><div class="l">Dev bought at launch</div><div class="v">${formatUnits(v1.record.initialBuyAmount, v1.quote.decimals, 3)}</div><div class="s">${esc(v1.quote.symbol)} in the launch transaction</div></div>
+      </div>`
+    : registered
     ? `<div class="tiles">
         <div class="tile"><div class="l">Door tax</div><div class="v ${c?.status === "open" ? "open" : "closed"}" id="cd">${c ? (c.status === "open" ? `${c.secondsLeft}s` : c.status === "closed" ? "OFF" : "OFF") : "OFF"}</div><div class="s" id="cd-note">${c ? (c.status === "open" ? `left, then it is safe to buy` : c.status === "closed" ? `ended ${formatDuration(Math.max(0, c.head.timestamp - c.windowEndsAt))} ago` : "disabled for this launch") : "ended long ago"}</div></div>
         <div class="tile"><div class="l">Fee per trade</div><div class="v ${r && r.totalTradeBps >= 1_000n ? "bad" : ""}">${r ? formatBps(r.totalTradeBps) : "—"}</div><div class="s">${r ? `${formatBps(r.creatorTaxBps)} of it to the creator` : ""}</div></div>
@@ -435,9 +464,10 @@ function renderSlip(slip: DoorSlip): void {
 
   const idBody = `<dl class="kv">
     <dt>chain</dt><dd>${esc(slip.chain.name)} · ${esc(slip.chain.launchpad)}</dd>
-    <dt>factory record</dt><dd>${registered ? `<span class="flag ok">yes</span> the launchpad's own factory deployed this token${slip.id.resolvedAs === "curve" ? " (you pasted its curve)" : ""}` : `<span class="flag bad">none</span> the factory has never seen this address`}</dd>
+    <dt>factory record</dt><dd>${registered ? `<span class="flag ok">yes</span> ${v1 ? "the Pons V1 factory" : "the launchpad's own factory"} deployed this token${slip.id.resolvedAs === "curve" ? " (you pasted its curve)" : ""}` : `<span class="flag bad">none</span> neither the ${esc(slip.chain.launchpad)} factory${slip.chain.key === "robinhood" ? " nor the Pons V1 factory" : ""} has seen this address`}</dd>
     <dt>token code</dt><dd>${t.code.empty ? "empty (no contract)" : `${t.code.bytes} bytes`}<br>${idFlags(t)}</dd>
     ${slip.id.curve ? `<dt>curve code</dt><dd>${slip.id.curve.code.bytes} bytes<br>${idFlags(slip.id.curve)}</dd>` : ""}
+    ${v1 ? `<dt>launchpad</dt><dd>Pons V1</dd><dt>deployer</dt><dd><span class="mono">${esc(v1.record.deployer.toLowerCase())}</span></dd>` : ""}
     ${slip.id.launch ? `<dt>deployer</dt><dd><a href="#/dev/${slip.id.launch.deployer.toLowerCase()}${routeChain()}"><span class="mono">${esc(slip.id.launch.deployer.toLowerCase())}</span></a> <small style="color:var(--dim)">click for their history</small></dd><dt>stage</dt><dd>${({ curve: "on the bonding curve", swept: "curve closed, pool not created yet", pool: "graduated: trades in the locked Uniswap pool", rescued: "graduated (rescued)" } as Record<string, string>)[PHASE_LABEL[slip.id.launch.phase]] ?? PHASE_LABEL[slip.id.launch.phase]}</dd>` : ""}
     ${explorer ? `<dt>explorer</dt><dd><a href="${explorer}" target="_blank" rel="noopener">${mode === "demo" ? "open in Blockscout (demo address, will be empty)" : "open in Blockscout"}</a></dd>` : ""}
   </dl>`;
@@ -505,14 +535,15 @@ function renderSlip(slip: DoorSlip): void {
     <div class="notes"><h2>What to know</h2>${notes || `<div class="note"><span class="lvl info">Note</span><span>Nothing stands out. The factory made this token and none of its terms needs a second look.</span></div>`}</div>
     <div class="stack">
       ${section("s-id", "Is it real?", "Did the launchpad's factory deploy this token, and can its code change later?", idBody, true)}
-      ${registered ? section("s-cover", "Door tax", `The anti-snipe tax in the first ${c?.terms.seconds ?? 15} seconds, and who paid it.`, coverBody, c?.status === "open") : ""}
+      ${registered && !v1 ? section("s-cover", "Door tax", `The anti-snipe tax in the first ${c?.terms.seconds ?? 15} seconds, and who paid it.`, coverBody, c?.status === "open") : ""}
       ${r ? section("s-rules", "Fees and rules", "What every trade costs, where the creator's cut goes, what buyback really does.", rulesBody, false) : ""}
+      ${v1 ? section("s-v1", "Rules (Pons V1)", "How this older kind of launch works: pool from block one, launch caps, locked liquidity.", `<ol class="rules">${v1.rules.map((x) => `<li>${esc(x)}</li>`).join("")}</ol>`, true) : ""}
       ${e ? section("s-exit", "Cash out now", "What you would actually get for selling part or all of a position right now.", exitBody, false) : ""}
       ${room ? section("s-room", "Who is inside", "Every buyer since launch, how much the creator's own wallets put in, buys landing in the same block.", roomBody, false) : ""}
       ${crew ? section("s-crew", "Same funder?", "Where the first buyers got their money. Wallets funded by one address before the launch are one group.", crewBody, false) : ""}
       ${l ? section("s-look", "Same name", "Other tokens with this ticker on the chain, and which one launched first.", lookBody, false) : ""}
       ${d ? section("s-dev", "This dev before", `Everything this deployer launched in the last ${mode === "demo" ? "8" : "24"} h and how it went.`, devSection(d, slip.subject, false, true), false) : ""}
-      ${registered ? section("s-watch", "Watch for changes", "Get told when the dev moves, right in this tab.", watchBody, new URLSearchParams(location.hash.split("?")[1] ?? "").get("watch") === "1") : ""}
+      ${registered && !v1 ? section("s-watch", "Watch for changes", "Get told when the dev moves, right in this tab.", watchBody, new URLSearchParams(location.hash.split("?")[1] ?? "").get("watch") === "1") : ""}
     </div>
   </div>`;
 
