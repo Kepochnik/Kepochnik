@@ -65,7 +65,7 @@ interface Update {
 }
 
 export async function runBot(options: BotOptions): Promise<void> {
-  const fetchImpl = options.fetchImpl ?? fetch;
+  const fetchImpl = options.fetchImpl ?? ((input: RequestInfo | URL, init?: RequestInit) => fetch(input, init));
   const api = `https://api.telegram.org/bot${options.token}`;
   const log = options.log ?? ((l) => process.stderr.write(l + "\n"));
   const chatChain = new Map<number, string>();
