@@ -218,11 +218,13 @@ footer a:hover{color:var(--brass-2)}
       <button class="link" id="settings-toggle" type="button" aria-expanded="false">Settings</button>
     </div>
     <div class="settings" id="settings">
+      <label for="proxy">Proxy URL</label>
+      <input id="proxy" placeholder="https://bouncer-proxy.<you>.workers.dev — deploy it from the repo's proxy/ folder; fixes 'Failed to fetch'">
       <label for="rpc">RPC URL</label>
-      <input id="rpc" placeholder="leave empty for the chain's public endpoint">
+      <input id="rpc" placeholder="leave empty for the chain's public endpoint (or the proxy above)">
       <label for="factory">Launchpad factory</label>
       <input id="factory" placeholder="leave empty for the chain default (Arc mainnet needs one until Radian publishes it)">
-      <span class="hint" id="chain-hint">Live mode reads the chain straight from your browser. If the public RPC refuses browser requests, paste one that allows them, or use the Chrome extension, which can call any RPC.</span>
+      <span class="hint" id="chain-hint">Live mode reads the chain straight from your browser. If the public RPC refuses browser requests ("Failed to fetch"), deploy the read-only proxy from the repo's <code>proxy/</code> folder (3 minutes, free) and paste its URL above, or use the Chrome extension, which can call any RPC.</span>
     </div>
     <div class="chips" id="chips"></div>
     <div class="status" id="status"></div>

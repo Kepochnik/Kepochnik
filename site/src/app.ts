@@ -39,6 +39,8 @@ const ADDR = /^0x[0-9a-fA-F]{40}$/;
 /** The claude.ai preview sandbox blocks every network request a page makes; live mode cannot work there. */
 const SANDBOXED = /(^|\.)claude\.ai$|claudeusercontent|anthropic/.test(location.hostname);
 const HOSTED = "https://kepochnik.github.io/kepochnik/";
+/** Set this to your deployed bouncer-proxy URL to make it the default for everyone who opens the site. */
+const DEFAULT_PROXY = "";
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 const out = $("out");
@@ -47,6 +49,7 @@ const form = $<HTMLFormElement>("form");
 const q = $<HTMLInputElement>("q");
 const go = $<HTMLButtonElement>("go");
 const rpcInput = $<HTMLInputElement>("rpc");
+const proxyInput = $<HTMLInputElement>("proxy");
 const factoryInput = $<HTMLInputElement>("factory");
 const chainSelect = $<HTMLSelectElement>("chain");
 const settings = $("settings");
@@ -112,17 +115,25 @@ function detect(raw: string): { view: View; parts: string[] } | null {
   return null;
 }
 
+function proxyBase(): string {
+  return (proxyInput.value.trim() || DEFAULT_PROXY).replace(/\/$/, "");
+}
+
 function rpcFor(): RpcClient {
   if (mode === "demo") return demoRpc();
   const c = chain();
   const url = rpcInput.value.trim();
-  return new RpcClient({ urls: url ? [url] : c.rpc, expectedChainId: c.chainId, minSpacingMs: 120 });
+  const proxy = proxyBase();
+  const urls = url ? [url] : proxy ? [`${proxy}/rpc/${c.key}`, ...c.rpc] : c.rpc;
+  return new RpcClient({ urls, expectedChainId: c.chainId, minSpacingMs: 120 });
 }
 
 function blockscoutFor(): BlockscoutClient | null {
   if (mode === "demo") return new BlockscoutClient({ baseUrl: DEMO_BLOCKSCOUT, fetchImpl: demoBlockscoutFetch() });
   const c = chain();
-  return c.blockscout ? new BlockscoutClient({ baseUrl: c.blockscout }) : null;
+  if (!c.blockscout) return null;
+  const proxy = proxyBase();
+  return new BlockscoutClient({ baseUrl: proxy ? `${proxy}/api/${c.key}` : c.blockscout });
 }
 
 function factoryFor(): string {
@@ -187,7 +198,7 @@ function failed(error: unknown, input: string): void {
   out.innerHTML = `<div class="error"><strong>Could not read the chain.</strong><p>${esc(message)}</p>${
     SANDBOXED
       ? `<p>This is the claude.ai preview: the sandbox blocks every request a page makes, so no RPC can be reached from here, whatever its settings. Real tokens work on the <a href="${HOSTED}">hosted site</a>, in the <a href="https://github.com/Kepochnik/bouncer#browser-extension">Chrome extension</a> (it can call any RPC), or in the CLI: <code>npx bouncer door ${esc(input)} --chain ${esc(chain().key)}</code>.</p>`
-      : network ? `<p>The browser could not reach the RPC. Public endpoints often refuse requests from websites. Three ways out: the <a href="https://github.com/Kepochnik/bouncer#browser-extension">Chrome extension</a> (it can call any RPC), an RPC URL that allows browser requests under Settings, or the CLI: <code>npx bouncer door ${esc(input)} --chain ${esc(chain().key)}</code>. Demo mode works offline.</p>` : ""
+      : network ? `<p>The browser could not reach the RPC. Public endpoints often refuse requests from websites. Three ways out: deploy the read-only <a href="https://github.com/Kepochnik/bouncer/tree/main/proxy">proxy</a> (3 minutes, free) and paste its URL under Settings → Proxy URL; the <a href="https://github.com/Kepochnik/bouncer#browser-extension">Chrome extension</a> (it can call any RPC); or the CLI: <code>npx bouncer door ${esc(input)} --chain ${esc(chain().key)}</code>. Demo mode works offline.</p>` : ""
   }</div>`;
 }
 
@@ -776,6 +787,8 @@ function submit(): void {
 function boot(): void {
   $<HTMLImageElement>("mark").src = `data:image/svg+xml;utf8,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" shape-rendering="crispEdges">${MASCOT_SVG_INNER}</svg>`)}`;
   rpcInput.value = storage("bouncer.rpc") ?? "";
+  proxyInput.value = storage("bouncer.proxy") ?? "";
+  proxyInput.addEventListener("change", () => storage("bouncer.proxy", proxyInput.value.trim()));
   factoryInput.value = storage("bouncer.factory") ?? "";
   chainSelect.value = storage("bouncer.chain") ?? "robinhood";
   rpcInput.addEventListener("change", () => storage("bouncer.rpc", rpcInput.value.trim()));
