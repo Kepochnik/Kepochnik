@@ -8,7 +8,7 @@
   const chain = /arcscan\.app/.test(location.host) ? "arc-testnet" : "robinhood";
   const existing = document.getElementById("bouncer-badge");
   if (existing) existing.remove();
-  chrome.storage.sync.get({ siteUrl: "https://kepochnik.github.io/bouncer/" }, ({ siteUrl }) => {
+  chrome.storage.sync.get({ siteUrl: "https://kepochnik.github.io/kepochnik/" }, ({ siteUrl }) => {
     const a = document.createElement("a");
     a.id = "bouncer-badge";
     a.href = `${siteUrl}#/t/${address}?chain=${chain}`;
