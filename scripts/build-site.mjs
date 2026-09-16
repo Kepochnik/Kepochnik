@@ -8,7 +8,7 @@
  *   site/dist/bouncer-extension.zip          the extension, ready to drop onto chrome://extensions
  */
 import { build } from "esbuild";
-import { copyFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 
 mkdirSync("site/dist", { recursive: true });
@@ -28,6 +28,22 @@ const html = readFileSync("site/index.html", "utf8");
 const inlined = html.replace('<script src="app.js"></script>', `<script>\n${js.replace(/<\/script/g, "<\\/script")}\n</script>`);
 writeFileSync("site/dist/index.html", inlined);
 
+// Privacy policy page for the Web Store listing, from extension/store/PRIVACY.md.
+const md = readFileSync("extension/store/PRIVACY.md", "utf8");
+const privacyBody = md
+  .split("\n")
+  .map((line) => {
+    if (line.startsWith("# ")) return `<h1>${line.slice(2)}</h1>`;
+    if (line.startsWith("_") && line.endsWith("_")) return `<p class="muted">${line.slice(1, -1)}</p>`;
+    if (!line.trim()) return "";
+    return `<p>${line.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>").replace(/(https?:\/\/\S+)/g, '<a href="$1">$1</a>')}</p>`;
+  })
+  .join("\n");
+writeFileSync(
+  "site/dist/privacy.html",
+  `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>BOUNCER privacy policy</title><style>body{margin:0;background:#0e0d10;color:#ece7dc;font:16px/1.6 system-ui,sans-serif;padding:40px 20px}main{max-width:720px;margin:0 auto}h1{font:900 40px/1 Impact,'Arial Black',sans-serif;letter-spacing:.04em}a{color:#e2c04a}.muted{color:#8f8a96}</style></head><body><main>${privacyBody}<p><a href="./">← back to BOUNCER</a></p></main></body></html>`,
+);
+
 const start = inlined.indexOf("<title>");
 const headEnd = inlined.indexOf("</head>");
 const bodyStart = inlined.indexOf("<body>") + "<body>".length;
@@ -44,7 +60,8 @@ const popup = html
 writeFileSync("extension/popup.html", popup);
 copyFileSync("site/dist/app.js", "extension/app.js");
 try {
-  execFileSync("zip", ["-q", "-r", "-X", "../site/dist/bouncer-extension.zip", ".", "-x", "*.DS_Store"], { cwd: "extension" });
+  rmSync("site/dist/bouncer-extension.zip", { force: true });
+  execFileSync("zip", ["-q", "-r", "-X", "../site/dist/bouncer-extension.zip", ".", "-x", "*.DS_Store", "store/*", "store/"], { cwd: "extension" });
   console.log("extension: site/dist/bouncer-extension.zip");
 } catch (error) {
   console.warn(`extension zip skipped: ${error instanceof Error ? error.message : String(error)}`);
