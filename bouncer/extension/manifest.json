@@ -1,25 +1,35 @@
 {
   "manifest_version": 3,
   "name": "BOUNCER \u00b7 door check",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Read-only door check for Pons V2 launches on Robinhood Chain and Arc. Open the popup on any token page: ID check, cover charge countdown, house rules, exit door, one crew, dev report card. No wallet, no signing.",
   "permissions": [
     "activeTab",
     "storage"
   ],
   "host_permissions": [
-    "https://*/*"
+    "https://rpc.mainnet.chain.robinhood.com/*",
+    "https://robinhoodchain.blockscout.com/*",
+    "https://rpc.testnet.arc.network/*",
+    "https://rpc.testnet.arc.io/*",
+    "https://testnet.arcscan.app/*",
+    "https://rpc.arc-scan.org/*",
+    "https://*.workers.dev/*"
   ],
   "action": {
     "default_popup": "popup.html",
     "default_title": "BOUNCER",
     "default_icon": {
+      "16": "icon-16.png",
       "32": "icon-32.png",
+      "48": "icon-48.png",
       "128": "icon-128.png"
     }
   },
   "icons": {
+    "16": "icon-16.png",
     "32": "icon-32.png",
+    "48": "icon-48.png",
     "128": "icon-128.png"
   },
   "content_scripts": [
@@ -37,5 +47,10 @@
       ],
       "run_at": "document_idle"
     }
-  ]
+  ],
+  "homepage_url": "https://github.com/Kepochnik/bouncer",
+  "optional_host_permissions": [
+    "https://*/*"
+  ],
+  "minimum_chrome_version": "116"
 }

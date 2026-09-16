@@ -158,7 +158,9 @@ The whole site in a Chrome popup, with one thing a web page cannot do: an extens
 3. Drag the zip onto the page, or **Load unpacked** and pick the `extension/` folder.
 4. Pin BOUNCER in the toolbar. Click it on any token page.
 
-The popup keeps its own settings (chain, RPC, factory) in the extension's storage. Not on the Chrome Web Store yet: the listing needs a developer account; the zip is the same code, unsigned.
+The popup keeps its own settings (chain, RPC, proxy, factory) in the extension's storage. Host permissions are narrowed to the chains' public endpoints; a custom RPC or proxy is requested from Chrome the moment you save it.
+
+**Chrome Web Store:** everything the listing needs is in `extension/store/`: the listing text and permission justifications (`listing.md`), the privacy policy (`PRIVACY.md`, also published at `/privacy.html` on the site), the 128 px icon, a 1280×800 screenshot and a 440×280 promo tile (`node scripts/store-assets.mjs` regenerates them). Upload `site/dist/bouncer-extension.zip` at https://chrome.google.com/webstore/devconsole (one-time $5 developer registration), paste the texts, submit for review.
 
 ## Prior art, named
 

@@ -15,3 +15,19 @@
     /* not inside an extension: the app boots on its own */
   }
 })();
+
+// A custom RPC or proxy is another origin: ask Chrome for it when the user
+// saves one, so the popup can call it (Web Store rules: narrow defaults,
+// optional origins requested on demand).
+(() => {
+  const ask = (value) => {
+    try {
+      const origin = new URL(value).origin + "/*";
+      chrome.permissions.request({ origins: [origin] }, () => {});
+    } catch (_) { /* not a URL yet */ }
+  };
+  document.addEventListener("change", (e) => {
+    const t = e.target;
+    if (t && (t.id === "rpc" || t.id === "proxy") && t.value.trim()) ask(t.value.trim());
+  });
+})();
