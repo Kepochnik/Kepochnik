@@ -1,15 +1,19 @@
 name: deploy-proxy
 
 # Deploys proxy/worker.mjs to Cloudflare Workers.
-# Needs the repository secret CLOUDFLARE_API_TOKEN (Cloudflare → My Profile →
-# API Tokens → "Edit Cloudflare Workers" template) and the account id, given
-# as the secret or variable CLOUDFLARE_ACCOUNT_ID or typed into the run
-# form. Runs on demand, and on every change to proxy/.
+# Normal path: the repository secret CLOUDFLARE_API_TOKEN (Cloudflare → My
+# Profile → API Tokens → "Edit Cloudflare Workers" template). The account id
+# is read from the token itself (wrangler whoami) unless given.
+# One-off path: the token can be typed into the run form; it is masked in
+# the logs and never stored. Roll it afterwards and add a proper secret.
 on:
   workflow_dispatch:
     inputs:
+      api_token:
+        description: "Cloudflare API token for this one run (prefer the CLOUDFLARE_API_TOKEN repository secret)"
+        required: false
       account_id:
-        description: "Cloudflare Account ID (optional if the CLOUDFLARE_ACCOUNT_ID secret or variable is set)"
+        description: "Cloudflare Account ID (optional: read from the token when empty)"
         required: false
   push:
     branches: [main, bouncer-main]
@@ -18,7 +22,13 @@ on:
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ inputs.api_token || secrets.CLOUDFLARE_API_TOKEN || secrets.CF_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ inputs.account_id || secrets.CLOUDFLARE_ACCOUNT_ID || vars.CLOUDFLARE_ACCOUNT_ID }}
     steps:
+      - name: Mask the token
+        run: |
+          if [ -n "$CLOUDFLARE_API_TOKEN" ]; then echo "::add-mask::$CLOUDFLARE_API_TOKEN"; fi
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
@@ -26,18 +36,22 @@ jobs:
       - run: node --test proxy/*.test.mjs
       - name: Deploy with wrangler
         working-directory: proxy
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN || secrets.CF_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ inputs.account_id || secrets.CLOUDFLARE_ACCOUNT_ID || vars.CLOUDFLARE_ACCOUNT_ID }}
         run: |
           if [ -z "$CLOUDFLARE_API_TOKEN" ]; then
-            echo "::error::CLOUDFLARE_API_TOKEN is empty. Add it as a Repository secret at https://github.com/${GITHUB_REPOSITORY}/settings/secrets/actions (Settings → Secrets and variables → Actions → New repository secret). Environment secrets and variables are not read here."
+            echo "::error::CLOUDFLARE_API_TOKEN is empty. Add it as a Repository secret at https://github.com/${GITHUB_REPOSITORY}/settings/secrets/actions or type it into the run form."
             exit 1
           fi
           if [ -z "$CLOUDFLARE_ACCOUNT_ID" ]; then
-            echo "::error::CLOUDFLARE_ACCOUNT_ID is empty. Add it as a Repository secret or variable, or type it into the run form."
+            CLOUDFLARE_ACCOUNT_ID="$(npx --yes wrangler@4 whoami 2>/dev/null | grep -oE '[0-9a-f]{32}' | head -1 || true)"
+            export CLOUDFLARE_ACCOUNT_ID
+          fi
+          if [ -z "$CLOUDFLARE_ACCOUNT_ID" ]; then
+            echo "::error::could not determine the Cloudflare account id; pass it in the run form or as CLOUDFLARE_ACCOUNT_ID."
             exit 1
           fi
           npx --yes wrangler@4 deploy 2>&1 | tee deploy.log
+          URL="$(grep -oE 'https://[a-z0-9.-]*workers\.dev' deploy.log | head -1 || true)"
           echo "## bouncer-proxy" >> "$GITHUB_STEP_SUMMARY"
-          grep -o 'https://[a-z0-9.-]*workers.dev' deploy.log | head -1 >> "$GITHUB_STEP_SUMMARY" || true
+          echo "$URL" >> "$GITHUB_STEP_SUMMARY"
+          echo "proxy_url=$URL" >> "$GITHUB_OUTPUT"
+          echo "PROXY_URL=$URL"
