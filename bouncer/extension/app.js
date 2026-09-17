@@ -2631,7 +2631,7 @@
   var ADDR = /^0x[0-9a-fA-F]{40}$/;
   var SANDBOXED = /(^|\.)claude\.ai$|claudeusercontent|anthropic/.test(location.hostname);
   var HOSTED = "https://kepochnik.github.io/bouncer/";
-  var DEFAULT_PROXY = "";
+  var DEFAULT_PROXY = "https://bouncer-proxy.tarasenkosanja12.workers.dev";
   var $ = (id) => document.getElementById(id);
   var out = $("out");
   var status = $("status");

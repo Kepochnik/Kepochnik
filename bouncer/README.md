@@ -135,7 +135,7 @@ Radian is a faithful port of the Pons V2 contracts on Circle's Arc, quoted in na
 
 ## The proxy (when a public RPC refuses browsers)
 
-Public RPCs often answer servers but not web pages ("Failed to fetch" in the browser). `proxy/` is a Cloudflare Worker that forwards read-only JSON-RPC and two explorer routes with CORS headers; nothing else passes. `cd proxy && npx wrangler login && npx wrangler deploy`, then paste the printed URL under Settings → Proxy URL on the site (or set `DEFAULT_PROXY` in `site/src/app.ts` to make it the default). Details in [proxy/README.md](proxy/README.md).
+Public RPCs often answer servers but not web pages ("Failed to fetch" in the browser). `proxy/` is a Cloudflare Worker that forwards read-only JSON-RPC and two explorer routes with CORS headers; nothing else passes. The hosted site uses `https://bouncer-proxy.tarasenkosanja12.workers.dev` by default (`DEFAULT_PROXY` in `site/src/app.ts`); your own copy of the site can point at your own worker via Settings → Proxy URL, or by deploying `proxy/` with `npx wrangler deploy` (or the `deploy-proxy` workflow with a `CLOUDFLARE_API_TOKEN` secret). Details in [proxy/README.md](proxy/README.md).
 
 ## Telegram bot
 

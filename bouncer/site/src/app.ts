@@ -40,7 +40,7 @@ const ADDR = /^0x[0-9a-fA-F]{40}$/;
 const SANDBOXED = /(^|\.)claude\.ai$|claudeusercontent|anthropic/.test(location.hostname);
 const HOSTED = "https://kepochnik.github.io/bouncer/";
 /** Set this to your deployed bouncer-proxy URL to make it the default for everyone who opens the site. */
-const DEFAULT_PROXY = "";
+const DEFAULT_PROXY = "https://bouncer-proxy.tarasenkosanja12.workers.dev";
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 const out = $("out");
