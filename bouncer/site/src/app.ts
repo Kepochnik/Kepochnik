@@ -38,7 +38,7 @@ const MARK = "$BOUNCER";
 const ADDR = /^0x[0-9a-fA-F]{40}$/;
 /** The claude.ai preview sandbox blocks every network request a page makes; live mode cannot work there. */
 const SANDBOXED = /(^|\.)claude\.ai$|claudeusercontent|anthropic/.test(location.hostname);
-const HOSTED = "https://kepochnik.github.io/kepochnik/";
+const HOSTED = "https://kepochnik.github.io/bouncer/";
 /** Set this to your deployed bouncer-proxy URL to make it the default for everyone who opens the site. */
 const DEFAULT_PROXY = "";
 

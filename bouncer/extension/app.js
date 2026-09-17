@@ -2630,7 +2630,7 @@
   var MARK = "$BOUNCER";
   var ADDR = /^0x[0-9a-fA-F]{40}$/;
   var SANDBOXED = /(^|\.)claude\.ai$|claudeusercontent|anthropic/.test(location.hostname);
-  var HOSTED = "https://kepochnik.github.io/kepochnik/";
+  var HOSTED = "https://kepochnik.github.io/bouncer/";
   var DEFAULT_PROXY = "";
   var $ = (id) => document.getElementById(id);
   var out = $("out");
