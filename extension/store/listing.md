@@ -46,7 +46,7 @@ No wallet connection. Nothing to sign. The extension holds no keys and cannot se
 
 **Data usage:** The extension does not collect, transmit or sell any user data. Token addresses the user checks are sent only to the blockchain RPC / explorer the user selected, as part of the read request itself. Settings stay in the browser's extension storage.
 
-**Privacy policy URL:** https://kepochnik.github.io/kepochnik/privacy.html (or the same file in the repo: extension/store/PRIVACY.md)
+**Privacy policy URL:** https://kepochnik.github.io/bouncer/privacy.html (or the same file in the repo: extension/store/PRIVACY.md)
 
 ## Graphics
 
