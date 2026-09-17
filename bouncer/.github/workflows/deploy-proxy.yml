@@ -49,7 +49,13 @@ jobs:
             echo "::error::could not determine the Cloudflare account id; pass it in the run form or as CLOUDFLARE_ACCOUNT_ID."
             exit 1
           fi
-          npx --yes wrangler@4 deploy 2>&1 | tee deploy.log
+          set -o pipefail
+          if ! npx --yes wrangler@4 deploy 2>&1 | tee deploy.log; then
+            if grep -q "code: 10000" deploy.log; then
+              echo "::error::Cloudflare refused the token (Authentication error 10000): it lacks 'Workers Scripts: Edit' on this account. Create a new token from the 'Edit Cloudflare Workers' template (dash.cloudflare.com → My Profile → API Tokens → Create Token → Use template) and leave 'Account Resources' as 'All accounts'."
+            fi
+            exit 1
+          fi
           URL="$(grep -oE 'https://[a-z0-9.-]*workers\.dev' deploy.log | head -1 || true)"
           echo "## bouncer-proxy" >> "$GITHUB_STEP_SUMMARY"
           echo "$URL" >> "$GITHUB_STEP_SUMMARY"
