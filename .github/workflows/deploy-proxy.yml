@@ -1,10 +1,16 @@
 name: deploy-proxy
 
-# Deploys proxy/worker.mjs to Cloudflare Workers. Needs two repository
-# secrets: CLOUDFLARE_API_TOKEN (Workers Scripts: Edit) and
-# CLOUDFLARE_ACCOUNT_ID. Runs on demand, and on every change to proxy/.
+# Deploys proxy/worker.mjs to Cloudflare Workers.
+# Needs the repository secret CLOUDFLARE_API_TOKEN (Cloudflare → My Profile →
+# API Tokens → "Edit Cloudflare Workers" template) and the account id, given
+# as the secret or variable CLOUDFLARE_ACCOUNT_ID or typed into the run
+# form. Runs on demand, and on every change to proxy/.
 on:
   workflow_dispatch:
+    inputs:
+      account_id:
+        description: "Cloudflare Account ID (optional if the CLOUDFLARE_ACCOUNT_ID secret or variable is set)"
+        required: false
   push:
     branches: [main, bouncer-main]
     paths: ["proxy/**"]
@@ -21,8 +27,17 @@ jobs:
       - name: Deploy with wrangler
         working-directory: proxy
         env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN || secrets.CF_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ inputs.account_id || secrets.CLOUDFLARE_ACCOUNT_ID || vars.CLOUDFLARE_ACCOUNT_ID }}
         run: |
-          if [ -z "$CLOUDFLARE_API_TOKEN" ]; then echo "::error::set the CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID secrets first"; exit 1; fi
-          npx --yes wrangler@4 deploy
+          if [ -z "$CLOUDFLARE_API_TOKEN" ]; then
+            echo "::error::CLOUDFLARE_API_TOKEN is empty. Add it as a Repository secret at https://github.com/${GITHUB_REPOSITORY}/settings/secrets/actions (Settings → Secrets and variables → Actions → New repository secret). Environment secrets and variables are not read here."
+            exit 1
+          fi
+          if [ -z "$CLOUDFLARE_ACCOUNT_ID" ]; then
+            echo "::error::CLOUDFLARE_ACCOUNT_ID is empty. Add it as a Repository secret or variable, or type it into the run form."
+            exit 1
+          fi
+          npx --yes wrangler@4 deploy 2>&1 | tee deploy.log
+          echo "## bouncer-proxy" >> "$GITHUB_STEP_SUMMARY"
+          grep -o 'https://[a-z0-9.-]*workers.dev' deploy.log | head -1 >> "$GITHUB_STEP_SUMMARY" || true
