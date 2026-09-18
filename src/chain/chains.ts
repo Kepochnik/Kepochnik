@@ -51,6 +51,13 @@ export interface DexTable {
    * the liquidity read says so rather than guessing.
    */
   v3PositionManager?: string;
+  /**
+   * Where the Uniswap V4 singleton lives. "from-launchpad" means the address is
+   * read off the launchpad factory's poolManager() on chain, which is exact; an
+   * address here is one somebody checked. Absent means V4 is not read on this
+   * chain, and the slip says so rather than reporting the wrong contract.
+   */
+  v4PoolManager?: string | "from-launchpad";
 }
 
 /**
@@ -131,6 +138,9 @@ export const CHAINS: Record<string, ChainConfig> = {
       wethSymbol: "WETH",
       v3Factories: [{ name: "Uniswap V3", address: "0x1f7d7550B1b028f7571E69A784071F0205FD2EfA".toLowerCase() }],
       v3PositionManager: "0x943e6b11d6a2a0dD87eC5E23Cf58A63A8D9Ec2B7".toLowerCase(),
+      // The launchpad graduates into V4 and its factory names the singleton, so
+      // the address is read from the chain rather than recalled.
+      v4PoolManager: "from-launchpad",
     },
   },
   base: {

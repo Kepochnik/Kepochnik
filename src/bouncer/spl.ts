@@ -67,6 +67,8 @@ export interface SplOptions {
   deadlineMs?: number;
   /** Skip the market read (a handful of extra calls). */
   skipMarket?: boolean;
+  /** The market read is several round trips; it gets its own, longer deadline. */
+  marketDeadlineMs?: number;
 }
 
 export async function readSplDoor(rpc: SolanaRpc, input: string, chain: ChainConfig, options: SplOptions = {}): Promise<SplSlip> {
@@ -181,7 +183,10 @@ export async function readSplDoor(rpc: SolanaRpc, input: string, chain: ChainCon
           const position = supply > 0n ? supply / 100n : 0n;
           slip.market = await readSolanaMarket(rpc, input, position, slip.mint!.decimals);
         },
-        options.deadlineMs ?? 8_000,
+        // Several round trips rather than one, and a public endpoint paces
+        // them. The eight seconds the other sections get was killing this one
+        // outright, which reads on the slip as "no venue" — the wrong answer.
+        options.marketDeadlineMs ?? 25_000,
       );
 
   await Promise.all([readName, readHolders, readMarket]);

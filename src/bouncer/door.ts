@@ -11,7 +11,8 @@
  */
 import type { BlockscoutClient } from "../chain/blockscout.js";
 import { DEFAULT_CHAIN, type ChainConfig } from "../chain/chains.js";
-import { FACTORY_EVENTS, GraduationPhase, PHASE_LABEL, type LaunchedToken } from "../chain/pons.js";
+import { decodeOutputs, encodeCall } from "../chain/abi.js";
+import { FACTORY_EVENTS, FACTORY_FUNCTIONS, GraduationPhase, PHASE_LABEL, ZERO_ADDRESS, type LaunchedToken } from "../chain/pons.js";
 import type { RpcClient } from "../chain/rpc.js";
 import { addressTopic, findBlockByTimestamp, readTapeAdaptive } from "../chain/tape.js";
 import { formatBps, formatDuration, formatUnits, isoUtc, shortAddress } from "../format.js";
@@ -155,6 +156,7 @@ export async function readDoor(rpc: RpcClient, input: string, options: DoorOptio
         // one section into the whole read. A token older than the window reads
         // as "no position opened here", which names the flag that widens it.
         liquidityFromBlock: head.number - (options.liquidityBlocks ?? Math.min(500_000, Math.round(7 * 86_400 * chain.blocksPerSecond))),
+        v4PoolManager: await resolveV4Manager(rpc, chain, options.factory, head.number),
       });
     });
     if (!id.registered && launchpadKnown && options.blockscout && !options.skipLookalikes && id.meta?.symbol) {
@@ -412,6 +414,25 @@ function pct(bps: number | null): string {
   return bps === null ? "an unknown share" : `${(bps / 100).toFixed(1)}%`;
 }
 
+/**
+ * Where Uniswap V4 lives on this chain. The launchpad's factory answers it on
+ * chain, which beats an address written down here: a recalled one would have
+ * this read reporting another contract's storage with total confidence.
+ */
+async function resolveV4Manager(rpc: RpcClient, chain: ChainConfig, factory: string | undefined, block: number): Promise<string | undefined> {
+  const configured = chain.dex?.v4PoolManager;
+  if (!configured) return undefined;
+  if (configured !== "from-launchpad") return configured;
+  if (!factory) return undefined;
+  try {
+    const [raw] = await rpc.callBatch([{ to: factory, data: encodeCall(FACTORY_FUNCTIONS.poolManager, []) }], block);
+    const address = (decodeOutputs(FACTORY_FUNCTIONS.poolManager, raw)[0] as string).toLowerCase();
+    return address && address !== ZERO_ADDRESS ? address : undefined;
+  } catch {
+    return undefined; // V4 simply goes unread, which the pools note already covers
+  }
+}
+
 /** What the open-door read found, as notes: control, transfers, holders, pools, age. Shared by ordinary and V1 tokens. */
 function openDoorFactNotes(slip: DoorSlip, o: OpenDoor): DoorNote[] {
   const notes: DoorNote[] = [];
@@ -486,7 +507,18 @@ function openDoorFactNotes(slip: DoorSlip, o: OpenDoor): DoorNote[] {
     const q = slip.chain.native;
     if (live.length) notes.push({ level: "info", code: "pools", text: `Trades in ${live.length} ${live[0].dex} pool${live.length === 1 ? "" : "s"} against W${q.symbol}: the deepest (${(live[0].feeBps / 100).toFixed(2)}% fee) holds ${formatUnits(live[0].quoteReserve ?? 0n, q.decimals, 3)} W${q.symbol}. Pools on other venues or against other pairs are not counted.` });
     else if (o.pools.length) notes.push({ level: "watch", code: "pools-empty", text: `A ${o.pools[0].dex} pool exists but holds no W${q.symbol}: nothing to sell into there.` });
-    else notes.push({ level: "info", code: "no-pool", text: `No W${q.symbol} pool on the chain's known DEX factories. It may trade elsewhere (another DEX, a Uniswap V4 pool, another pair) or not at all.` });
+    else notes.push({ level: "info", code: "no-pool", text: `No W${q.symbol} pool found: none on the chain's known DEX factories, and none announced by the Uniswap V4 singleton where that is read. It may trade on another venue, against another pair, or not at all.` });
+
+    // A V4 hook is code that runs on every swap. It is the one thing about a
+    // pool that the pool's own arithmetic cannot tell you.
+    const hooked = o.pools.filter((p) => p.kind === "v4" && p.hooks && p.hooks !== ZERO_ADDRESS);
+    for (const p of hooked) {
+      notes.push({
+        level: "watch",
+        code: "v4-hook",
+        text: `The ${p.dex} pool runs a hook at ${shortAddress(p.hooks!)}: code that executes on every swap and can charge its own fee, decide who may trade, or refuse the swap outright. Any sale figure here is the pool's arithmetic and does not include whatever the hook does.`,
+      });
+    }
   }
 
   // ---- can they pull the liquidity out from under you
