@@ -180,10 +180,21 @@ const QUOTES: Record<string, { symbol: string; decimals: number }> = {
  * the authority's own token accounts are both sides of the pair. Four cheap
  * reads instead of one expensive one that most endpoints refuse anyway.
  */
-export async function readSolanaPools(rpc: SolanaRpc, mint: string): Promise<SolanaPool[]> {
-  const largest = await rpc.largestAccounts(mint);
+export interface HolderScan {
+  /** The largest accounts holding the mint, as getTokenLargestAccounts returns them. */
+  largest: { address: string; amount: bigint }[];
+  /** Those accounts' contents, in the same order. */
+  accounts: (AccountInfo | null)[];
+}
+
+export async function readSolanaPools(rpc: SolanaRpc, mint: string, scan?: HolderScan): Promise<SolanaPool[]> {
+  // The holder list needs exactly these two reads as well. Doing them twice was
+  // not just wasteful: this client paces every request through one queue, so a
+  // duplicated round trip is time taken from whichever section is still
+  // waiting, and both sections were losing their deadlines because of it.
+  const largest = scan?.largest ?? (await rpc.largestAccounts(mint));
   if (!largest.length) return [];
-  const accounts = await rpc.multipleAccounts(largest.map((l) => l.address));
+  const accounts = scan?.accounts ?? (await rpc.multipleAccounts(largest.map((l) => l.address)));
 
   // A vault's authority. Most of these will be ordinary holders.
   const authorities: string[] = [];
@@ -204,10 +215,10 @@ export async function readSolanaPools(rpc: SolanaRpc, mint: string): Promise<Sol
     candidates.push({ authority: authorities[i], program: account.owner, name: program.name, concentrated: program.concentrated });
   }
   // A busy mint can have many pool-shaped authorities among its largest
-  // accounts. Ten is plenty for finding the deepest, and bounds the work so
+  // accounts. Six is plenty for finding the deepest, and bounds the work so
   // this section cannot become the slowest thing on the slip again.
   if (!candidates.length) return [];
-  candidates.splice(10);
+  candidates.splice(6);
 
   // One request per pool, run together. Sequentially this was the slowest part
   // of the whole slip by a wide margin, and a slip nobody waits for is a slip
@@ -245,7 +256,7 @@ const SHARES = [1_000, 2_500, 5_000, 10_000];
  * The market for one mint: the curve when it still has one, the pools
  * otherwise, and what selling a position would pay at each of four sizes.
  */
-export async function readSolanaMarket(rpc: SolanaRpc, mint: string, position: bigint, tokenDecimals: number): Promise<SolanaMarket> {
+export async function readSolanaMarket(rpc: SolanaRpc, mint: string, position: bigint, tokenDecimals: number, scan?: HolderScan): Promise<SolanaMarket> {
   const empty: SolanaMarket = { curve: null, pools: [], best: null, spot: null, quoteSymbol: "SOL", quotes: [], note: "" };
 
   // The curve first: while it is live it IS the market, and it is one read.
@@ -277,7 +288,7 @@ export async function readSolanaMarket(rpc: SolanaRpc, mint: string, position: b
 
   let pools: SolanaPool[] = [];
   try {
-    pools = await readSolanaPools(rpc, mint);
+    pools = await readSolanaPools(rpc, mint, scan);
   } catch {
     return { ...empty, curve, note: "The pools could not be read from this endpoint." };
   }

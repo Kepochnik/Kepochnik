@@ -14,7 +14,7 @@
  */
 import { base58Encode, isSolanaAddress } from "../chain/base58.js";
 import type { ChainConfig } from "../chain/chains.js";
-import { readSolanaMarket, type SolanaMarket } from "../chain/solanaPools.js";
+import { readSolanaMarket, type HolderScan, type SolanaMarket } from "../chain/solanaPools.js";
 import {
   METADATA_PROGRAM,
   TOKEN_2022_PROGRAM,
@@ -23,6 +23,7 @@ import {
   parseMetadata,
   parseMint,
   tokenAccountOwner,
+  type AccountInfo,
   type Metaplex,
   type SolanaRpc,
   type SplMint,
@@ -136,22 +137,44 @@ export async function readSplDoor(rpc: SolanaRpc, input: string, chain: ChainCon
         options.deadlineMs ?? 8_000,
       );
 
-  // ---- who holds it, resolved from token accounts to the people behind them
-  const readHolders = attempt("holders", async () => {
-    const largest = (await rpc.largestAccounts(input)).slice(0, options.topHolders ?? 20);
+  // The largest accounts and their contents answer two questions at once: who
+  // holds this, and which of those holders is a pool. Read once, shared. They
+  // used to be read twice, and since this client paces every request through
+  // one queue, the duplicate was time taken from whichever section was still
+  // waiting — which is how both of them ended up losing their deadlines.
+  let scan: HolderScan | null = null;
+  const readScan = attempt(
+    "holders",
+    async () => {
+      const largest = (await rpc.largestAccounts(input)).slice(0, options.topHolders ?? 20);
+      if (!largest.length) {
+        scan = { largest: [], accounts: [] };
+        return;
+      }
+      // Resolving accounts to the wallets behind them is a second read, and it
+      // is the one most likely to be refused. Losing it must cost the owner
+      // column, not the whole holder list.
+      let owners: (AccountInfo | null)[] = [];
+      try {
+        owners = await rpc.multipleAccounts(largest.map((a) => a.address));
+      } catch (error) {
+        slip.skipped.push({ section: "holder owners", reason: error instanceof Error ? error.message : String(error) });
+      }
+      scan = { largest, accounts: owners };
+    },
+    options.deadlineMs ?? 15_000,
+  );
+  await readScan;
+
+  const readHolders = (async () => {
+    const found = scan as HolderScan | null;
+    if (!found) return;
+    const largest = found.largest;
     if (!largest.length) {
       slip.holders = { top: [], top10Bps: null, distinctOwners: null };
       return;
     }
-    // Resolving accounts to the wallets behind them is a second read, and it is
-    // the one most likely to be refused. Losing it must cost the owner column,
-    // not the whole holder list.
-    let owners: (Awaited<ReturnType<typeof rpc.multipleAccounts>>[number])[] = [];
-    try {
-      owners = await rpc.multipleAccounts(largest.map((a) => a.address));
-    } catch (error) {
-      slip.skipped.push({ section: "holder owners", reason: error instanceof Error ? error.message : String(error) });
-    }
+    const owners = found.accounts;
     const supply = slip.mint!.supply;
     const top: SplHolder[] = largest.map((a, i) => ({
       account: a.address,
@@ -170,7 +193,7 @@ export async function readSplDoor(rpc: SolanaRpc, input: string, chain: ChainCon
       top10Bps: supply > 0n ? ranked.slice(0, 10).reduce((a, b) => a + b, 0) : null,
       distinctOwners: byOwner.size,
     };
-  }, options.deadlineMs ?? 8_000);
+  })();
 
   // Where it trades. Independent of both of the above, and the same rule
   // applies: a slow or refused read costs this section, not the slip.
@@ -181,7 +204,7 @@ export async function readSplDoor(rpc: SolanaRpc, input: string, chain: ChainCon
         async () => {
           const supply = slip.mint!.supply;
           const position = supply > 0n ? supply / 100n : 0n;
-          slip.market = await readSolanaMarket(rpc, input, position, slip.mint!.decimals);
+          slip.market = await readSolanaMarket(rpc, input, position, slip.mint!.decimals, scan ?? undefined);
         },
         // Several round trips rather than one, and a public endpoint paces
         // them. The eight seconds the other sections get was killing this one
