@@ -567,7 +567,12 @@
       name: "Solana",
       family: "solana",
       chainId: 0,
-      rpc: ["https://api.mainnet-beta.solana.com", "https://solana-rpc.publicnode.com", "https://solana.drpc.org"],
+      // Order matters more here than anywhere else in this table. api.mainnet-beta
+      // rate-limits and blocks freely, and the client pays that cost on every
+      // call before rotating, which turned a read of several round trips into
+      // twenty-five seconds and cost the market section its deadline. The
+      // endpoints that answer go first; the official one stays as a last resort.
+      rpc: ["https://solana-rpc.publicnode.com", "https://solana.drpc.org", "https://api.mainnet-beta.solana.com"],
       blockscout: null,
       explorerUrl: "https://solscan.io",
       factory: null,
