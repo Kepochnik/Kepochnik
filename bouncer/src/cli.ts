@@ -107,8 +107,14 @@ export async function main(argv: string[], write: (text: string) => void = (t) =
       ? noBlockscout ? null : new BlockscoutClient({ baseUrl: DEMO_BLOCKSCOUT, fetchImpl: demoBlockscoutFetch() })
       : chain.blockscout && !noBlockscout ? new BlockscoutClient({ baseUrl: chain.blockscout }) : null;
     const requireFactory = () => {
-      if (!factory) throw new Error(`${chain.name}: ${chain.notes ?? "no factory known; pass --factory 0x…"}`);
-      return factory;
+      if (factory) return factory;
+      // Only the launchpad commands land here, so the message names the command's
+      // problem rather than reprinting the chain's description as an error.
+      throw new Error(
+        chain.launchpad
+          ? `"${command}" needs the ${chain.launchpad} factory address, which is not published for ${chain.name} yet. Pass --factory 0x… once it is.`
+          : `"${command}" reads a launchpad, and none that BOUNCER knows runs on ${chain.name}. Use "bouncer door <address> --chain ${chain.key}", which answers for any token.`,
+      );
     };
     const doorOptions = (): DoorOptions => ({
       chain,
@@ -147,6 +153,10 @@ export async function main(argv: string[], write: (text: string) => void = (t) =
       case "dev": {
         const address = args.positionals[0] ?? (demo ? DEMO.tokens.slow.deployer : undefined);
         if (!address) throw new Error("usage: bouncer dev <address> [--hours 24]");
+        // Ask for the factory before touching the network: a command that cannot
+        // be answered on this chain should say so at once, not after a round trip
+        // that may itself fail and hide the real reason.
+        requireFactory();
         const head = await rpc.getBlock("latest");
         const fromBlock = demo ? Math.max(0, head.number - 300_000) : await findBlockByTimestamp(rpc, head.timestamp - hours * 3600, head.number);
         const report = await readDevReport(rpc, address, { fromBlock, toBlock: head.number, factory: requireFactory(), chunking: chunk ? { startChunk: chunk, maxChunk: chunk } : undefined });
@@ -264,6 +274,7 @@ export async function main(argv: string[], write: (text: string) => void = (t) =
       }
 
       case "receipt": {
+        requireFactory();
         const hash = args.positionals[0] ?? (demo ? `0xdemoFRESH${DEMO.tokens.fresh.launched + 22}` : undefined);
         if (!hash) throw new Error("usage: bouncer receipt <txhash>");
         const receipts = await readTradeReceipt(rpc, hash, requireFactory());
@@ -302,6 +313,7 @@ export async function main(argv: string[], write: (text: string) => void = (t) =
       }
 
       case "plan": {
+        requireFactory();
         const head = await rpc.blockNumber();
         const buyFlag = flagString(args.flags, "buy");
         const plan = await readLaunchPlan(rpc, {
@@ -357,6 +369,7 @@ export async function main(argv: string[], write: (text: string) => void = (t) =
       }
 
       case "watch": {
+        requireFactory();
         const token = args.positionals[0] ?? (demo ? DEMO.tokens.late.token : undefined);
         if (!token) throw new Error("usage: bouncer watch <token> [--interval 5] [--crew] [--rounds n]");
         const head = await rpc.blockNumber();
@@ -389,6 +402,7 @@ export async function main(argv: string[], write: (text: string) => void = (t) =
       }
 
       case "board": {
+        requireFactory();
         const head = await rpc.getBlock("latest");
         const fromBlock = demo ? Math.max(0, head.number - 300_000) : await findBlockByTimestamp(rpc, head.timestamp - flagNumber(args.flags, "hours", 1) * 3600, head.number);
         const board = await readBoard(rpc, { fromBlock, toBlock: head.number, factory: requireFactory(), top: flagNumber(args.flags, "top", 10), chunkSize: chunk, skipCover: args.flags["no-cover"] === true });

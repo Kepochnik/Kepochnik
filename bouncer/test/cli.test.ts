@@ -87,3 +87,22 @@ test("exit still uses the curve for a real launch", async () => {
   assert.equal(code, 0);
   assert.match(out, /curve/);
 });
+
+test("a launchpad-only command on a chain with no launchpad refuses at once, and names the one that works", async () => {
+  // It must not reach the network first: a round trip that fails would hide the
+  // real reason behind whatever the endpoint happened to say.
+  for (const command of [["dev", "0x0000000000000000000000000000000000000001"], ["board"], ["plan"]]) {
+    for (const chain of ["base", "bnb"]) {
+      const { code, out } = await run([...command, "--chain", chain]);
+      assert.equal(code, 1, `${command[0]} on ${chain}`);
+      assert.match(out, /reads a launchpad, and none that BOUNCER knows runs on/);
+      assert.match(out, new RegExp(`bouncer door <address> --chain ${chain}`));
+      assert.ok(!/responded \d\d\d|fetch failed|ENOTFOUND/.test(out), "it must not have touched the network");
+    }
+  }
+});
+
+test("the chain list in help names every chain the tool can read", async () => {
+  const { out } = await run([]);
+  for (const chain of ["robinhood", "base", "bnb", "solana", "arc"]) assert.match(out, new RegExp(chain));
+});
