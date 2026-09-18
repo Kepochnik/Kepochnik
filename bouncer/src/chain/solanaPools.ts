@@ -203,7 +203,11 @@ export async function readSolanaPools(rpc: SolanaRpc, mint: string): Promise<Sol
     if (!program) continue; // an ordinary wallet, not a pool
     candidates.push({ authority: authorities[i], program: account.owner, name: program.name, concentrated: program.concentrated });
   }
+  // A busy mint can have many pool-shaped authorities among its largest
+  // accounts. Ten is plenty for finding the deepest, and bounds the work so
+  // this section cannot become the slowest thing on the slip again.
   if (!candidates.length) return [];
+  candidates.splice(10);
 
   // One request per pool, run together. Sequentially this was the slowest part
   // of the whole slip by a wide margin, and a slip nobody waits for is a slip

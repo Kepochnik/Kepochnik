@@ -567,12 +567,13 @@
       name: "Solana",
       family: "solana",
       chainId: 0,
-      // Order matters more here than anywhere else in this table. api.mainnet-beta
-      // rate-limits and blocks freely, and the client pays that cost on every
-      // call before rotating, which turned a read of several round trips into
-      // twenty-five seconds and cost the market section its deadline. The
-      // endpoints that answer go first; the official one stays as a last resort.
-      rpc: ["https://solana-rpc.publicnode.com", "https://solana.drpc.org", "https://api.mainnet-beta.solana.com"],
+      // Ordered by what answers the heavy reads, not by what is quickest on a
+      // getSlot. The holder list and the pool search need getTokenLargestAccounts
+      // and getTokenAccountsByOwner, and the endpoints that are fastest on the
+      // light methods turned out not to serve those at all — putting them first
+      // cost both sections outright. The failover that makes this list worth
+      // having is in the client's request timeout, not in the order.
+      rpc: ["https://api.mainnet-beta.solana.com", "https://solana-rpc.publicnode.com", "https://solana.drpc.org"],
       blockscout: null,
       explorerUrl: "https://solscan.io",
       factory: null,
@@ -1456,7 +1457,7 @@
     constructor(options) {
       if (!options.urls.length) throw new Error("at least one RPC url is required");
       this.urls = options.urls;
-      this.timeoutMs = options.timeoutMs ?? 2e4;
+      this.timeoutMs = options.timeoutMs ?? 7e3;
       this.fetchImpl = options.fetchImpl ?? ((input, init) => fetch(input, init));
       this.minSpacingMs = options.minSpacingMs ?? (options.fetchImpl ? 0 : 120);
       this.retries = options.retries ?? 2;
@@ -1805,6 +1806,7 @@
       candidates.push({ authority: authorities[i], program: account.owner, name: program.name, concentrated: program.concentrated });
     }
     if (!candidates.length) return [];
+    candidates.splice(10);
     const sides = await Promise.all(
       candidates.map((c) => rpc.tokenAccountsByOwner(c.authority).catch(() => null))
     );
