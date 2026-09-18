@@ -102,11 +102,29 @@ jobs:
           # A wallet that actually holds it, so the position path is exercised.
           HOLDER=$($B door "$TOKEN" --chain "$CHAIN" --format json 2>/dev/null \
             | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const j=JSON.parse(s);const t=(j.open&&j.open.holders&&j.open.holders.top||[]).find(h=>!h.isContract&&h.role!=="burn");console.log(t?t.address:"")}catch{console.log("")}})' || true)
-          if [ -n "$HOLDER" ]; then run "wallet" $B wallet "$TOKEN" "$HOLDER" --chain "$CHAIN"; else echo "::warning::no plain holder found, wallet not exercised"; fi
+          if [ -z "$HOLDER" ]; then
+            echo "::warning::no holder came back from the explorer; using the wrapped native token's own address so the path is still exercised"
+            HOLDER=$(node -e 'const{CHAINS}=require("./dist/src/chain/chains.js");console.log((CHAINS[process.argv[1]].dex||{}).weth||"")' "$CHAIN")
+          fi
+          if [ -n "$HOLDER" ]; then run "wallet" $B wallet "$TOKEN" "$HOLDER" --chain "$CHAIN"; else echo "::warning::wallet not exercised"; fi
 
           DEPLOYER=$($B door "$TOKEN" --chain "$CHAIN" --format json 2>/dev/null \
             | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const j=JSON.parse(s);console.log((j.open&&j.open.deployer&&j.open.deployer.address)||(j.id&&j.id.launch&&j.id.launch.deployer)||"")}catch{console.log("")}})' || true)
-          if [ -n "$DEPLOYER" ]; then run "dev" $B dev "$DEPLOYER" --chain "$CHAIN" --hours 6; else echo "::warning::no deployer found, dev not exercised"; fi
+          # The dev report card counts a deployer's launches, which only exists where
+          # a launchpad does. On a chain without one it must refuse clearly, not throw.
+          if [ "$HAS_PAD" = "yes" ]; then
+            if [ -n "$DEPLOYER" ]; then run "dev" $B dev "$DEPLOYER" --chain "$CHAIN" --hours 6; else echo "::warning::no deployer found, dev not exercised"; fi
+          else
+            echo "::group::dev refuses clearly on a chain with no launchpad"
+            if $B dev 0x0000000000000000000000000000000000000001 --chain "$CHAIN" 2>&1 | tee /tmp/dev.txt; then
+              echo "::error::dev should not succeed on a chain with no launchpad"; fail=1
+            elif grep -q "answers for any token" /tmp/dev.txt; then
+              echo "PASS dev refuses and points at the command that works"
+            else
+              echo "::error::dev refused without saying what to do instead"; cat /tmp/dev.txt; fail=1
+            fi
+            echo "::endgroup::"
+          fi
 
           # The input a user is most likely to paste by mistake: an address with
           # no contract behind it.
