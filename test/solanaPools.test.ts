@@ -17,12 +17,14 @@ import {
   quotePoolSale,
   readSolanaMarket,
   readSolanaPools,
+  marketNote,
   type SolanaPool,
 } from "../src/chain/solanaPools.js";
 
 const MINT = "9BB6NFEcjBCtnNLFko2FqVQBq8HHM13kCyYcdQbgpump";
 const RAYDIUM = "675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8";
 const WHIRLPOOL = "whirLbMiicVdio4qvUfM5KAg6Ct8VwpYzGff3uctyCc";
+
 
 function u64le(value: bigint): Uint8Array {
   const out = new Uint8Array(8);
@@ -161,4 +163,40 @@ test("a USDC pair is priced in USDC, not silently called SOL", async () => {
   const pools = await readSolanaPools(poolRpc(RAYDIUM, 1_000_000_000_000n, 50_000_000n, USDC), MINT);
   assert.equal(pools[0].quoteSymbol, "USDC");
   assert.equal(pools[0].quoteDecimals, 6);
+});
+
+const pool = (name: string, program: string, concentrated: boolean, quoteReserve: bigint): SolanaPool => ({
+  address: name, program, name, concentrated,
+  tokenReserve: 1_000_000_000_000n, quoteMint: WSOL, quoteSymbol: "SOL", quoteDecimals: 9, quoteReserve,
+});
+
+test("a sale that empties the pool is flagged as that, not offered as a price", async () => {
+  // Straight from the live run: 75 million USDC priced into a pool holding
+  // 473 SOL returned the same number at 10%, 25%, 50% and 100%. That is the
+  // pool saying it is too small for the position, and it must not read as
+  // four quotes. A tiny token side makes every size drain it.
+  const market = await readSolanaMarket(poolRpc(RAYDIUM, 1_000n, 1_000_000_000n), MINT, 1_000_000_000_000_000n, 6);
+  assert.ok(market.quotes.length > 0);
+  assert.ok(market.quotes.every((q) => q.drainsPool), `each size should empty the pool; got ${JSON.stringify(market.quotes.map((q) => [q.shareBps, String(q.out)]))}`);
+  assert.match(market.note, /too small for this position/);
+});
+
+test("a much deeper ranged pool is named, so the priced one is not read as the market", () => {
+  // The live shape: nine Orca pools, the largest holding 195x the SOL of the
+  // Raydium pool the quote came from. "Priced on the deepest constant-product
+  // pool" is true on its own and misleading on its own.
+  const orca = pool("Orca Whirlpool (spacing 128)", WHIRLPOOL, true, 92_552_120_772n);
+  const cpmm = pool("Raydium CPMM", RAYDIUM, false, 473_163_103n);
+  const note = marketNote([orca, cpmm], cpmm, []);
+  assert.match(note, /deepest venue for this token is in fact a Orca Whirlpool/);
+  assert.match(note, /196x more SOL/, "92552120772 / 473163103 rounds to 196");
+  assert.match(note, /a floor from one pool/);
+
+  // When the pool being priced IS the deepest, there is nothing to warn about.
+  const alone = marketNote([cpmm], cpmm, []);
+  assert.doesNotMatch(alone, /deepest venue/);
+
+  // A ranged pool only slightly deeper is not worth the sentence either.
+  const slightly = pool("Orca Whirlpool", WHIRLPOOL, true, 500_000_000n);
+  assert.doesNotMatch(marketNote([slightly, cpmm], cpmm, []), /deepest venue/);
 });

@@ -77,6 +77,13 @@ export interface SolanaSaleQuote {
   out: bigint;
   /** What the sale realises against the marginal price, in bps. 10 000 means no impact. */
   realisedBps: number;
+  /**
+   * True when the sale takes essentially everything the pool holds. Past that
+   * point the quotes stop telling you anything — four sizes all return the
+   * same number — and the honest reading is that the pool is too small for the
+   * position, not that this is what you would get.
+   */
+  drainsPool: boolean;
 }
 
 export interface SolanaMarket {
@@ -274,7 +281,7 @@ export async function readSolanaMarket(rpc: SolanaRpc, mint: string, position: b
   if (curve && !curve.complete) {
     const scale = 10 ** tokenDecimals;
     const spot = curve.virtualTokens > 0n ? Number(curve.virtualSol) / 1e9 / (Number(curve.virtualTokens) / scale) : null;
-    const quotes = position > 0n ? priced(SHARES.map((b) => ({ shareBps: b, tokensIn: (position * BigInt(b)) / 10_000n })), (t) => quoteCurveSale(curve, t), spot, tokenDecimals, 9) : [];
+    const quotes = position > 0n ? priced(SHARES.map((b) => ({ shareBps: b, tokensIn: (position * BigInt(b)) / 10_000n })), (t) => quoteCurveSale(curve, t), spot, tokenDecimals, 9, curve.realSol) : [];
     return {
       curve,
       pools: [],
@@ -338,8 +345,7 @@ export async function readSolanaMarket(rpc: SolanaRpc, mint: string, position: b
   }
   const scale = 10 ** tokenDecimals;
   const spot = Number(best.quoteReserve) / 10 ** best.quoteDecimals / (Number(best.tokenReserve) / scale);
-  const quotes = position > 0n ? priced(SHARES.map((b) => ({ shareBps: b, tokensIn: (position * BigInt(b)) / 10_000n })), (t) => quotePoolSale(best, t), spot, tokenDecimals, best.quoteDecimals) : [];
-  const concentrated = pools.filter((p) => p.concentrated).length;
+  const quotes = position > 0n ? priced(SHARES.map((b) => ({ shareBps: b, tokensIn: (position * BigInt(b)) / 10_000n })), (t) => quotePoolSale(best, t), spot, tokenDecimals, best.quoteDecimals, best.quoteReserve) : [];
   return {
     curve,
     pools,
@@ -347,8 +353,34 @@ export async function readSolanaMarket(rpc: SolanaRpc, mint: string, position: b
     spot,
     quoteSymbol: best.quoteSymbol,
     quotes,
-    note: `Priced on the deepest constant-product pool (${best.name}) at a 0.25% fee${concentrated ? `; ${concentrated} concentrated pool${concentrated === 1 ? "" : "s"} found and deliberately not priced, since their vault balances are not what a trade moves through` : ""}. Pools against pairs other than SOL and USDC are not counted.`,
+    note: marketNote(pools, best, quotes),
   };
+}
+
+/**
+ * What the figures above do and do not mean, in one paragraph.
+ *
+ * Pure, and exported, because the two things it has to get right are both
+ * about not being read as more than they are: "the deepest pool we can price"
+ * is not "the deepest pool", and a sale that empties a pool is the pool saying
+ * it is too small rather than a price. Both were live findings, and neither is
+ * worth testing through a network stub.
+ */
+export function marketNote(pools: SolanaPool[], best: SolanaPool, quotes: SolanaSaleQuote[]): string {
+  const concentrated = pools.filter((p) => p.concentrated);
+  const deepest = pools[0];
+  const muchDeeper =
+    deepest && deepest !== best && deepest.concentrated && best.quoteReserve > 0n && deepest.quoteReserve / best.quoteReserve >= 2n
+      ? ` The deepest venue for this token is in fact a ${deepest.name}, holding about ${(Number(deepest.quoteReserve) / Number(best.quoteReserve)).toFixed(0)}x more ${deepest.quoteSymbol} than the pool priced here, and a real sale would mostly go through it — so treat the figures above as a floor from one pool rather than as what the market would pay.`
+      : "";
+  const drained = quotes.some((q) => q.drainsPool)
+    ? " Sizes marked as emptying the pool take essentially all the quote asset it holds; that is the pool telling you it is too small for this position, not a price you would get."
+    : "";
+  return (
+    `Priced on the deepest constant-product pool (${best.name}) at a 0.25% fee` +
+    `${concentrated.length ? `; ${concentrated.length} concentrated pool${concentrated.length === 1 ? "" : "s"} found and deliberately not priced, since their vault balances are not what a trade moves through` : ""}.` +
+    `${muchDeeper}${drained} Pools against pairs other than SOL and USDC are not counted.`
+  );
 }
 
 function priced(
@@ -357,11 +389,18 @@ function priced(
   spot: number | null,
   tokenDecimals: number,
   quoteDecimals: number,
+  available: bigint,
 ): SolanaSaleQuote[] {
   return sizes.map(({ shareBps, tokensIn }) => {
     const out = sell(tokensIn);
     const atSpot = spot === null ? 0 : (Number(tokensIn) / 10 ** tokenDecimals) * spot;
     const got = Number(out) / 10 ** quoteDecimals;
-    return { shareBps, tokensIn, out, realisedBps: atSpot > 0 ? Math.round((got / atSpot) * 10_000) : 0 };
+    return {
+      shareBps,
+      tokensIn,
+      out,
+      realisedBps: atSpot > 0 ? Math.round((got / atSpot) * 10_000) : 0,
+      drainsPool: available > 0n && out * 100n >= available * 99n,
+    };
   });
 }
