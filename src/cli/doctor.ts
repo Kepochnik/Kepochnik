@@ -22,7 +22,7 @@ export interface DoctorReport {
   errors: string[];
 }
 
-export async function runDoctor(rpc: RpcClient, now: () => number = () => Date.now(), factory: string = PONS_V2_FACTORY): Promise<DoctorReport> {
+export async function runDoctor(rpc: RpcClient, now: () => number = () => Date.now(), factory: string | null = PONS_V2_FACTORY): Promise<DoctorReport> {
   const report: DoctorReport = {
     ok: false,
     rpcUrl: rpc.activeUrl,
@@ -45,6 +45,7 @@ export async function runDoctor(rpc: RpcClient, now: () => number = () => Date.n
     const block = await rpc.getBlock("latest");
     report.latestBlock = block.number;
     report.blockTimestamp = block.timestamp;
+    if (!factory) return report; // no launchpad on this chain: nothing to check for one
     const code = (await rpc.send("eth_getCode", [factory, "latest"])) as string;
     report.factoryHasCode = typeof code === "string" && code.length > 2;
     if (!report.factoryHasCode) report.errors.push(`no bytecode at the launchpad factory ${factory}`);
@@ -65,7 +66,7 @@ export async function runDoctor(rpc: RpcClient, now: () => number = () => Date.n
   return report;
 }
 
-export function doctorReceipt(report: DoctorReport, toolName: string, chainName = "Robinhood Chain", factory: string = PONS_V2_FACTORY): Receipt {
+export function doctorReceipt(report: DoctorReport, toolName: string, chainName = "Robinhood Chain", factory: string | null = PONS_V2_FACTORY): Receipt {
   return {
     title: `${toolName} doctor`,
     subtitle: report.ok ? "read path healthy" : "read path has problems",
@@ -80,15 +81,24 @@ export function doctorReceipt(report: DoctorReport, toolName: string, chainName 
           { label: "rpc latency", value: report.latencyMs === null ? null : `${report.latencyMs} ms` },
         ],
       },
-      {
-        title: "launchpad factory",
-        rows: [
-          { label: "address", value: factory },
-          { label: "bytecode", value: report.factoryHasCode },
-          { label: "snipe tax start", value: report.snipeTaxStartBps === null ? null : `${Number(report.snipeTaxStartBps) / 100}%` },
-          { label: "snipe tax window", value: report.snipeTaxSeconds === null ? null : `${report.snipeTaxSeconds}s` },
-        ],
-      },
+      ...(factory
+        ? [
+            {
+              title: "launchpad factory",
+              rows: [
+                { label: "address", value: factory },
+                { label: "bytecode", value: report.factoryHasCode },
+                { label: "snipe tax start", value: report.snipeTaxStartBps === null ? null : `${Number(report.snipeTaxStartBps) / 100}%` },
+                { label: "snipe tax window", value: report.snipeTaxSeconds === null ? null : `${report.snipeTaxSeconds}s` },
+              ],
+            },
+          ]
+        : [
+            {
+              title: "launchpad",
+              rows: [{ label: "factory", value: "none known on this chain", note: "every address here is checked as an ordinary token" }],
+            },
+          ]),
       {
         title: "Boundaries",
         rows: [

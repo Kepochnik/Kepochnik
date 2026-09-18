@@ -50,6 +50,20 @@ jobs:
             echo; echo "::endgroup::"
           }
 
+          FAMILY=$(node -e 'const{CHAINS}=require("./dist/src/chain/chains.js");console.log((CHAINS[process.argv[1]]||{}).family||"evm")' "$CHAIN")
+          if [ "$FAMILY" = "solana" ]; then
+            run "doctor" $B doctor --chain "$CHAIN"
+            MINT="${TOKEN_IN:-EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v}"          # USDC
+            run "door (text)" $B door "$MINT" --chain "$CHAIN"
+            run "door (json)" $B door "$MINT" --chain "$CHAIN" --format json
+            # A Token-2022 mint, so the extension reader is exercised on real bytes.
+            run "door (token-2022)" $B door "9BB6NFEcjBCtnNLFko2FqVQBq8HHM13kCyYcdQbgpump" --chain "$CHAIN"
+            # A wallet, not a mint: the slip must name it rather than check it as a token.
+            run "door (a wallet, not a mint)" $B door "11111111111111111111111111111111" --chain "$CHAIN"
+            run "unsupported command is refused politely" bash -c "$B board --chain $CHAIN || true"
+            exit $fail
+          fi
+
           # Does this chain have a launchpad at all? The board, the planner and the
           # curve exit only mean something where one does.
           HAS_PAD=$(node -e 'const{CHAINS}=require("./dist/src/chain/chains.js");const c=CHAINS[process.argv[1]];console.log(c&&c.launchpad&&c.factory?"yes":"no")' "$CHAIN")
