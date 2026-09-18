@@ -18,6 +18,7 @@ import { decodeOutputs, encodeCall, type FunctionAbi, type Hex } from "./abi.js"
 import { DEFAULT_V3_FEE_TIERS, type DexTable } from "./chains.js";
 import { ERC20_FUNCTIONS, ZERO_ADDRESS } from "./pons.js";
 import type { RpcClient } from "./rpc.js";
+import { readV4Pools } from "./v4.js";
 
 const Q96 = 2n ** 96n;
 
@@ -37,7 +38,13 @@ const POOL_FUNCTIONS = {
   stable: { name: "stable", inputs: [], outputs: ["bool"] },
 } as const satisfies Record<string, FunctionAbi>;
 
-export type PoolKind = "v3" | "v2" | "solidly";
+/**
+  * "v4" is priced with the same arithmetic as "v3" — both are a square-root
+  * price and an in-range liquidity — but it is a separate kind because a V4
+  * pool lives inside a singleton and can carry a hook, neither of which is
+  * true of the others.
+  */
+export type PoolKind = "v3" | "v4" | "v2" | "solidly";
 
 export interface MarketPool {
   dex: string;
@@ -55,6 +62,12 @@ export interface MarketPool {
   liquidity?: bigint;
   /** Solidly only: a stable pool uses a different invariant and is not priced here. */
   stable?: boolean;
+  /** V4 only: the pool's key hash inside the singleton. */
+  poolId?: string;
+  /** V4 only: the hook contract, or the zero address. Code that runs on every swap. */
+  hooks?: string;
+  /** V4 only. */
+  tickSpacing?: number;
 }
 
 export interface MarketQuote {
@@ -85,7 +98,14 @@ export interface Market {
  * pool's state. A factory that answers garbage is skipped rather than taking
  * the others down with it.
  */
-export async function readPools(rpc: RpcClient, token: string, dex: DexTable, block: number, tokenDecimals = 18): Promise<MarketPool[]> {
+export interface PoolsOptions {
+  /** A resolved Uniswap V4 singleton. V4 has no factory to ask, so it is found by log instead. */
+  v4PoolManager?: string;
+  /** How far back to look for V4 Initialize logs. */
+  v4FromBlock?: number;
+}
+
+export async function readPools(rpc: RpcClient, token: string, dex: DexTable, block: number, tokenDecimals = 18, options: PoolsOptions = {}): Promise<MarketPool[]> {
   const asks: { dex: string; kind: PoolKind; feeBps: number; stable?: boolean }[] = [];
   const calls: { to: string; data: Hex }[] = [];
   for (const f of dex.v3Factories ?? []) {
@@ -104,7 +124,14 @@ export async function readPools(rpc: RpcClient, token: string, dex: DexTable, bl
       calls.push({ to: f.address, data: encodeCall(FACTORY_FUNCTIONS.getPoolStable, [token, dex.weth, stable]) });
     }
   }
-  if (!calls.length) return [];
+  // V4 has no factory call; its pools are announced by log. Started here so the
+  // two searches overlap rather than queue.
+  const v4 =
+    options.v4PoolManager && options.v4FromBlock !== undefined
+      ? readV4Pools(rpc, token, dex.weth, options.v4PoolManager, { fromBlock: Math.max(0, options.v4FromBlock), toBlock: block }).catch(() => [] as MarketPool[])
+      : Promise.resolve([] as MarketPool[]);
+
+  if (!calls.length) return await v4;
 
   const raws = await rpc.callBatch(calls, block);
   const found: MarketPool[] = [];
@@ -119,14 +146,12 @@ export async function readPools(rpc: RpcClient, token: string, dex: DexTable, bl
       // not a factory of this shape; the others are unaffected
     }
   });
-  if (!found.length) return found;
+  const v4Pools = await v4;
+  if (!found.length) return v4Pools.sort(byDepth);
 
   await hydrate(rpc, token, dex, found, block);
-  return found.sort((a, b) => {
-    const x = a.quoteReserve ?? -1n;
-    const y = b.quoteReserve ?? -1n;
-    return y > x ? 1 : y < x ? -1 : 0;
-  });
+  found.push(...v4Pools);
+  return found.sort(byDepth);
 }
 
 /** Reads each pool's direction, reserves and, for a V3 pool, its price and liquidity. */
@@ -171,9 +196,33 @@ async function hydrate(rpc: RpcClient, token: string, dex: DexTable, pools: Mark
   });
 }
 
+/**
+ * How much quote asset stands behind this pool, for ranking them.
+ *
+ * A V4 pool keeps its funds in the singleton, so it has no balance of its own
+ * to read and ordering by one would always put it last, however deep it is.
+ * Its in-range liquidity converts to the same units — L·√P/2^96 is the quote
+ * side of that liquidity — which is comparable enough to sort by. It is NOT
+ * written into quoteReserve: that field means a balance somebody read, and a
+ * derived number does not belong in it.
+ */
+export function depth(pool: MarketPool): bigint {
+  if (pool.quoteReserve !== null) return pool.quoteReserve;
+  const sqrt = pool.sqrtPriceX96 ?? 0n;
+  const liquidity = pool.liquidity ?? 0n;
+  if (sqrt <= 0n || liquidity <= 0n) return -1n;
+  return pool.tokenIsToken0 ? (liquidity * sqrt) / Q96 : (liquidity * Q96) / sqrt;
+}
+
+const byDepth = (a: MarketPool, b: MarketPool): number => {
+  const x = depth(a);
+  const y = depth(b);
+  return y > x ? 1 : y < x ? -1 : 0;
+};
+
 /** Whether this pool holds enough state to price a sale. */
 export function canPrice(pool: MarketPool): boolean {
-  if (pool.kind === "v3") return (pool.sqrtPriceX96 ?? 0n) > 0n && (pool.liquidity ?? 0n) > 0n;
+  if (pool.kind === "v3" || pool.kind === "v4") return (pool.sqrtPriceX96 ?? 0n) > 0n && (pool.liquidity ?? 0n) > 0n;
   if (pool.kind === "solidly" && pool.stable) return false;
   return (pool.tokenReserve ?? 0n) > 0n && (pool.quoteReserve ?? 0n) > 0n;
 }
@@ -185,7 +234,7 @@ export function canPrice(pool: MarketPool): boolean {
  */
 export function spotPrice(pool: MarketPool, tokenDecimals: number): bigint | null {
   const one = 10n ** BigInt(tokenDecimals);
-  if (pool.kind === "v3") {
+  if (pool.kind === "v3" || pool.kind === "v4") {
     const sqrt = pool.sqrtPriceX96 ?? 0n;
     if (sqrt <= 0n) return null;
     // price of token1 per token0 is (sqrtP / 2^96)^2.
@@ -211,7 +260,10 @@ export function quoteSale(pool: MarketPool, tokensIn: bigint): { out: bigint; be
   const afterFee = (tokensIn * (10_000n - feeBps)) / 10_000n;
   if (afterFee <= 0n) return { out: 0n, beyondTick: false };
 
-  if (pool.kind !== "v3") {
+  // V4 is concentrated like V3 and, unlike every other kind here, keeps its
+  // funds in a singleton — so it has no reserves of its own to multiply. It
+  // must take the branch below, not this one.
+  if (pool.kind !== "v3" && pool.kind !== "v4") {
     const t = pool.tokenReserve ?? 0n;
     const q = pool.quoteReserve ?? 0n;
     // x * y = k, with the fee already taken off the input.
@@ -277,8 +329,8 @@ export function readMarket(pools: MarketPool[], position: bigint, tokenDecimals:
     spot,
     quotes,
     note:
-      `Priced on the ${best.dex} ${best.kind === "v3" ? "V3" : best.kind === "v2" ? "V2" : "Solidly"} pool at ${(best.feeBps / 100).toFixed(2)}% fee, from its state at this block. ` +
-      (best.kind === "v3"
+      `Priced on the ${best.dex} ${best.kind === "v3" ? "V3" : best.kind === "v4" ? "V4" : best.kind === "v2" ? "V2" : "Solidly"} pool at ${(best.feeBps / 100).toFixed(2)}% fee, from its state at this block. ` +
+      (best.kind === "v3" || best.kind === "v4"
         ? `Concentrated liquidity: exact inside the current tick${crosses ? ", and the larger sizes leave it, so the real answer depends on ticks this does not read" : ""}. `
         : "Constant product, so the arithmetic is exact for the pool. ") +
       `The token's own transfer tax, if it has one, is not included, and nothing here is a promise about a trade.`,

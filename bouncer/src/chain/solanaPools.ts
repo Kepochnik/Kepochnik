@@ -195,35 +195,43 @@ export async function readSolanaPools(rpc: SolanaRpc, mint: string): Promise<Sol
   if (!authorities.length) return [];
 
   const authorityAccounts = await rpc.multipleAccounts(authorities);
-  const pools: SolanaPool[] = [];
+  const candidates: { authority: string; program: string; name: string; concentrated: boolean }[] = [];
   for (let i = 0; i < authorities.length; i++) {
     const account = authorityAccounts[i];
     if (!account) continue;
     const program = POOL_PROGRAMS[account.owner];
     if (!program) continue; // an ordinary wallet, not a pool
+    candidates.push({ authority: authorities[i], program: account.owner, name: program.name, concentrated: program.concentrated });
+  }
+  if (!candidates.length) return [];
 
-    let vaults: { mint: string; amount: bigint }[];
-    try {
-      vaults = await rpc.tokenAccountsByOwner(authorities[i]);
-    } catch {
-      continue; // this pool's sides could not be listed; the others are unaffected
-    }
+  // One request per pool, run together. Sequentially this was the slowest part
+  // of the whole slip by a wide margin, and a slip nobody waits for is a slip
+  // nobody reads.
+  const sides = await Promise.all(
+    candidates.map((c) => rpc.tokenAccountsByOwner(c.authority).catch(() => null)),
+  );
+
+  const pools: SolanaPool[] = [];
+  candidates.forEach((c, i) => {
+    const vaults = sides[i];
+    if (!vaults) return; // this pool's sides could not be listed; the others are unaffected
     const ours = vaults.find((v) => v.mint === mint);
     const other = vaults.find((v) => v.mint !== mint && QUOTES[v.mint]);
-    if (!ours || !other) continue; // not a pair against something priceable
+    if (!ours || !other) return; // not a pair against something priceable
     const quote = QUOTES[other.mint];
     pools.push({
-      address: authorities[i],
-      program: account.owner,
-      name: program.name,
-      concentrated: program.concentrated,
+      address: c.authority,
+      program: c.program,
+      name: c.name,
+      concentrated: c.concentrated,
       tokenReserve: ours.amount,
       quoteMint: other.mint,
       quoteSymbol: quote.symbol,
       quoteDecimals: quote.decimals,
       quoteReserve: other.amount,
     });
-  }
+  });
   return pools.sort((a, b) => (b.quoteReserve > a.quoteReserve ? 1 : b.quoteReserve < a.quoteReserve ? -1 : 0));
 }
 
@@ -270,7 +278,14 @@ export async function readSolanaMarket(rpc: SolanaRpc, mint: string, position: b
     return { ...empty, curve, note: "The pools could not be read from this endpoint." };
   }
   if (!pools.length) {
-    return { ...empty, curve, note: curve?.complete ? "The bonding curve has graduated, but no pool against SOL or USDC was found among the largest accounts holding this mint." : "No pool against SOL or USDC was found among the largest accounts holding this mint. It may trade elsewhere, or not at all." };
+    // Worth being exact about the method's blind spot. Pools are found by
+    // looking at the twenty largest accounts holding the mint, which contains a
+    // pool's vault for a token whose pools are among its biggest holders — true
+    // of a memecoin, and false of a token like USDC whose largest accounts are
+    // all exchanges. "No pool found" here is a statement about this search, not
+    // about the token.
+    const how = "Pools are found by walking the twenty largest accounts holding this mint and asking which of them belong to a DEX. For a token whose biggest holders are exchanges or treasuries rather than pools, that search comes up empty even though pools exist.";
+    return { ...empty, curve, note: `${curve?.complete ? "The bonding curve has graduated, but no" : "No"} pool against SOL or USDC turned up. ${how}` };
   }
 
   const priceable = pools.filter((p) => !p.concentrated && p.tokenReserve > 0n && p.quoteReserve > 0n);

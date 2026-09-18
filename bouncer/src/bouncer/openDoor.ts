@@ -187,6 +187,8 @@ export interface OpenDoorOptions {
   liquidity?: boolean;
   /** How far back to look for the mints that opened the V3 positions. */
   liquidityFromBlock?: number;
+  /** A resolved Uniswap V4 singleton; V4 pools are skipped when absent. */
+  v4PoolManager?: string;
 }
 
 const BURN_ADDRESSES = new Set([ZERO_ADDRESS, "0x000000000000000000000000000000000000dead", "0x0000000000000000000000000000000000000001"]);
@@ -243,7 +245,10 @@ export async function readOpenDoor(rpc: RpcClient, token: ContractId, meta: Toke
   let liquidity: PoolLock | null = null;
   if (options.dex) {
     try {
-      pools = await readPools(rpc, address, options.dex, block, meta?.decimals ?? 18);
+      pools = await readPools(rpc, address, options.dex, block, meta?.decimals ?? 18, {
+        v4PoolManager: options.v4PoolManager,
+        v4FromBlock: options.liquidityFromBlock,
+      });
       const position = options.position ?? (supply !== null && supply > 0n ? supply / 100n : 0n);
       if (position > 0n) market = readMarket(pools, position, meta?.decimals ?? 18, options.dex.wethSymbol);
     } catch {

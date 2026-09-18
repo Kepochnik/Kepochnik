@@ -511,7 +511,10 @@
         weth: "0x0Bd7D308f8E1639FAb988df18A8011f41EAcAD73".toLowerCase(),
         wethSymbol: "WETH",
         v3Factories: [{ name: "Uniswap V3", address: "0x1f7d7550B1b028f7571E69A784071F0205FD2EfA".toLowerCase() }],
-        v3PositionManager: "0x943e6b11d6a2a0dD87eC5E23Cf58A63A8D9Ec2B7".toLowerCase()
+        v3PositionManager: "0x943e6b11d6a2a0dD87eC5E23Cf58A63A8D9Ec2B7".toLowerCase(),
+        // The launchpad graduates into V4 and its factory names the singleton, so
+        // the address is read from the chain rather than recalled.
+        v4PoolManager: "from-launchpad"
       }
     },
     base: {
@@ -1788,34 +1791,38 @@
     }
     if (!authorities.length) return [];
     const authorityAccounts = await rpc.multipleAccounts(authorities);
-    const pools = [];
+    const candidates = [];
     for (let i = 0; i < authorities.length; i++) {
       const account = authorityAccounts[i];
       if (!account) continue;
       const program = POOL_PROGRAMS[account.owner];
       if (!program) continue;
-      let vaults;
-      try {
-        vaults = await rpc.tokenAccountsByOwner(authorities[i]);
-      } catch {
-        continue;
-      }
+      candidates.push({ authority: authorities[i], program: account.owner, name: program.name, concentrated: program.concentrated });
+    }
+    if (!candidates.length) return [];
+    const sides = await Promise.all(
+      candidates.map((c) => rpc.tokenAccountsByOwner(c.authority).catch(() => null))
+    );
+    const pools = [];
+    candidates.forEach((c, i) => {
+      const vaults = sides[i];
+      if (!vaults) return;
       const ours = vaults.find((v) => v.mint === mint);
       const other = vaults.find((v) => v.mint !== mint && QUOTES[v.mint]);
-      if (!ours || !other) continue;
+      if (!ours || !other) return;
       const quote = QUOTES[other.mint];
       pools.push({
-        address: authorities[i],
-        program: account.owner,
-        name: program.name,
-        concentrated: program.concentrated,
+        address: c.authority,
+        program: c.program,
+        name: c.name,
+        concentrated: c.concentrated,
         tokenReserve: ours.amount,
         quoteMint: other.mint,
         quoteSymbol: quote.symbol,
         quoteDecimals: quote.decimals,
         quoteReserve: other.amount
       });
-    }
+    });
     return pools.sort((a, b) => b.quoteReserve > a.quoteReserve ? 1 : b.quoteReserve < a.quoteReserve ? -1 : 0);
   }
   var SHARES = [1e3, 2500, 5e3, 1e4];
@@ -1851,7 +1858,8 @@
       return { ...empty, curve, note: "The pools could not be read from this endpoint." };
     }
     if (!pools.length) {
-      return { ...empty, curve, note: curve?.complete ? "The bonding curve has graduated, but no pool against SOL or USDC was found among the largest accounts holding this mint." : "No pool against SOL or USDC was found among the largest accounts holding this mint. It may trade elsewhere, or not at all." };
+      const how = "Pools are found by walking the twenty largest accounts holding this mint and asking which of them belong to a DEX. For a token whose biggest holders are exchanges or treasuries rather than pools, that search comes up empty even though pools exist.";
+      return { ...empty, curve, note: `${curve?.complete ? "The bonding curve has graduated, but no" : "No"} pool against SOL or USDC turned up. ${how}` };
     }
     const priceable = pools.filter((p) => !p.concentrated && p.tokenReserve > 0n && p.quoteReserve > 0n);
     const best = priceable[0] ?? null;
@@ -1979,7 +1987,10 @@
         const position = supply > 0n ? supply / 100n : 0n;
         slip.market = await readSolanaMarket(rpc, input, position, slip.mint.decimals);
       },
-      options.deadlineMs ?? 8e3
+      // Several round trips rather than one, and a public endpoint paces
+      // them. The eight seconds the other sections get was killing this one
+      // outright, which reads on the slip as "no venue" — the wrong answer.
+      options.marketDeadlineMs ?? 25e3
     );
     await Promise.all([readName, readHolders, readMarket2]);
     slip.notes = splNotes(slip);
@@ -3102,6 +3113,7 @@
   }
 
   // src/bouncer/door.ts
+  init_abi();
   init_tape();
 
   // src/bouncer/houseRules.ts
@@ -3455,6 +3467,107 @@
 
   // src/chain/market.ts
   init_abi();
+
+  // src/chain/v4.ts
+  init_abi();
+  init_keccak();
+  init_tape();
+  var POOLS_SLOT2 = 6n;
+  var EXTSLOAD = { name: "extsload", inputs: ["bytes32"], outputs: ["bytes32"] };
+  var V4_EVENTS = {
+    Initialize: {
+      name: "Initialize",
+      inputs: [
+        { name: "id", type: "bytes32", indexed: true },
+        { name: "currency0", type: "address", indexed: true },
+        { name: "currency1", type: "address", indexed: true },
+        { name: "fee", type: "uint24", indexed: false },
+        { name: "tickSpacing", type: "int24", indexed: false },
+        { name: "hooks", type: "address", indexed: false },
+        { name: "sqrtPriceX96", type: "uint160", indexed: false },
+        { name: "tick", type: "int24", indexed: false }
+      ]
+    }
+  };
+  function hexToBytes3(hex) {
+    const clean2 = hex.replace(/^0x/, "");
+    const out2 = new Uint8Array(clean2.length / 2);
+    for (let i = 0; i < out2.length; i++) out2[i] = parseInt(clean2.slice(i * 2, i * 2 + 2), 16);
+    return out2;
+  }
+  var ZERO = "0x0000000000000000000000000000000000000000";
+  async function readV4Pools(rpc, token, quote, poolManager, options) {
+    const lower = token.toLowerCase();
+    const quoteLower = quote.toLowerCase();
+    const window2 = { address: poolManager, events: [V4_EVENTS.Initialize], fromBlock: options.fromBlock, toBlock: options.toBlock };
+    const chunking = { minChunk: 1, startChunk: options.chunkSize ?? 5e3, maxChunk: 2e5 };
+    const [asCurrency0, asCurrency1] = await Promise.all([
+      readTapeAdaptive(rpc, { ...window2, topics: [addressTopic(lower)] }, chunking),
+      readTapeAdaptive(rpc, { ...window2, topics: [null, addressTopic(lower)] }, chunking)
+    ]);
+    const found = /* @__PURE__ */ new Map();
+    for (const log of [...asCurrency0.logs, ...asCurrency1.logs]) {
+      const currency0 = String(log.args.currency0).toLowerCase();
+      const currency1 = String(log.args.currency1).toLowerCase();
+      const tokenIsCurrency0 = currency0 === lower;
+      const other = tokenIsCurrency0 ? currency1 : currency0;
+      if (other !== quoteLower) continue;
+      const poolId = String(log.args.id);
+      if (found.has(poolId)) continue;
+      found.set(poolId, {
+        poolId,
+        fee: Number(log.args.fee),
+        tickSpacing: Number(log.args.tickSpacing),
+        hooks: String(log.args.hooks).toLowerCase(),
+        tokenIsCurrency0
+      });
+    }
+    if (!found.size) return [];
+    const keys = [...found.values()].slice(0, options.maxPools ?? 16);
+    const calls = [];
+    for (const key of keys) {
+      const stateSlot = keccak256Hex(hexToBytes3(`0x${key.poolId.slice(2)}${encodeWord("uint256", POOLS_SLOT2)}`));
+      const liquiditySlot = `0x${(BigInt(stateSlot) + 3n).toString(16).padStart(64, "0")}`;
+      calls.push({ to: poolManager, data: encodeCall(EXTSLOAD, [stateSlot]) });
+      calls.push({ to: poolManager, data: encodeCall(EXTSLOAD, [liquiditySlot]) });
+    }
+    const raws = await rpc.callBatchSettled(calls, options.toBlock);
+    const pools = [];
+    keys.forEach((key, i) => {
+      const slot0Raw = raws[i * 2];
+      const liquidityRaw = raws[i * 2 + 1];
+      if (slot0Raw instanceof Error || liquidityRaw instanceof Error) return;
+      let sqrtPriceX96;
+      let liquidity;
+      try {
+        sqrtPriceX96 = BigInt(slot0Raw) & (1n << 160n) - 1n;
+        liquidity = BigInt(liquidityRaw) & (1n << 128n) - 1n;
+      } catch {
+        return;
+      }
+      if (sqrtPriceX96 === 0n) return;
+      pools.push({
+        dex: key.hooks === ZERO ? "Uniswap V4" : "Uniswap V4 (hooked)",
+        kind: "v4",
+        address: poolManager,
+        poolId: key.poolId,
+        hooks: key.hooks,
+        tickSpacing: key.tickSpacing,
+        feeBps: key.fee / 100,
+        tokenIsToken0: key.tokenIsCurrency0,
+        // V4 holds every pool's funds in one contract, so a balance of the
+        // PoolManager is not this pool's reserves. Leaving these null is the
+        // truthful answer; the price and liquidity below are what a swap uses.
+        tokenReserve: null,
+        quoteReserve: null,
+        sqrtPriceX96,
+        liquidity
+      });
+    });
+    return pools;
+  }
+
+  // src/chain/market.ts
   var Q962 = 2n ** 96n;
   var FACTORY_FUNCTIONS2 = {
     getPool: { name: "getPool", inputs: ["address", "address", "uint24"], outputs: ["address"] },
@@ -3470,7 +3583,7 @@
     getReservesWide: { name: "getReserves", inputs: [], outputs: ["uint256", "uint256", "uint256"] },
     stable: { name: "stable", inputs: [], outputs: ["bool"] }
   };
-  async function readPools(rpc, token, dex, block, tokenDecimals = 18) {
+  async function readPools(rpc, token, dex, block, tokenDecimals = 18, options = {}) {
     const asks = [];
     const calls = [];
     for (const f of dex.v3Factories ?? []) {
@@ -3489,7 +3602,8 @@
         calls.push({ to: f.address, data: encodeCall(FACTORY_FUNCTIONS2.getPoolStable, [token, dex.weth, stable]) });
       }
     }
-    if (!calls.length) return [];
+    const v4 = options.v4PoolManager && options.v4FromBlock !== void 0 ? readV4Pools(rpc, token, dex.weth, options.v4PoolManager, { fromBlock: Math.max(0, options.v4FromBlock), toBlock: block }).catch(() => []) : Promise.resolve([]);
+    if (!calls.length) return await v4;
     const raws = await rpc.callBatch(calls, block);
     const found = [];
     const seen = /* @__PURE__ */ new Set();
@@ -3502,13 +3616,11 @@
       } catch {
       }
     });
-    if (!found.length) return found;
+    const v4Pools = await v4;
+    if (!found.length) return v4Pools.sort(byDepth);
     await hydrate(rpc, token, dex, found, block);
-    return found.sort((a, b) => {
-      const x = a.quoteReserve ?? -1n;
-      const y = b.quoteReserve ?? -1n;
-      return y > x ? 1 : y < x ? -1 : 0;
-    });
+    found.push(...v4Pools);
+    return found.sort(byDepth);
   }
   async function hydrate(rpc, token, dex, pools, block) {
     const calls = [];
@@ -3547,14 +3659,26 @@
       }
     });
   }
+  function depth(pool) {
+    if (pool.quoteReserve !== null) return pool.quoteReserve;
+    const sqrt = pool.sqrtPriceX96 ?? 0n;
+    const liquidity = pool.liquidity ?? 0n;
+    if (sqrt <= 0n || liquidity <= 0n) return -1n;
+    return pool.tokenIsToken0 ? liquidity * sqrt / Q962 : liquidity * Q962 / sqrt;
+  }
+  var byDepth = (a, b) => {
+    const x = depth(a);
+    const y = depth(b);
+    return y > x ? 1 : y < x ? -1 : 0;
+  };
   function canPrice(pool) {
-    if (pool.kind === "v3") return (pool.sqrtPriceX96 ?? 0n) > 0n && (pool.liquidity ?? 0n) > 0n;
+    if (pool.kind === "v3" || pool.kind === "v4") return (pool.sqrtPriceX96 ?? 0n) > 0n && (pool.liquidity ?? 0n) > 0n;
     if (pool.kind === "solidly" && pool.stable) return false;
     return (pool.tokenReserve ?? 0n) > 0n && (pool.quoteReserve ?? 0n) > 0n;
   }
   function spotPrice(pool, tokenDecimals) {
     const one = 10n ** BigInt(tokenDecimals);
-    if (pool.kind === "v3") {
+    if (pool.kind === "v3" || pool.kind === "v4") {
       const sqrt = pool.sqrtPriceX96 ?? 0n;
       if (sqrt <= 0n) return null;
       return pool.tokenIsToken0 ? sqrt * sqrt * one / (Q962 * Q962) : Q962 * Q962 * one / (sqrt * sqrt);
@@ -3569,7 +3693,7 @@
     const feeBps = BigInt(Math.round(pool.feeBps));
     const afterFee = tokensIn * (10000n - feeBps) / 10000n;
     if (afterFee <= 0n) return { out: 0n, beyondTick: false };
-    if (pool.kind !== "v3") {
+    if (pool.kind !== "v3" && pool.kind !== "v4") {
       const t = pool.tokenReserve ?? 0n;
       const q2 = pool.quoteReserve ?? 0n;
       const out3 = afterFee * q2 / (t + afterFee);
@@ -3623,15 +3747,15 @@
       best,
       spot,
       quotes,
-      note: `Priced on the ${best.dex} ${best.kind === "v3" ? "V3" : best.kind === "v2" ? "V2" : "Solidly"} pool at ${(best.feeBps / 100).toFixed(2)}% fee, from its state at this block. ` + (best.kind === "v3" ? `Concentrated liquidity: exact inside the current tick${crosses ? ", and the larger sizes leave it, so the real answer depends on ticks this does not read" : ""}. ` : "Constant product, so the arithmetic is exact for the pool. ") + `The token's own transfer tax, if it has one, is not included, and nothing here is a promise about a trade.`
+      note: `Priced on the ${best.dex} ${best.kind === "v3" ? "V3" : best.kind === "v4" ? "V4" : best.kind === "v2" ? "V2" : "Solidly"} pool at ${(best.feeBps / 100).toFixed(2)}% fee, from its state at this block. ` + (best.kind === "v3" || best.kind === "v4" ? `Concentrated liquidity: exact inside the current tick${crosses ? ", and the larger sizes leave it, so the real answer depends on ticks this does not read" : ""}. ` : "Constant product, so the arithmetic is exact for the pool. ") + `The token's own transfer tax, if it has one, is not included, and nothing here is a promise about a trade.`
     };
   }
 
   // src/chain/liquidity.ts
   init_abi();
-  var ZERO = "0x0000000000000000000000000000000000000000";
+  var ZERO2 = "0x0000000000000000000000000000000000000000";
   var DEAD = "0x000000000000000000000000000000000000dead";
-  var BURN_ADDRESSES = /* @__PURE__ */ new Set([ZERO, DEAD, "0x0000000000000000000000000000000000000001"]);
+  var BURN_ADDRESSES = /* @__PURE__ */ new Set([ZERO2, DEAD, "0x0000000000000000000000000000000000000001"]);
   var LP_FUNCTIONS = {
     ownerOf: { name: "ownerOf", inputs: ["uint256"], outputs: ["address"] }
   };
@@ -3673,7 +3797,7 @@
   async function readV2Lock(rpc, pool, lockers, block) {
     const base = { pool: pool.address, dex: pool.dex, kind: pool.kind, burnedBps: 0, lockedBps: 0, freeBps: 0, holders: [], unread: "" };
     const lockerAddresses = Object.keys(lockers ?? {});
-    const asked = [ZERO, DEAD, ...lockerAddresses];
+    const asked = [ZERO2, DEAD, ...lockerAddresses];
     const calls = [
       { to: pool.address, data: encodeCall(ERC20_FUNCTIONS.totalSupply, []) },
       ...asked.map((a) => ({ to: pool.address, data: encodeCall(ERC20_FUNCTIONS.balanceOf, [a]) }))
@@ -3963,7 +4087,10 @@
     let liquidity = null;
     if (options.dex) {
       try {
-        pools = await readPools(rpc, address, options.dex, block, meta?.decimals ?? 18);
+        pools = await readPools(rpc, address, options.dex, block, meta?.decimals ?? 18, {
+          v4PoolManager: options.v4PoolManager,
+          v4FromBlock: options.liquidityFromBlock
+        });
         const position = options.position ?? (supply !== null && supply > 0n ? supply / 100n : 0n);
         if (position > 0n) market = readMarket(pools, position, meta?.decimals ?? 18, options.dex.wethSymbol);
       } catch {
@@ -4384,7 +4511,8 @@
           // A week of this chain's blocks, capped so a fast chain does not turn
           // one section into the whole read. A token older than the window reads
           // as "no position opened here", which names the flag that widens it.
-          liquidityFromBlock: head.number - (options.liquidityBlocks ?? Math.min(5e5, Math.round(7 * 86400 * chain2.blocksPerSecond)))
+          liquidityFromBlock: head.number - (options.liquidityBlocks ?? Math.min(5e5, Math.round(7 * 86400 * chain2.blocksPerSecond))),
+          v4PoolManager: await resolveV4Manager(rpc, chain2, options.factory, head.number)
         });
       });
       if (!id.registered && launchpadKnown && options.blockscout && !options.skipLookalikes && id.meta?.symbol) {
@@ -4601,6 +4729,19 @@
   function pct2(bps2) {
     return bps2 === null ? "an unknown share" : `${(bps2 / 100).toFixed(1)}%`;
   }
+  async function resolveV4Manager(rpc, chain2, factory, block) {
+    const configured = chain2.dex?.v4PoolManager;
+    if (!configured) return void 0;
+    if (configured !== "from-launchpad") return configured;
+    if (!factory) return void 0;
+    try {
+      const [raw] = await rpc.callBatch([{ to: factory, data: encodeCall(FACTORY_FUNCTIONS.poolManager, []) }], block);
+      const address = decodeOutputs(FACTORY_FUNCTIONS.poolManager, raw)[0].toLowerCase();
+      return address && address !== ZERO_ADDRESS ? address : void 0;
+    } catch {
+      return void 0;
+    }
+  }
   function openDoorFactNotes(slip, o) {
     const notes = [];
     if (o.surfaceFrom === "implementation-unreadable") {
@@ -4652,7 +4793,15 @@
       const q2 = slip.chain.native;
       if (live.length) notes.push({ level: "info", code: "pools", text: `Trades in ${live.length} ${live[0].dex} pool${live.length === 1 ? "" : "s"} against W${q2.symbol}: the deepest (${(live[0].feeBps / 100).toFixed(2)}% fee) holds ${formatUnits(live[0].quoteReserve ?? 0n, q2.decimals, 3)} W${q2.symbol}. Pools on other venues or against other pairs are not counted.` });
       else if (o.pools.length) notes.push({ level: "watch", code: "pools-empty", text: `A ${o.pools[0].dex} pool exists but holds no W${q2.symbol}: nothing to sell into there.` });
-      else notes.push({ level: "info", code: "no-pool", text: `No W${q2.symbol} pool on the chain's known DEX factories. It may trade elsewhere (another DEX, a Uniswap V4 pool, another pair) or not at all.` });
+      else notes.push({ level: "info", code: "no-pool", text: `No W${q2.symbol} pool found: none on the chain's known DEX factories, and none announced by the Uniswap V4 singleton where that is read. It may trade on another venue, against another pair, or not at all.` });
+      const hooked = o.pools.filter((p) => p.kind === "v4" && p.hooks && p.hooks !== ZERO_ADDRESS);
+      for (const p of hooked) {
+        notes.push({
+          level: "watch",
+          code: "v4-hook",
+          text: `The ${p.dex} pool runs a hook at ${shortAddress(p.hooks)}: code that executes on every swap and can charge its own fee, decide who may trade, or refuse the swap outright. Any sale figure here is the pool's arithmetic and does not include whatever the hook does.`
+        });
+      }
     }
     if (o.liquidity) {
       const l = o.liquidity;
