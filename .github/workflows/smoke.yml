@@ -130,17 +130,30 @@ jobs:
           # no contract behind it.
           run "door (an empty address)" $B door 0x000000000000000000000000000000000000dEaD --chain "$CHAIN"
 
-          # The tape and the itemised receipt. Both read the launchpad's own logs,
-          # so they only exist where a launchpad does; watch is bounded to one
-          # round so it is a check rather than a stream.
+          # The tape. On a V2 launch this is the curve's own events; on anything
+          # else — a Pons V1 launch like $PONS, an ordinary ERC-20 on Base or
+          # BNB — it is the token's transfers with its pools named. Bounded to
+          # one round so it is a check rather than a stream.
+          run "watch (one round)" $B watch "$TOKEN" --chain "$CHAIN" --rounds 1 --quiet
+
+          # The itemised receipt reads the launchpad's own curve events, so it
+          # only exists where a launchpad does. A transaction from the tape that
+          # is not a curve trade must be refused by name, not crash.
           if [ "$HAS_PAD" = "yes" ]; then
-            run "watch (one round)" $B watch "$TOKEN" --chain "$CHAIN" --rounds 1 --quiet
             HASH=$(timeout 240 $B watch "$TOKEN" --chain "$CHAIN" --rounds 1 --quiet 2>/dev/null \
               | grep -o '0x[0-9a-fA-F]\{64\}' | tail -1 || true)
-            if [ -n "$HASH" ]; then
-              run "receipt" $B receipt "$HASH" --chain "$CHAIN"
+            if [ -z "$HASH" ]; then
+              echo "::warning::nothing moved in the watch window, receipt not exercised"
             else
-              echo "::warning::no trade in the watch window, receipt not exercised"
+              echo "::group::receipt $HASH"
+              if timeout 240 $B receipt "$HASH" --chain "$CHAIN" > /tmp/r.txt 2>&1; then
+                echo "PASS receipt"; head -c 1200 /tmp/r.txt
+              elif grep -q "no curve buy or sell in it" /tmp/r.txt; then
+                echo "PASS receipt refused a non-curve transaction by name"; cat /tmp/r.txt
+              else
+                echo "::error::FAIL receipt"; cat /tmp/r.txt; fail=1
+              fi
+              echo; echo "::endgroup::"
             fi
           fi
 

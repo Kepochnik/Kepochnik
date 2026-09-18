@@ -88,3 +88,39 @@ test("solana speaks its own read list, and neither list widens the other", async
     assert.equal((await post("base", method)).status, 403, method);
   }
 });
+
+test("a blocked or rate-limited endpoint costs a request, not the chain", async () => {
+  const upstreams = { solana: { rpc: ["https://blocked.invalid", "https://limited.invalid", "https://good.invalid"], api: null, family: "solana" } };
+  const tried = [];
+  const fetchImpl = async (url) => {
+    tried.push(url);
+    if (url.startsWith("https://blocked")) return new Response(JSON.stringify({ error: { code: 403, message: "Your IP or provider is blocked" } }), { status: 403 });
+    if (url.startsWith("https://limited")) return new Response(JSON.stringify({ error: { code: -32005, message: "Rate limit exceeded" } }), { status: 429 });
+    return new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, result: 12345 }), { status: 200 });
+  };
+  const post = () => handle(new Request("https://p.invalid/rpc/solana", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "getSlot", params: [] }) }), upstreams, fetchImpl);
+
+  const ok = await post();
+  assert.equal(ok.status, 200);
+  assert.equal(JSON.parse(await ok.text()).result, 12345);
+  assert.deepEqual(tried, ["https://blocked.invalid", "https://limited.invalid", "https://good.invalid"]);
+  assert.equal(ok.headers.get("x-bouncer-upstream"), "https://good.invalid", "the answer should say which endpoint gave it");
+});
+
+test("an endpoint that throws is skipped, and a chain where everybody says no reports the real reason", async () => {
+  const upstreams = { solana: { rpc: ["https://dead.invalid", "https://blocked.invalid"], api: null, family: "solana" } };
+  const fetchImpl = async (url) => {
+    if (url.startsWith("https://dead")) throw new TypeError("network error");
+    return new Response(JSON.stringify({ error: { code: 403, message: "Your IP or provider is blocked" } }), { status: 403 });
+  };
+  const res = await handle(new Request("https://p.invalid/rpc/solana", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "getSlot", params: [] }) }), upstreams, fetchImpl);
+  assert.equal(res.status, 403);
+  // Not a made-up message: the last upstream's own words, so the reason is legible.
+  assert.match(await res.text(), /blocked/);
+});
+
+test("a single-string rpc still works, so one endpoint needs no list", async () => {
+  const upstreams = { base: { rpc: "https://only.invalid", api: null } };
+  const res = await handle(new Request("https://p.invalid/rpc/base", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "eth_chainId", params: [] }) }), upstreams, async () => new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, result: "0x2105" }), { status: 200 }));
+  assert.equal(res.status, 200);
+});

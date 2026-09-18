@@ -10,14 +10,26 @@
  *   GET  /api/<chain>/<path>   Blockscout v2 GET, same path (funding sources, token search, holders, creator)
  *   GET  /                     health: the chains this proxy serves
  */
+/**
+ * Each chain lists several endpoints, tried in order. This is not belt and
+ * braces: a Cloudflare Worker leaves from a shared pool of addresses that
+ * public endpoints see a great deal of traffic from, so the polite ones rate
+ * limit it (BNB's publicnode answered 429) and some refuse it outright
+ * (Solana's api.mainnet-beta answered 403, "your IP or provider is blocked").
+ * The CLI never sees this because it runs from an ordinary address. One
+ * endpoint saying no must cost a request, not a chain.
+ */
 export const UPSTREAMS = {
-  robinhood: { rpc: "https://rpc.mainnet.chain.robinhood.com", api: "https://robinhoodchain.blockscout.com" },
-  base: { rpc: "https://base-rpc.publicnode.com", api: "https://base.blockscout.com" },
-  bnb: { rpc: "https://bsc-rpc.publicnode.com", api: null },
-  solana: { rpc: "https://api.mainnet-beta.solana.com", api: null, family: "solana" },
-  "arc-testnet": { rpc: "https://rpc.testnet.arc.network", api: "https://testnet.arcscan.app" },
-  arc: { rpc: "https://rpc.arc-scan.org", api: null },
+  robinhood: { rpc: ["https://rpc.mainnet.chain.robinhood.com"], api: "https://robinhoodchain.blockscout.com" },
+  base: { rpc: ["https://mainnet.base.org", "https://base.llamarpc.com", "https://base-rpc.publicnode.com", "https://base.drpc.org"], api: "https://base.blockscout.com" },
+  bnb: { rpc: ["https://bsc-dataseed.bnbchain.org", "https://bsc-dataseed1.defibit.io", "https://binance.llamarpc.com", "https://bsc.drpc.org", "https://bsc-rpc.publicnode.com"], api: null },
+  solana: { rpc: ["https://solana-rpc.publicnode.com", "https://solana.drpc.org", "https://api.mainnet-beta.solana.com"], api: null, family: "solana" },
+  "arc-testnet": { rpc: ["https://rpc.testnet.arc.network"], api: "https://testnet.arcscan.app" },
+  arc: { rpc: ["https://rpc.arc-scan.org"], api: null },
 };
+
+/** Statuses that mean "ask somebody else", not "this is your answer". */
+const TRY_NEXT = new Set([401, 403, 407, 408, 429, 500, 502, 503, 504, 520, 521, 522, 523, 524, 525, 526]);
 
 export const READ_ONLY_METHODS = new Set([
   "eth_chainId",
@@ -92,9 +104,26 @@ export async function handle(request, upstreams = UPSTREAMS, fetchImpl = (i, o) 
         return json({ jsonrpc: "2.0", id: item?.id ?? null, error: { code: -32601, message: `method not allowed through bouncer-proxy: ${item?.method ?? "?"}` } }, 403);
       }
     }
-    const upstream = await fetchImpl(up.rpc, { method: "POST", headers: { "content-type": "application/json" }, body: text });
-    const body = await upstream.text();
-    return new Response(body, { status: upstream.status, headers: cors({ "content-type": "application/json" }) });
+    const endpoints = Array.isArray(up.rpc) ? up.rpc : [up.rpc];
+    let lastStatus = 502;
+    let lastBody = JSON.stringify({ jsonrpc: "2.0", id: items[0]?.id ?? null, error: { code: -32603, message: "no upstream answered" } });
+    for (const endpoint of endpoints) {
+      let upstream;
+      try {
+        upstream = await fetchImpl(endpoint, { method: "POST", headers: { "content-type": "application/json" }, body: text });
+      } catch {
+        continue; // the endpoint did not answer at all; the next one might
+      }
+      const body = await upstream.text();
+      if (!TRY_NEXT.has(upstream.status)) {
+        return new Response(body, { status: upstream.status, headers: cors({ "content-type": "application/json", "x-bouncer-upstream": endpoint }) });
+      }
+      lastStatus = upstream.status;
+      lastBody = body;
+    }
+    // Everybody said no. Hand back the last real answer rather than inventing
+    // one, so the reason (rate limited, blocked) reaches the person reading it.
+    return new Response(lastBody, { status: lastStatus, headers: cors({ "content-type": "application/json" }) });
   }
 
   const api = url.pathname.match(/^\/api\/([a-z0-9-]+)(\/.*)$/);
