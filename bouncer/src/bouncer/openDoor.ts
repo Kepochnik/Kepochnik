@@ -16,6 +16,7 @@
 import { decodeOutputs, encodeCall, selector, type FunctionAbi, type Hex } from "../chain/abi.js";
 import type { BlockscoutClient, TokenHolder, TokenTransfer } from "../chain/blockscout.js";
 import type { ChainConfig } from "../chain/chains.js";
+import { canPrice, readMarket, readPools, type Market, type MarketPool } from "../chain/market.js";
 import { readSelectors } from "../chain/code.js";
 import { ERC20_FUNCTIONS, ZERO_ADDRESS } from "../chain/pons.js";
 import type { TokenMeta } from "../chain/reader.js";
@@ -77,11 +78,6 @@ const OWNER_FUNCTIONS = {
   transfer: { name: "transfer", inputs: ["address", "uint256"], outputs: ["bool"] },
 } as const satisfies Record<string, FunctionAbi>;
 
-const V3_FACTORY_FUNCTIONS = {
-  getPool: { name: "getPool", inputs: ["address", "address", "uint24"], outputs: ["address"] },
-} as const satisfies Record<string, FunctionAbi>;
-const V3_FEE_TIERS = [100n, 500n, 3_000n, 10_000n];
-
 /** Boolean views token generators use for "is trading open"; the first one the code carries is read. */
 const TRADING_VIEWS = ["tradingOpen()", "tradingEnabled()", "tradingActive()", "isTradingEnabled()", "tradingIsEnabled()", "launched()", "tradingLive()", "tradingStarted()"];
 const RENOUNCE_SIGNATURES = ["renounceOwnership()", "transferOwnership(address)"];
@@ -119,16 +115,6 @@ export interface TransferProbe {
   source: "holder" | "deployer";
 }
 
-export interface Pool {
-  dex: string;
-  address: string;
-  /** Swap fee in basis points: a 1% pool is 100, a 0.3% pool is 30. Divide by 100 to print a percentage. */
-  feeBps: number;
-  /** Reserves read as balances of the pool, in the token and in the wrapped native coin; null when the balance call failed. */
-  tokenReserve: bigint | null;
-  quoteReserve: bigint | null;
-}
-
 export interface OpenDoor {
   /** Full four-byte constants the code pushes: the size of its dispatcher, and the closest readable thing to a function count. */
   selectors: number;
@@ -157,8 +143,10 @@ export interface OpenDoor {
   explorer: { isScam: boolean | null; priceUsd: number | null; volume24hUsd: number | null; marketCapUsd: number | null; tokenType: string | null } | null;
   /** Why the explorer could not be read, when it could not. */
   explorerError: string | null;
-  /** Pools on the chain's known V3-style DEX factories, paired with the wrapped native coin; null when the chain lists none. */
-  pools: Pool[] | null;
+  /** Pools on the chain's known DEX factories, paired with the wrapped native coin; null when the chain lists none. */
+  pools: MarketPool[] | null;
+  /** What a sale of the reference position would pay, priced on the deepest pool that can be priced. */
+  market: Market | null;
   holders: {
     count: number | null;
     transfers: number | null;
@@ -179,6 +167,8 @@ export interface OpenDoorOptions {
   dex?: ChainConfig["dex"];
   /** How many holders to simulate a transfer from (default 3). */
   probeHolders?: number;
+  /** Token amount the sale is priced for; default 1% of supply, matching the launchpad exit door. */
+  position?: bigint;
 }
 
 const BURN_ADDRESSES = new Set([ZERO_ADDRESS, "0x000000000000000000000000000000000000dead", "0x0000000000000000000000000000000000000001"]);
@@ -230,10 +220,13 @@ export async function readOpenDoor(rpc: RpcClient, token: ContractId, meta: Toke
   const bps = (v: bigint): number | null => (supply !== null && supply > 0n ? Number((v * 10_000n) / supply) : null);
 
   // ---- where it trades, read before the probes so a sale can be simulated into the pool
-  let pools: Pool[] | null = null;
+  let pools: MarketPool[] | null = null;
+  let market: Market | null = null;
   if (options.dex) {
     try {
-      pools = await readPools(rpc, address, options.dex, block);
+      pools = await readPools(rpc, address, options.dex, block, meta?.decimals ?? 18);
+      const position = options.position ?? (supply !== null && supply > 0n ? supply / 100n : 0n);
+      if (position > 0n) market = readMarket(pools, position, meta?.decimals ?? 18, options.dex.wethSymbol);
     } catch {
       pools = null;
     }
@@ -347,7 +340,8 @@ export async function readOpenDoor(rpc: RpcClient, token: ContractId, meta: Toke
     if (!candidates.length) {
       probesSkipped = "no wallet with a readable balance to simulate from";
     } else {
-      const deepest = (pools ?? []).filter((p) => (p.quoteReserve ?? 0n) > 0n)[0] ?? null;
+      // Aim the sale at the deepest pool that actually holds the quote asset.
+      const deepest = (pools ?? []).filter((p) => (p.quoteReserve ?? 0n) > 0n || canPrice(p))[0] ?? null;
       for (const c of candidates) {
         probes.push(await probeTransfer(rpc, address, c.address, PROBE_RECIPIENT, "fresh-wallet", c.source, block));
         if (deepest) probes.push(await probeTransfer(rpc, address, c.address, deepest.address, "pool", c.source, block));
@@ -373,6 +367,7 @@ export async function readOpenDoor(rpc: RpcClient, token: ContractId, meta: Toke
     explorer,
     explorerError,
     pools,
+    market,
     holders,
     activity,
   };
@@ -524,62 +519,6 @@ function revertReason(error: RpcError): string | null {
   if (data.length > 10) return `custom error ${data.slice(0, 10)}`;
   const message = error.message.replace(/^execution reverted:?\s*/i, "").trim();
   return message || null;
-}
-
-/**
- * Asks each listed V3-style factory for a token/WETH pool at every fee tier,
- * then reads the reserves as the pool's two balances. A balance that will not
- * read leaves that pool's reserve null rather than discarding every pool the
- * lookups just proved exists.
- */
-export async function readPools(rpc: RpcClient, token: string, dex: NonNullable<ChainConfig["dex"]>, block: number): Promise<Pool[]> {
-  const asks: { dex: string; fee: bigint }[] = [];
-  const calls: { to: string; data: Hex }[] = [];
-  for (const f of dex.v3Factories) {
-    for (const fee of V3_FEE_TIERS) {
-      asks.push({ dex: f.name, fee });
-      calls.push({ to: f.address, data: encodeCall(V3_FACTORY_FUNCTIONS.getPool, [token, dex.weth, fee]) });
-    }
-  }
-  const raws = await rpc.callBatch(calls, block);
-  const found: Pool[] = [];
-  raws.forEach((raw, i) => {
-    try {
-      const [pool] = decodeOutputs(V3_FACTORY_FUNCTIONS.getPool, raw) as [string];
-      if (pool && pool !== ZERO_ADDRESS) found.push({ dex: asks[i].dex, address: pool, feeBps: Number(asks[i].fee) / 100, tokenReserve: null, quoteReserve: null });
-    } catch {
-      // a factory that is not a V3 factory answers garbage; skip it
-    }
-  });
-  if (!found.length) return found;
-  try {
-    const balances = await rpc.callBatch(
-      found.flatMap((p) => [
-        { to: token, data: encodeCall(ERC20_FUNCTIONS.balanceOf, [p.address]) },
-        { to: dex.weth, data: encodeCall(ERC20_FUNCTIONS.balanceOf, [p.address]) },
-      ]),
-      block,
-    );
-    found.forEach((p, i) => {
-      try {
-        p.tokenReserve = decodeOutputs(ERC20_FUNCTIONS.balanceOf, balances[i * 2])[0] as bigint;
-      } catch {
-        p.tokenReserve = null;
-      }
-      try {
-        p.quoteReserve = decodeOutputs(ERC20_FUNCTIONS.balanceOf, balances[i * 2 + 1])[0] as bigint;
-      } catch {
-        p.quoteReserve = null;
-      }
-    });
-  } catch {
-    // the pools exist; their depth is simply unread
-  }
-  return found.sort((a, b) => {
-    const x = a.quoteReserve ?? -1n;
-    const y = b.quoteReserve ?? -1n;
-    return y > x ? 1 : y < x ? -1 : 0;
-  });
 }
 
 function summariseActivity(transfers: TokenTransfer[]): OpenDoor["activity"] {

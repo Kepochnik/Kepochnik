@@ -124,6 +124,7 @@
     robinhood: {
       key: "robinhood",
       name: "Robinhood Chain",
+      family: "evm",
       chainId: 4663,
       rpc: ["https://rpc.mainnet.chain.robinhood.com"],
       blockscout: "https://robinhoodchain.blockscout.com",
@@ -140,12 +141,71 @@
       },
       dex: {
         weth: "0x0Bd7D308f8E1639FAb988df18A8011f41EAcAD73".toLowerCase(),
+        wethSymbol: "WETH",
         v3Factories: [{ name: "Uniswap V3", address: "0x1f7d7550B1b028f7571E69A784071F0205FD2EfA".toLowerCase() }]
       }
+    },
+    base: {
+      key: "base",
+      name: "Base",
+      family: "evm",
+      chainId: 8453,
+      rpc: ["https://mainnet.base.org", "https://base.llamarpc.com"],
+      blockscout: "https://base.blockscout.com",
+      factory: null,
+      launchpad: null,
+      native: { symbol: "ETH", decimals: 18 },
+      blocksPerSecond: 0.5,
+      notes: "No launchpad BOUNCER knows runs here, so every address is checked as an ordinary token: who can change its rules, whether a holder can sell right now, who holds it, where it trades.",
+      dex: {
+        weth: "0x4200000000000000000000000000000000000006",
+        wethSymbol: "WETH",
+        v3Factories: [{ name: "Uniswap V3", address: "0x33128a8fC17869897dcE68Ed026d694621f6FDfD".toLowerCase() }],
+        v2Factories: [{ name: "Uniswap V2", address: "0x8909Dc15e40173Ff4699343b6eB8132c65e18eC6".toLowerCase() }],
+        solidlyFactories: [{ name: "Aerodrome", address: "0x420DD381b31aEf6683db6B902084cB0FFECe40Da".toLowerCase() }]
+      }
+    },
+    bnb: {
+      key: "bnb",
+      name: "BNB Chain",
+      family: "evm",
+      chainId: 56,
+      rpc: ["https://bsc-dataseed.bnbchain.org", "https://bsc-dataseed1.defibit.io", "https://bsc-dataseed1.ninicoin.io"],
+      blockscout: null,
+      explorerUrl: "https://bscscan.com",
+      factory: null,
+      launchpad: null,
+      native: { symbol: "BNB", decimals: 18 },
+      blocksPerSecond: 1.33,
+      notes: "No launchpad BOUNCER knows runs here, and BNB Chain has no public Blockscout, so holders, the deployer and the price feed are not read. Everything the chain itself answers still is: the code's switches, the owner, whether a holder can sell into the pool, and the pools themselves.",
+      dex: {
+        weth: "0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c".toLowerCase(),
+        wethSymbol: "WBNB",
+        v3Factories: [
+          { name: "PancakeSwap V3", address: "0x0BFbCF9fa4f9C56B0F40a671Ad40E0805A091865".toLowerCase(), feeTiers: [100, 500, 2500, 1e4] },
+          { name: "Uniswap V3", address: "0xdB1d10011AD0Ff90774D0C6Bb92e5C5c8b4461F7".toLowerCase() }
+        ],
+        v2Factories: [{ name: "PancakeSwap V2", address: "0xcA143Ce32Fe78f1f7019d7d551a6402fC5350c73".toLowerCase() }]
+      }
+    },
+    solana: {
+      key: "solana",
+      name: "Solana",
+      family: "solana",
+      chainId: 0,
+      rpc: ["https://api.mainnet-beta.solana.com"],
+      blockscout: null,
+      explorerUrl: "https://solscan.io",
+      factory: null,
+      launchpad: null,
+      native: { symbol: "SOL", decimals: 9 },
+      blocksPerSecond: 2.5,
+      notes: "Read as SPL: the mint account says outright whether anyone can print more tokens or freeze yours, and Token-2022 extensions say whether a transfer costs a fee, runs someone's code, or can be reversed by a permanent delegate. Pools and prices are not read here yet."
     },
     "arc-testnet": {
       key: "arc-testnet",
       name: "Arc Testnet",
+      family: "evm",
       chainId: 5042002,
       rpc: ["https://rpc.testnet.arc.network", "https://rpc.testnet.arc.io"],
       blockscout: "https://testnet.arcscan.app",
@@ -158,6 +218,7 @@
     arc: {
       key: "arc",
       name: "Arc",
+      family: "evm",
       chainId: 5042,
       rpc: ["https://rpc.arc-scan.org"],
       blockscout: null,
@@ -165,10 +226,11 @@
       launchpad: "Radian (Pons V2 port)",
       native: { symbol: "USDC", decimals: 18 },
       blocksPerSecond: 1,
-      notes: "Mainnet opens 2026-09-16. The Radian mainnet factory is not published yet: pass --factory 0x\u2026 (CLI) or set it in the site's live settings once it is."
+      notes: "The Radian mainnet factory is not published yet: pass --factory 0x\u2026 (CLI) or set it in the site's live settings once it is. Every check that needs no factory runs regardless."
     }
   };
   var DEFAULT_CHAIN = CHAINS.robinhood;
+  var DEFAULT_V3_FEE_TIERS = [100, 500, 3e3, 1e4];
   function chainByKey(key) {
     if (!key) return DEFAULT_CHAIN;
     const found = CHAINS[key.toLowerCase()];
@@ -940,7 +1002,25 @@
       const [result] = await this.sendBatch([{ method, params }]);
       return result;
     }
+    /**
+     * Like sendBatch, but a call the node answered with an error comes back as
+     * that error instead of discarding every other answer in the batch. One
+     * contract without a slot0() must not cost the caller the reserves of three
+     * pools that were read perfectly well.
+     */
+    async sendBatchSettled(requests) {
+      return this.dispatch(requests, true);
+    }
+    /** Several eth_call reads pinned to one block, each answered or failed on its own. */
+    async callBatchSettled(calls, blockNumber) {
+      const tag = toHex(blockNumber);
+      const answers = await this.sendBatchSettled(calls.map((call) => ({ method: "eth_call", params: [{ to: call.to, data: call.data }, tag] })));
+      return answers.map((a) => a instanceof RpcError ? a : a);
+    }
     async sendBatch(requests) {
+      return this.dispatch(requests, false);
+    }
+    async dispatch(requests, settled) {
       for (const request of requests) {
         if (!READ_ONLY_METHODS.has(request.method)) {
           throw new RpcError(`refusing non-read method ${request.method}`);
@@ -978,7 +1058,11 @@
           return payload.map((request) => {
             const item = byId.get(request.id);
             if (!item) throw new RpcError(`missing response for ${request.method}`);
-            if (item.error) throw new RpcError(item.error.message, item.error.code, item.error.data, "application");
+            if (item.error) {
+              const failure = new RpcError(item.error.message, item.error.code, item.error.data, "application");
+              if (settled && !failure.isRateLimit) return failure;
+              throw failure;
+            }
             return item.result;
           });
         } catch (error) {
@@ -1600,6 +1684,8 @@
       ["0x000000000000000000000000000000000000dead", 200, false, null, false]
     ],
     blacklisted: "0x000000000000000000000000000000000000c501",
+    /** What the pool holds in the wrapped native coin. */
+    poolWeth: 12n * 10n ** 18n,
     /** Every function in the dispatcher, not only the dangerous ones. */
     powers: ["mint(address,uint256)", "pause()", "unpause()", "paused()", "owner()", "renounceOwnership()", "transferOwnership(address)", "setFees(uint256,uint256)", "blacklist(address,bool)", "tradingOpen()", "excludeFromFees(address,bool)", "transfer(address,uint256)", "balanceOf(address)", "totalSupply()", "name()", "symbol()", "decimals()"]
   };
@@ -1823,13 +1909,33 @@
               if (s === sel("totalSupply()")) return ok(`0x${encodeWord("uint256", 10n ** 27n)}`);
             }
             const dex = CHAINS.robinhood.dex;
-            if (dex.v3Factories.some((f) => f.address === to) && s === sel("getPool(address,address,uint24)")) {
+            if ((dex.v3Factories ?? []).some((f) => f.address === to) && s === sel("getPool(address,address,uint24)")) {
               const [a, , fee] = [`0x${call.data.slice(34, 74)}`, 0, BigInt(`0x${call.data.slice(138, 202)}`)];
               return ok(`0x${encodeWord("address", a === DEMO_PLAIN.token && fee === 3000n ? DEMO_PLAIN.pool : ZERO_ADDRESS)}`);
             }
             if (to === dex.weth && s === sel("balanceOf(address)")) {
               const who = `0x${call.data.slice(34)}`;
-              return ok(`0x${encodeWord("uint256", who === DEMO_PLAIN.pool ? 12n * ETH : 0n)}`);
+              return ok(`0x${encodeWord("uint256", who === DEMO_PLAIN.pool ? DEMO_PLAIN.poolWeth : 0n)}`);
+            }
+            if (to === DEMO_PLAIN.pool) {
+              const tokens = DEMO_PLAIN.supply * 3000n / 10000n;
+              if (s === sel("token0()")) return ok(`0x${encodeWord("address", DEMO_PLAIN.token)}`);
+              if (s === sel("fee()")) return ok(`0x${encodeWord("uint24", 3000n)}`);
+              if (s === sel("liquidity()")) return ok(`0x${encodeWord("uint128", isqrt(tokens * DEMO_PLAIN.poolWeth))}`);
+              if (s === sel("slot0()")) {
+                const sqrtPriceX96 = isqrt(DEMO_PLAIN.poolWeth * 2n ** 192n / tokens);
+                return ok(
+                  `0x${[
+                    encodeWord("uint160", sqrtPriceX96),
+                    encodeWord("int24", 0n),
+                    encodeWord("uint16", 0n),
+                    encodeWord("uint16", 1n),
+                    encodeWord("uint16", 1n),
+                    encodeWord("uint8", 0n),
+                    encodeWord("bool", true)
+                  ].join("")}`
+                );
+              }
             }
             if (to === DEMO_PLAIN.token) {
               const from = call.from?.toLowerCase();
@@ -2314,6 +2420,179 @@
     return `${c.checked} first buyers checked \xB7 ${top.wallets.length} share a funder (${(top.shareBps / 100).toFixed(0)}% of the curve)${c.fundedByCreator.length ? ` \xB7 ${c.fundedByCreator.length} funded by the creator` : ""}`;
   }
 
+  // src/chain/market.ts
+  var Q962 = 2n ** 96n;
+  var FACTORY_FUNCTIONS2 = {
+    getPool: { name: "getPool", inputs: ["address", "address", "uint24"], outputs: ["address"] },
+    getPair: { name: "getPair", inputs: ["address", "address"], outputs: ["address"] },
+    getPoolStable: { name: "getPool", inputs: ["address", "address", "bool"], outputs: ["address"] }
+  };
+  var POOL_FUNCTIONS = {
+    token0: { name: "token0", inputs: [], outputs: ["address"] },
+    slot0: { name: "slot0", inputs: [], outputs: ["uint160", "int24", "uint16", "uint16", "uint16", "uint8", "bool"] },
+    liquidity: { name: "liquidity", inputs: [], outputs: ["uint128"] },
+    fee: { name: "fee", inputs: [], outputs: ["uint24"] },
+    getReserves: { name: "getReserves", inputs: [], outputs: ["uint112", "uint112", "uint32"] },
+    getReservesWide: { name: "getReserves", inputs: [], outputs: ["uint256", "uint256", "uint256"] },
+    stable: { name: "stable", inputs: [], outputs: ["bool"] }
+  };
+  async function readPools(rpc, token, dex, block, tokenDecimals = 18) {
+    const asks = [];
+    const calls = [];
+    for (const f of dex.v3Factories ?? []) {
+      for (const fee of f.feeTiers ?? DEFAULT_V3_FEE_TIERS) {
+        asks.push({ dex: f.name, kind: "v3", feeBps: fee / 100 });
+        calls.push({ to: f.address, data: encodeCall(FACTORY_FUNCTIONS2.getPool, [token, dex.weth, BigInt(fee)]) });
+      }
+    }
+    for (const f of dex.v2Factories ?? []) {
+      asks.push({ dex: f.name, kind: "v2", feeBps: 30 });
+      calls.push({ to: f.address, data: encodeCall(FACTORY_FUNCTIONS2.getPair, [token, dex.weth]) });
+    }
+    for (const f of dex.solidlyFactories ?? []) {
+      for (const stable of [false, true]) {
+        asks.push({ dex: f.name, kind: "solidly", feeBps: stable ? 5 : 30, stable });
+        calls.push({ to: f.address, data: encodeCall(FACTORY_FUNCTIONS2.getPoolStable, [token, dex.weth, stable]) });
+      }
+    }
+    if (!calls.length) return [];
+    const raws = await rpc.callBatch(calls, block);
+    const found = [];
+    const seen = /* @__PURE__ */ new Set();
+    raws.forEach((raw, i) => {
+      try {
+        const [address] = decodeOutputs(FACTORY_FUNCTIONS2.getPool, raw);
+        if (!address || address === ZERO_ADDRESS || seen.has(address)) return;
+        seen.add(address);
+        found.push({ ...asks[i], address, tokenIsToken0: false, tokenReserve: null, quoteReserve: null });
+      } catch {
+      }
+    });
+    if (!found.length) return found;
+    await hydrate(rpc, token, dex, found, block);
+    return found.sort((a, b) => {
+      const x = a.quoteReserve ?? -1n;
+      const y = b.quoteReserve ?? -1n;
+      return y > x ? 1 : y < x ? -1 : 0;
+    });
+  }
+  async function hydrate(rpc, token, dex, pools, block) {
+    const calls = [];
+    const plan = [];
+    const want = (pool, field, to, data) => {
+      plan.push({ pool, field });
+      calls.push({ to, data });
+    };
+    for (const p of pools) {
+      want(p, "token0", p.address, encodeCall(POOL_FUNCTIONS.token0, []));
+      want(p, "tokenReserve", token, encodeCall(ERC20_FUNCTIONS.balanceOf, [p.address]));
+      want(p, "quoteReserve", dex.weth, encodeCall(ERC20_FUNCTIONS.balanceOf, [p.address]));
+      if (p.kind === "v3") {
+        want(p, "slot0", p.address, encodeCall(POOL_FUNCTIONS.slot0, []));
+        want(p, "liquidity", p.address, encodeCall(POOL_FUNCTIONS.liquidity, []));
+        want(p, "fee", p.address, encodeCall(POOL_FUNCTIONS.fee, []));
+      }
+    }
+    let raws;
+    try {
+      raws = await rpc.callBatchSettled(calls, block);
+    } catch {
+      return;
+    }
+    plan.forEach(({ pool, field }, i) => {
+      const raw = raws[i];
+      if (raw instanceof Error) return;
+      try {
+        if (field === "token0") pool.tokenIsToken0 = decodeOutputs(POOL_FUNCTIONS.token0, raw)[0].toLowerCase() === token.toLowerCase();
+        else if (field === "tokenReserve") pool.tokenReserve = decodeOutputs(ERC20_FUNCTIONS.balanceOf, raw)[0];
+        else if (field === "quoteReserve") pool.quoteReserve = decodeOutputs(ERC20_FUNCTIONS.balanceOf, raw)[0];
+        else if (field === "slot0") pool.sqrtPriceX96 = decodeOutputs(POOL_FUNCTIONS.slot0, raw)[0];
+        else if (field === "liquidity") pool.liquidity = decodeOutputs(POOL_FUNCTIONS.liquidity, raw)[0];
+        else if (field === "fee") pool.feeBps = Number(decodeOutputs(POOL_FUNCTIONS.fee, raw)[0]) / 100;
+      } catch {
+      }
+    });
+  }
+  function canPrice(pool) {
+    if (pool.kind === "v3") return (pool.sqrtPriceX96 ?? 0n) > 0n && (pool.liquidity ?? 0n) > 0n;
+    if (pool.kind === "solidly" && pool.stable) return false;
+    return (pool.tokenReserve ?? 0n) > 0n && (pool.quoteReserve ?? 0n) > 0n;
+  }
+  function spotPrice(pool, tokenDecimals) {
+    const one = 10n ** BigInt(tokenDecimals);
+    if (pool.kind === "v3") {
+      const sqrt = pool.sqrtPriceX96 ?? 0n;
+      if (sqrt <= 0n) return null;
+      return pool.tokenIsToken0 ? sqrt * sqrt * one / (Q962 * Q962) : Q962 * Q962 * one / (sqrt * sqrt);
+    }
+    const t = pool.tokenReserve ?? 0n;
+    const q2 = pool.quoteReserve ?? 0n;
+    if (t <= 0n || q2 <= 0n) return null;
+    return q2 * one / t;
+  }
+  function quoteSale(pool, tokensIn) {
+    if (tokensIn <= 0n || !canPrice(pool)) return null;
+    const feeBps = BigInt(Math.round(pool.feeBps));
+    const afterFee = tokensIn * (10000n - feeBps) / 10000n;
+    if (afterFee <= 0n) return { out: 0n, beyondTick: false };
+    if (pool.kind !== "v3") {
+      const t = pool.tokenReserve ?? 0n;
+      const q2 = pool.quoteReserve ?? 0n;
+      const out3 = afterFee * q2 / (t + afterFee);
+      return { out: out3 > q2 ? q2 : out3, beyondTick: false };
+    }
+    const sqrt = pool.sqrtPriceX96;
+    const L = pool.liquidity;
+    if (pool.tokenIsToken0) {
+      const denominator = L * Q962 + afterFee * sqrt;
+      if (denominator <= 0n) return null;
+      const sqrtNext2 = L * Q962 * sqrt / denominator;
+      const out3 = L * (sqrt - sqrtNext2) / Q962;
+      return { out: out3, beyondTick: sqrtNext2 * 2n < sqrt };
+    }
+    const sqrtNext = sqrt + afterFee * Q962 / L;
+    if (sqrtNext <= sqrt) return { out: 0n, beyondTick: false };
+    const out2 = L * Q962 * (sqrtNext - sqrt) / (sqrtNext * sqrt);
+    return { out: out2, beyondTick: sqrtNext > sqrt * 2n };
+  }
+  function readMarket(pools, position, tokenDecimals, quoteSymbol) {
+    const priceable = pools.filter(canPrice);
+    const best = priceable[0] ?? null;
+    if (!best) {
+      return {
+        pools,
+        best: null,
+        spot: null,
+        quotes: [],
+        note: pools.length ? `A pool exists but nothing in it could be priced: ${pools.every((p) => p.stable) ? "a Solidly stable pool uses an invariant this does not model" : "its reserves or price did not read"}.` : `No ${quoteSymbol} pool on the chain's known DEX factories. It may trade on another venue, against another pair, or not at all.`
+      };
+    }
+    const spot = spotPrice(best, tokenDecimals);
+    const one = 10n ** BigInt(tokenDecimals);
+    const quotes = [];
+    for (const shareBps of [1e3, 2500, 5e3, 1e4]) {
+      const tokensIn = position * BigInt(shareBps) / 10000n;
+      const priced = quoteSale(best, tokensIn);
+      if (!priced || tokensIn <= 0n) continue;
+      const reference = spot !== null ? spot * tokensIn / one : 0n;
+      quotes.push({
+        shareBps,
+        tokensIn,
+        out: priced.out,
+        realisedBps: reference > 0n ? Number(priced.out * 10000n / reference) : 0,
+        beyondTick: priced.beyondTick
+      });
+    }
+    const crosses = quotes.some((q2) => q2.beyondTick);
+    return {
+      pools,
+      best,
+      spot,
+      quotes,
+      note: `Priced on the ${best.dex} ${best.kind === "v3" ? "V3" : best.kind === "v2" ? "V2" : "Solidly"} pool at ${(best.feeBps / 100).toFixed(2)}% fee, from its state at this block. ` + (best.kind === "v3" ? `Concentrated liquidity: exact inside the current tick${crosses ? ", and the larger sizes leave it, so the real answer depends on ticks this does not read" : ""}. ` : "Constant product, so the arithmetic is exact for the pool. ") + `The token's own transfer tax, if it has one, is not included, and nothing here is a promise about a trade.`
+    };
+  }
+
   // src/bouncer/openDoor.ts
   var POWER_MEANING = {
     mint: "create new tokens out of thin air, diluting every holder",
@@ -2419,10 +2698,6 @@
     paused: { name: "paused", inputs: [], outputs: ["bool"] },
     transfer: { name: "transfer", inputs: ["address", "uint256"], outputs: ["bool"] }
   };
-  var V3_FACTORY_FUNCTIONS = {
-    getPool: { name: "getPool", inputs: ["address", "address", "uint24"], outputs: ["address"] }
-  };
-  var V3_FEE_TIERS = [100n, 500n, 3000n, 10000n];
   var TRADING_VIEWS = ["tradingOpen()", "tradingEnabled()", "tradingActive()", "isTradingEnabled()", "tradingIsEnabled()", "launched()", "tradingLive()", "tradingStarted()"];
   var RENOUNCE_SIGNATURES = ["renounceOwnership()", "transferOwnership(address)"];
   var TRANSFER_SIGNATURE = "transfer(address,uint256)";
@@ -2464,9 +2739,12 @@
     const supply = meta?.totalSupply ?? null;
     const bps = (v) => supply !== null && supply > 0n ? Number(v * 10000n / supply) : null;
     let pools = null;
+    let market = null;
     if (options.dex) {
       try {
-        pools = await readPools(rpc, address, options.dex, block);
+        pools = await readPools(rpc, address, options.dex, block, meta?.decimals ?? 18);
+        const position = options.position ?? (supply !== null && supply > 0n ? supply / 100n : 0n);
+        if (position > 0n) market = readMarket(pools, position, meta?.decimals ?? 18, options.dex.wethSymbol);
       } catch {
         pools = null;
       }
@@ -2566,7 +2844,7 @@
       if (!candidates.length) {
         probesSkipped = "no wallet with a readable balance to simulate from";
       } else {
-        const deepest = (pools ?? []).filter((p) => (p.quoteReserve ?? 0n) > 0n)[0] ?? null;
+        const deepest = (pools ?? []).filter((p) => (p.quoteReserve ?? 0n) > 0n || canPrice(p))[0] ?? null;
         for (const c of candidates) {
           probes.push(await probeTransfer(rpc, address, c.address, PROBE_RECIPIENT, "fresh-wallet", c.source, block));
           if (deepest) probes.push(await probeTransfer(rpc, address, c.address, deepest.address, "pool", c.source, block));
@@ -2591,6 +2869,7 @@
       explorer,
       explorerError,
       pools,
+      market,
       holders,
       activity
     };
@@ -2688,53 +2967,6 @@
     if (data.length > 10) return `custom error ${data.slice(0, 10)}`;
     const message = error.message.replace(/^execution reverted:?\s*/i, "").trim();
     return message || null;
-  }
-  async function readPools(rpc, token, dex, block) {
-    const asks = [];
-    const calls = [];
-    for (const f of dex.v3Factories) {
-      for (const fee of V3_FEE_TIERS) {
-        asks.push({ dex: f.name, fee });
-        calls.push({ to: f.address, data: encodeCall(V3_FACTORY_FUNCTIONS.getPool, [token, dex.weth, fee]) });
-      }
-    }
-    const raws = await rpc.callBatch(calls, block);
-    const found = [];
-    raws.forEach((raw, i) => {
-      try {
-        const [pool] = decodeOutputs(V3_FACTORY_FUNCTIONS.getPool, raw);
-        if (pool && pool !== ZERO_ADDRESS) found.push({ dex: asks[i].dex, address: pool, feeBps: Number(asks[i].fee) / 100, tokenReserve: null, quoteReserve: null });
-      } catch {
-      }
-    });
-    if (!found.length) return found;
-    try {
-      const balances = await rpc.callBatch(
-        found.flatMap((p) => [
-          { to: token, data: encodeCall(ERC20_FUNCTIONS.balanceOf, [p.address]) },
-          { to: dex.weth, data: encodeCall(ERC20_FUNCTIONS.balanceOf, [p.address]) }
-        ]),
-        block
-      );
-      found.forEach((p, i) => {
-        try {
-          p.tokenReserve = decodeOutputs(ERC20_FUNCTIONS.balanceOf, balances[i * 2])[0];
-        } catch {
-          p.tokenReserve = null;
-        }
-        try {
-          p.quoteReserve = decodeOutputs(ERC20_FUNCTIONS.balanceOf, balances[i * 2 + 1])[0];
-        } catch {
-          p.quoteReserve = null;
-        }
-      });
-    } catch {
-    }
-    return found.sort((a, b) => {
-      const x = a.quoteReserve ?? -1n;
-      const y = b.quoteReserve ?? -1n;
-      return y > x ? 1 : y < x ? -1 : 0;
-    });
   }
   function summariseActivity(transfers) {
     if (!transfers.length) return { lastTransferAt: null, lastTransferBlock: null, recent: 0, recentWallets: 0 };
@@ -2863,7 +3095,12 @@
         slip.skipped.push({ section, reason: error instanceof Error ? error.message : String(error) });
       }
     };
-    if (!launchpadKnown) slip.skipped.push({ section: "launch record", reason: `the ${chain2.launchpad} factory address is not published for ${chain2.name} yet; pass --factory 0x\u2026 to check launches here` });
+    if (!launchpadKnown) {
+      slip.skipped.push({
+        section: "launch record",
+        reason: chain2.launchpad ? `the ${chain2.launchpad} factory address is not published for ${chain2.name} yet; pass --factory 0x\u2026 to check launches here` : `no launchpad BOUNCER knows runs on ${chain2.name}, so there is no launch record to look for; every address here is checked as an ordinary token`
+      });
+    }
     if (!id.launch && !id.token.code.empty) {
       if (!id.registered) slip.stamp = "NOT A LAUNCH";
       await attempt("open door", async () => {
@@ -3026,7 +3263,7 @@
   function openDoorNotes(slip, findings) {
     const notes = [];
     const t = slip.id.token;
-    const factories = `the ${slip.chain.launchpad} factory${slip.chain.key === "robinhood" ? " nor the Pons V1 factory" : ""}`;
+    const factories = slip.chain.launchpad ? `the ${slip.chain.launchpad} factory${slip.chain.key === "robinhood" ? " nor the Pons V1 factory" : ""}` : "";
     if (t.code.empty) {
       notes.push({ level: "stop", code: "not-registered", text: `No contract at this address on ${slip.chain.name}.` });
       return withSkipped(slip, notes);
@@ -3052,8 +3289,19 @@
     }
     if (slip.id.claimedFactory) notes.push({ level: "watch", code: "claimed-factory", text: `The token names ${shortAddress(slip.id.claimedFactory)} as its launch factory (launchFactory()), but that factory is not one BOUNCER knows or its record does not confirm this token. A contract can claim any factory; only a known factory's record counts.` });
     if (slip.known) notes.push({ level: "info", code: "known-address", text: `This is ${slip.known}` });
-    else if (slip.open) notes.push({ level: "info", code: "not-registered", text: `Not a launchpad token: neither ${factories} deployed ${named}, so curves, door tax and locked pools do not apply. Checked instead as an ordinary token on ${slip.chain.name}: who can change its rules, whether holders can move it, who holds it.` });
-    else notes.push({ level: "watch", code: "not-registered", text: `Not a launchpad token: neither ${factories} deployed ${named}. The ordinary-token check could not be run, so nothing below was read.` });
+    else if (slip.open) {
+      notes.push({
+        level: "info",
+        code: "not-registered",
+        text: factories ? `Not a launchpad token: neither ${factories} deployed ${named}, so curves, door tax and locked pools do not apply. Checked instead as an ordinary token on ${slip.chain.name}: who can change its rules, whether a holder can sell right now, who holds it.` : `No launchpad BOUNCER knows runs on ${slip.chain.name}, so ${named} is checked as what it is: an ordinary token. Who can change its rules, whether a holder can sell right now, who holds it, where it trades.`
+      });
+    } else {
+      notes.push({
+        level: "watch",
+        code: "not-registered",
+        text: factories ? `Not a launchpad token: neither ${factories} deployed ${named}. The ordinary-token check could not be run, so nothing below was read.` : `${named} could not be checked: the ordinary-token read failed, so nothing below was read.`
+      });
+    }
     const o = slip.open;
     for (const f of findings) {
       if (f.startsWith("SELFDESTRUCT") || f.startsWith("CALLCODE")) notes.push({ level: "stop", code: "code", text: `Code can vanish: ${f}.` });
@@ -3124,6 +3372,20 @@
       if (live.length) notes.push({ level: "info", code: "pools", text: `Trades in ${live.length} ${live[0].dex} pool${live.length === 1 ? "" : "s"} against W${q2.symbol}: the deepest (${(live[0].feeBps / 100).toFixed(2)}% fee) holds ${formatUnits(live[0].quoteReserve ?? 0n, q2.decimals, 3)} W${q2.symbol}. Whether that liquidity is locked is not read here, and pools on other venues or against other pairs are not counted.` });
       else if (o.pools.length) notes.push({ level: "watch", code: "pools-empty", text: `A ${o.pools[0].dex} pool exists but holds no W${q2.symbol}: nothing to sell into there.` });
       else notes.push({ level: "info", code: "no-pool", text: `No W${q2.symbol} pool on the chain's known DEX factories. It may trade elsewhere (another DEX, a Uniswap V4 pool, another pair) or not at all.` });
+    }
+    const m = o.market;
+    if (m && m.quotes.length && m.best) {
+      const q2 = slip.chain.native;
+      const whole = m.quotes.find((x) => x.shareBps === 1e4);
+      const dec = slip.id.meta?.decimals ?? 18;
+      if (whole) {
+        const thin = whole.realisedBps > 0 && whole.realisedBps < 5e3;
+        notes.push({
+          level: thin ? "watch" : "info",
+          code: "sale-price",
+          text: `Selling ${formatUnits(whole.tokensIn, dec, 0)} tokens into the ${m.best.dex} pool would quote ${formatUnits(whole.out, q2.decimals, 4)} W${q2.symbol}` + (thin ? `, which is ${(whole.realisedBps / 100).toFixed(0)}% of the marginal price: the pool is thin for a position that size.` : ".") + (whole.beyondTick ? " That size leaves the pool's current tick, so the real figure depends on liquidity this does not read." : "") + " The token's own transfer tax, if it has one, is not included."
+        });
+      }
     }
     const price = o.explorer?.priceUsd;
     if (price !== null && price !== void 0) notes.push({ level: "info", code: "price", text: `The explorer's price feed says ${money(price)}${o.explorer.volume24hUsd !== null ? `, ${usd(o.explorer.volume24hUsd)} traded in 24 h` : ""}${o.explorer.marketCapUsd !== null ? `, ${usd(o.explorer.marketCapUsd)} market cap` : ""}. That feed is the explorer's, not the chain's.` });
@@ -3837,7 +4099,7 @@
       return parts2.map((x) => x.charAt(0).toUpperCase() + x.slice(1)).join(". ") + ".";
     }
     if (!slip.id.registered) return openDoorSentence(slip);
-    const parts = [`Real ${slip.chain.launchpad} launch`];
+    const parts = [`Real ${slip.chain.launchpad ?? "launchpad"} launch`];
     const c = slip.cover;
     if (c?.status === "open") parts.push(`the door tax is still on for ${c.secondsLeft} s (up to ${formatBps(c.terms.startBps)} of a buy goes to the creator)`);
     else if (c?.status === "closed") parts.push("the door tax has ended");
@@ -3854,9 +4116,9 @@
     if (t.code.delegatedTo) return `This is a wallet, not a token: its code is an EIP-7702 delegation its owner signed.`;
     const parts = [];
     const impostor = impostorOf(slip);
-    if (impostor) parts.push(`an older ${slip.chain.launchpad} launch is called ${slip.lookalikes.query} and this is not it`);
+    if (impostor) parts.push(`an older ${slip.chain.launchpad ?? "launchpad"} launch is called ${slip.lookalikes.query} and this is not it`);
     if (slip.known) parts.push(`this is ${slip.known.replace(/\.$/, "")}`);
-    else parts.push(`not a ${slip.chain.launchpad} launch, checked as an ordinary token`);
+    else parts.push(slip.chain.launchpad ? `not a ${slip.chain.launchpad} launch, checked as an ordinary token` : `checked as an ordinary token: no launchpad BOUNCER knows runs on ${slip.chain.name}`);
     if (t.proxyImplementation || t.code.minimalProxyTarget) parts.push("its code can be replaced (proxy)");
     if (t.code.opcodes.selfdestruct) parts.push("it can self-destruct");
     const o = slip.open;
@@ -3940,8 +4202,8 @@
     };
     const section = (id, title, what, body, open) => `<details class="sec" id="${id}"${open ? " open" : ""}><summary><h2>${title}</h2><span class="what">${what}</span><span class="chev">\u25B6</span></summary><div class="body">${body}</div></details>`;
     const idBody = `<dl class="kv">
-    <dt>chain</dt><dd>${esc2(slip.chain.name)} \xB7 ${esc2(slip.chain.launchpad)}</dd>
-    <dt>factory record</dt><dd>${registered ? `<span class="flag ok">yes</span> ${v1 ? "the Pons V1 factory" : "the launchpad's own factory"} deployed this token${slip.id.resolvedAs === "curve" ? " (you pasted its curve)" : ""}` : `<span class="flag ${o ? "" : "bad"}">none</span> neither the ${esc2(slip.chain.launchpad)} factory${slip.chain.key === "robinhood" ? " nor the Pons V1 factory" : ""} deployed this address${o ? "; checked as an ordinary token below" : ""}`}</dd>
+    <dt>chain</dt><dd>${esc2(slip.chain.name)}${slip.chain.launchpad ? ` \xB7 ${esc2(slip.chain.launchpad)}` : ""}</dd>
+    <dt>factory record</dt><dd>${registered ? `<span class="flag ok">yes</span> ${v1 ? "the Pons V1 factory" : "the launchpad's own factory"} deployed this token${slip.id.resolvedAs === "curve" ? " (you pasted its curve)" : ""}` : `<span class="flag ${o ? "" : "bad"}">none</span> ${slip.chain.launchpad ? `neither the ${esc2(slip.chain.launchpad)} factory${slip.chain.key === "robinhood" ? " nor the Pons V1 factory" : ""} deployed this address` : `no launchpad BOUNCER knows runs on ${esc2(slip.chain.name)}`}${o ? "; checked as an ordinary token below" : ""}`}</dd>
     <dt>token code</dt><dd>${t.code.empty ? "empty (no contract)" : `${t.code.bytes} bytes`}<br>${idFlags(t)}</dd>
     ${slip.id.curve ? `<dt>curve code</dt><dd>${slip.id.curve.code.bytes} bytes<br>${idFlags(slip.id.curve)}</dd>` : ""}
     ${v1 ? `<dt>launchpad</dt><dd>Pons V1</dd><dt>deployer</dt><dd><span class="mono">${esc2(v1.record.deployer.toLowerCase())}</span></dd>` : ""}
@@ -4325,7 +4587,7 @@
     chainSelect.addEventListener("change", () => {
       storage("bouncer.chain", chainSelect.value);
       const c = chainByKey(chainSelect.value);
-      $("chain-hint").textContent = `${c.name} (${c.chainId}) \xB7 ${c.launchpad} \xB7 RPC ${c.rpc[0]}${c.blockscout ? ` \xB7 explorer ${c.blockscout}` : " \xB7 no explorer known, the funder check and same-name search are off"}${c.notes ? ` \xB7 ${c.notes}` : ""}`;
+      $("chain-hint").textContent = `${c.name}${c.chainId ? ` (${c.chainId})` : ""}${c.launchpad ? ` \xB7 ${c.launchpad}` : " \xB7 no launchpad known here"} \xB7 RPC ${c.rpc[0]}${c.blockscout ? ` \xB7 explorer ${c.blockscout}` : " \xB7 no explorer known, the funder check and same-name search are off"}${c.notes ? ` \xB7 ${c.notes}` : ""}`;
       if (mode === "live") setMode("live", true);
       renderChips();
     });

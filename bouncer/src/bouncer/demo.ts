@@ -96,6 +96,8 @@ export const DEMO_PLAIN = {
     ["0x000000000000000000000000000000000000dead", 200, false, null, false],
   ] as [string, number, boolean, string | null, boolean][],
   blacklisted: "0x000000000000000000000000000000000000c501",
+  /** What the pool holds in the wrapped native coin. */
+  poolWeth: 12n * 10n ** 18n,
   /** Every function in the dispatcher, not only the dangerous ones. */
   powers: ["mint(address,uint256)", "pause()", "unpause()", "paused()", "owner()", "renounceOwnership()", "transferOwnership(address)", "setFees(uint256,uint256)", "blacklist(address,bool)", "tradingOpen()", "excludeFromFees(address,bool)", "transfer(address,uint256)", "balanceOf(address)", "totalSupply()", "name()", "symbol()", "decimals()"],
 };
@@ -331,13 +333,36 @@ export function demoFetch(): typeof fetch {
             if (s === sel("totalSupply()")) return ok(`0x${encodeWord("uint256", 10n ** 27n)}`);
           }
           const dex = CHAINS.robinhood.dex!;
-          if (dex.v3Factories.some((f) => f.address === to) && s === sel("getPool(address,address,uint24)")) {
+          if ((dex.v3Factories ?? []).some((f) => f.address === to) && s === sel("getPool(address,address,uint24)")) {
             const [a, , fee] = [`0x${call.data.slice(34, 74)}`, 0, BigInt(`0x${call.data.slice(138, 202)}`)];
             return ok(`0x${encodeWord("address", a === DEMO_PLAIN.token && fee === 3_000n ? DEMO_PLAIN.pool : ZERO_ADDRESS)}`);
           }
           if (to === dex.weth && s === sel("balanceOf(address)")) {
             const who = `0x${call.data.slice(34)}`;
-            return ok(`0x${encodeWord("uint256", who === DEMO_PLAIN.pool ? 12n * ETH : 0n)}`);
+            return ok(`0x${encodeWord("uint256", who === DEMO_PLAIN.pool ? DEMO_PLAIN.poolWeth : 0n)}`);
+          }
+          if (to === DEMO_PLAIN.pool) {
+            // A real V3 pool answers these; a fixture that does not would leave
+            // the pricing arithmetic untested, which is the part most worth testing.
+            const tokens = (DEMO_PLAIN.supply * 3_000n) / 10_000n;
+            if (s === sel("token0()")) return ok(`0x${encodeWord("address", DEMO_PLAIN.token)}`);
+            if (s === sel("fee()")) return ok(`0x${encodeWord("uint24", 3_000n)}`);
+            if (s === sel("liquidity()")) return ok(`0x${encodeWord("uint128", isqrt(tokens * DEMO_PLAIN.poolWeth))}`);
+            if (s === sel("slot0()")) {
+              // sqrtPriceX96 = sqrt(reserve1 / reserve0) * 2^96, with the token as token0.
+              const sqrtPriceX96 = isqrt((DEMO_PLAIN.poolWeth * 2n ** 192n) / tokens);
+              return ok(
+                `0x${[
+                  encodeWord("uint160", sqrtPriceX96),
+                  encodeWord("int24", 0n),
+                  encodeWord("uint16", 0n),
+                  encodeWord("uint16", 1n),
+                  encodeWord("uint16", 1n),
+                  encodeWord("uint8", 0n),
+                  encodeWord("bool", true),
+                ].join("")}`,
+              );
+            }
           }
           if (to === DEMO_PLAIN.token) {
             const from = (call as { from?: string }).from?.toLowerCase();

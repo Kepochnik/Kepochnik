@@ -42,7 +42,7 @@ export interface DoorNote {
 export type Stamp = "ON THE LIST" | "NOT A LAUNCH" | "NOT ON THE LIST";
 
 export interface DoorSlip {
-  chain: { key: string; name: string; chainId: number; launchpad: string; native: { symbol: string; decimals: number } };
+  chain: { key: string; name: string; chainId: number; launchpad: string | null; native: { symbol: string; decimals: number } };
   at: { block: number; timestamp: number };
   subject: string;
   stamp: Stamp;
@@ -128,7 +128,14 @@ export async function readDoor(rpc: RpcClient, input: string, options: DoorOptio
       slip.skipped.push({ section, reason: error instanceof Error ? error.message : String(error) });
     }
   };
-  if (!launchpadKnown) slip.skipped.push({ section: "launch record", reason: `the ${chain.launchpad} factory address is not published for ${chain.name} yet; pass --factory 0x… to check launches here` });
+  if (!launchpadKnown) {
+    slip.skipped.push({
+      section: "launch record",
+      reason: chain.launchpad
+        ? `the ${chain.launchpad} factory address is not published for ${chain.name} yet; pass --factory 0x… to check launches here`
+        : `no launchpad BOUNCER knows runs on ${chain.name}, so there is no launch record to look for; every address here is checked as an ordinary token`,
+    });
+  }
   if (!id.launch && !id.token.code.empty) {
     // Not a V2 launch: a V1 token or an ordinary token. Either way the open-door
     // questions apply (who controls it, can holders move it, who holds it, where
@@ -327,7 +334,7 @@ export function impostorOf(slip: DoorSlip): Lookalike | null {
 function openDoorNotes(slip: DoorSlip, findings: string[]): DoorNote[] {
   const notes: DoorNote[] = [];
   const t = slip.id.token;
-  const factories = `the ${slip.chain.launchpad} factory${slip.chain.key === "robinhood" ? " nor the Pons V1 factory" : ""}`;
+  const factories = slip.chain.launchpad ? `the ${slip.chain.launchpad} factory${slip.chain.key === "robinhood" ? " nor the Pons V1 factory" : ""}` : "";
   if (t.code.empty) {
     notes.push({ level: "stop", code: "not-registered", text: `No contract at this address on ${slip.chain.name}.` });
     return withSkipped(slip, notes);
@@ -353,8 +360,21 @@ function openDoorNotes(slip: DoorSlip, findings: string[]): DoorNote[] {
   }
   if (slip.id.claimedFactory) notes.push({ level: "watch", code: "claimed-factory", text: `The token names ${shortAddress(slip.id.claimedFactory)} as its launch factory (launchFactory()), but that factory is not one BOUNCER knows or its record does not confirm this token. A contract can claim any factory; only a known factory's record counts.` });
   if (slip.known) notes.push({ level: "info", code: "known-address", text: `This is ${slip.known}` });
-  else if (slip.open) notes.push({ level: "info", code: "not-registered", text: `Not a launchpad token: neither ${factories} deployed ${named}, so curves, door tax and locked pools do not apply. Checked instead as an ordinary token on ${slip.chain.name}: who can change its rules, whether holders can move it, who holds it.` });
-  else notes.push({ level: "watch", code: "not-registered", text: `Not a launchpad token: neither ${factories} deployed ${named}. The ordinary-token check could not be run, so nothing below was read.` });
+  else if (slip.open) {
+    notes.push({
+      level: "info",
+      code: "not-registered",
+      text: factories
+        ? `Not a launchpad token: neither ${factories} deployed ${named}, so curves, door tax and locked pools do not apply. Checked instead as an ordinary token on ${slip.chain.name}: who can change its rules, whether a holder can sell right now, who holds it.`
+        : `No launchpad BOUNCER knows runs on ${slip.chain.name}, so ${named} is checked as what it is: an ordinary token. Who can change its rules, whether a holder can sell right now, who holds it, where it trades.`,
+    });
+  } else {
+    notes.push({
+      level: "watch",
+      code: "not-registered",
+      text: factories ? `Not a launchpad token: neither ${factories} deployed ${named}. The ordinary-token check could not be run, so nothing below was read.` : `${named} could not be checked: the ordinary-token read failed, so nothing below was read.`,
+    });
+  }
 
   const o = slip.open;
   for (const f of findings) {
@@ -455,6 +475,24 @@ function openDoorFactNotes(slip: DoorSlip, o: OpenDoor): DoorNote[] {
     else if (o.pools.length) notes.push({ level: "watch", code: "pools-empty", text: `A ${o.pools[0].dex} pool exists but holds no W${q.symbol}: nothing to sell into there.` });
     else notes.push({ level: "info", code: "no-pool", text: `No W${q.symbol} pool on the chain's known DEX factories. It may trade elsewhere (another DEX, a Uniswap V4 pool, another pair) or not at all.` });
   }
+  const m = o.market;
+  if (m && m.quotes.length && m.best) {
+    const q = slip.chain.native;
+    const whole = m.quotes.find((x) => x.shareBps === 10_000);
+    const dec = slip.id.meta?.decimals ?? 18;
+    if (whole) {
+      const thin = whole.realisedBps > 0 && whole.realisedBps < 5_000;
+      notes.push({
+        level: thin ? "watch" : "info",
+        code: "sale-price",
+        text:
+          `Selling ${formatUnits(whole.tokensIn, dec, 0)} tokens into the ${m.best.dex} pool would quote ${formatUnits(whole.out, q.decimals, 4)} W${q.symbol}` +
+          (thin ? `, which is ${(whole.realisedBps / 100).toFixed(0)}% of the marginal price: the pool is thin for a position that size.` : ".") +
+          (whole.beyondTick ? " That size leaves the pool's current tick, so the real figure depends on liquidity this does not read." : "") +
+          " The token's own transfer tax, if it has one, is not included.",
+      });
+    }
+  }
   const price = o.explorer?.priceUsd;
   if (price !== null && price !== undefined) notes.push({ level: "info", code: "price", text: `The explorer's price feed says ${money(price)}${o.explorer!.volume24hUsd !== null ? `, ${usd(o.explorer!.volume24hUsd)} traded in 24 h` : ""}${o.explorer!.marketCapUsd !== null ? `, ${usd(o.explorer!.marketCapUsd)} market cap` : ""}. That feed is the explorer's, not the chain's.` });
 
@@ -545,7 +583,7 @@ export function doorReceipt(slip: DoorSlip): Receipt {
     title: "ID check",
     rows: [
       { label: "address", value: slip.subject },
-      { label: "chain", value: `${slip.chain.name} (${slip.chain.chainId}) · ${slip.chain.launchpad}` },
+      { label: "chain", value: `${slip.chain.name}${slip.chain.chainId ? ` (${slip.chain.chainId})` : ""}${slip.chain.launchpad ? ` · ${slip.chain.launchpad}` : ""}` },
       { label: "stamp", value: slip.stamp },
       ...(slip.known ? [{ label: "known as", value: slip.known }] : []),
       { label: "factory record", value: slip.id.registered, note: slip.id.resolvedAs === "curve" ? "resolved from the curve" : undefined },
@@ -634,6 +672,12 @@ export function doorReceipt(slip: DoorSlip): Receipt {
         title: "Where it trades",
         rows: [
           ...(o.pools ? (o.pools.length ? o.pools.map((p) => ({ label: `${p.dex} ${(p.feeBps / 100).toFixed(2)}%`, value: `${amount(p.quoteReserve, q.decimals, 3)} W${q.symbol} · ${amount(p.tokenReserve, slip.id.meta?.decimals ?? 18, 0)} tokens`, note: p.address })) : [{ label: "pools", value: `none against W${q.symbol} on the chain's known DEX factories` }]) : []),
+          ...(o.market?.quotes ?? []).map((x) => ({
+            label: `sell ${x.shareBps / 100}%`,
+            value: `${formatUnits(x.out, q.decimals, 4)} W${q.symbol}`,
+            note: `${(x.realisedBps / 100).toFixed(1)}% of the marginal price${x.beyondTick ? " · leaves the current tick" : ""}`,
+          })),
+          ...(o.market?.note ? [{ label: "method", value: o.market.note }] : []),
           ...(o.explorer?.priceUsd != null ? [{ label: "explorer price", value: money(o.explorer.priceUsd), note: [o.explorer.volume24hUsd !== null ? `${usd(o.explorer.volume24hUsd)} 24 h volume` : "", o.explorer.marketCapUsd !== null ? `${usd(o.explorer.marketCapUsd)} market cap` : ""].filter(Boolean).join(" · ") || undefined }] : []),
           ...(o.explorer?.isScam === true ? [{ label: "explorer flag", value: "scam" }] : []),
         ],

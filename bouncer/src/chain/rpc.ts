@@ -192,7 +192,28 @@ export class RpcClient {
     return result;
   }
 
+  /**
+   * Like sendBatch, but a call the node answered with an error comes back as
+   * that error instead of discarding every other answer in the batch. One
+   * contract without a slot0() must not cost the caller the reserves of three
+   * pools that were read perfectly well.
+   */
+  async sendBatchSettled(requests: RpcRequest[]): Promise<(unknown | RpcError)[]> {
+    return this.dispatch(requests, true);
+  }
+
+  /** Several eth_call reads pinned to one block, each answered or failed on its own. */
+  async callBatchSettled(calls: { to: string; data: Hex }[], blockNumber: number): Promise<(Hex | RpcError)[]> {
+    const tag = toHex(blockNumber);
+    const answers = await this.sendBatchSettled(calls.map((call) => ({ method: "eth_call", params: [{ to: call.to, data: call.data }, tag] })));
+    return answers.map((a) => (a instanceof RpcError ? a : (a as Hex)));
+  }
+
   async sendBatch(requests: RpcRequest[]): Promise<unknown[]> {
+    return this.dispatch(requests, false);
+  }
+
+  private async dispatch(requests: RpcRequest[], settled: boolean): Promise<unknown[]> {
     for (const request of requests) {
       if (!READ_ONLY_METHODS.has(request.method)) {
         throw new RpcError(`refusing non-read method ${request.method}`);
@@ -231,7 +252,13 @@ export class RpcClient {
         return payload.map((request) => {
           const item = byId.get(request.id);
           if (!item) throw new RpcError(`missing response for ${request.method}`);
-          if (item.error) throw new RpcError(item.error.message, item.error.code, item.error.data, "application");
+          if (item.error) {
+            const failure = new RpcError(item.error.message, item.error.code, item.error.data, "application");
+            // A rate limit is the endpoint talking, not the contract: it has to
+            // reach the retry loop rather than be handed back as one call's answer.
+            if (settled && !failure.isRateLimit) return failure;
+            throw failure;
+          }
           return item.result;
         });
       } catch (error) {

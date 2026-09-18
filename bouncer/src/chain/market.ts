@@ -1,0 +1,286 @@
+/**
+ * THE MARKET: where an ordinary token trades, and what a sale would pay.
+ *
+ * A launchpad token has a curve with published arithmetic. Everything else has
+ * pools, and three shapes cover almost all of them: Uniswap V3 and its forks
+ * (concentrated liquidity, priced from sqrtPriceX96 and the liquidity in the
+ * current tick), Uniswap V2 and its forks (constant product, priced exactly
+ * from two reserves), and Solidly forks such as Aerodrome (constant product for
+ * volatile pairs, a different invariant for stable ones, which is not priced
+ * here and says so).
+ *
+ * Every quote is a quote from the pool, not a promise about a trade. It does
+ * not include the token's own transfer tax, does not cross ticks on a V3 pool,
+ * and is a snapshot of one block. Each of those is stated on the slip rather
+ * than buried here.
+ */
+import { decodeOutputs, encodeCall, type FunctionAbi, type Hex } from "./abi.js";
+import { DEFAULT_V3_FEE_TIERS, type DexTable } from "./chains.js";
+import { ERC20_FUNCTIONS, ZERO_ADDRESS } from "./pons.js";
+import type { RpcClient } from "./rpc.js";
+
+const Q96 = 2n ** 96n;
+
+const FACTORY_FUNCTIONS = {
+  getPool: { name: "getPool", inputs: ["address", "address", "uint24"], outputs: ["address"] },
+  getPair: { name: "getPair", inputs: ["address", "address"], outputs: ["address"] },
+  getPoolStable: { name: "getPool", inputs: ["address", "address", "bool"], outputs: ["address"] },
+} as const satisfies Record<string, FunctionAbi>;
+
+const POOL_FUNCTIONS = {
+  token0: { name: "token0", inputs: [], outputs: ["address"] },
+  slot0: { name: "slot0", inputs: [], outputs: ["uint160", "int24", "uint16", "uint16", "uint16", "uint8", "bool"] },
+  liquidity: { name: "liquidity", inputs: [], outputs: ["uint128"] },
+  fee: { name: "fee", inputs: [], outputs: ["uint24"] },
+  getReserves: { name: "getReserves", inputs: [], outputs: ["uint112", "uint112", "uint32"] },
+  getReservesWide: { name: "getReserves", inputs: [], outputs: ["uint256", "uint256", "uint256"] },
+  stable: { name: "stable", inputs: [], outputs: ["bool"] },
+} as const satisfies Record<string, FunctionAbi>;
+
+export type PoolKind = "v3" | "v2" | "solidly";
+
+export interface MarketPool {
+  dex: string;
+  kind: PoolKind;
+  address: string;
+  /** Swap fee in basis points: a 1% pool is 100, a 0.3% pool is 30. Divide by 100 to print a percentage. */
+  feeBps: number;
+  /** True when the subject token sorts first in the pair, which decides the direction of every formula. */
+  tokenIsToken0: boolean;
+  /** The pool's balances, read as ERC-20 balances; null when a balance call failed. */
+  tokenReserve: bigint | null;
+  quoteReserve: bigint | null;
+  /** V3 only: the price and the liquidity in the current tick. */
+  sqrtPriceX96?: bigint;
+  liquidity?: bigint;
+  /** Solidly only: a stable pool uses a different invariant and is not priced here. */
+  stable?: boolean;
+}
+
+export interface MarketQuote {
+  shareBps: number;
+  tokensIn: bigint;
+  /** Quote-asset units out, before the token's own transfer tax. */
+  out: bigint;
+  /** What the sale realises against the marginal price, in bps. 10 000 means no impact. */
+  realisedBps: number;
+  /** True when a V3 quote would move the price far enough that liquidity outside the current tick decides the real answer. */
+  beyondTick: boolean;
+}
+
+export interface Market {
+  pools: MarketPool[];
+  /** The pool a sale would use: the deepest one that can be priced. */
+  best: MarketPool | null;
+  /** Quote-asset units per one whole token at the marginal price, or null when nothing could be priced. */
+  spot: bigint | null;
+  quotes: MarketQuote[];
+  /** What the numbers above do and do not include, in one sentence. */
+  note: string;
+}
+
+/**
+ * Finds every pool the chain's DEX table can point at, pairing the token with
+ * the wrapped native coin. One batch asks the factories, a second reads each
+ * pool's state. A factory that answers garbage is skipped rather than taking
+ * the others down with it.
+ */
+export async function readPools(rpc: RpcClient, token: string, dex: DexTable, block: number, tokenDecimals = 18): Promise<MarketPool[]> {
+  const asks: { dex: string; kind: PoolKind; feeBps: number; stable?: boolean }[] = [];
+  const calls: { to: string; data: Hex }[] = [];
+  for (const f of dex.v3Factories ?? []) {
+    for (const fee of f.feeTiers ?? DEFAULT_V3_FEE_TIERS) {
+      asks.push({ dex: f.name, kind: "v3", feeBps: fee / 100 });
+      calls.push({ to: f.address, data: encodeCall(FACTORY_FUNCTIONS.getPool, [token, dex.weth, BigInt(fee)]) });
+    }
+  }
+  for (const f of dex.v2Factories ?? []) {
+    asks.push({ dex: f.name, kind: "v2", feeBps: 30 });
+    calls.push({ to: f.address, data: encodeCall(FACTORY_FUNCTIONS.getPair, [token, dex.weth]) });
+  }
+  for (const f of dex.solidlyFactories ?? []) {
+    for (const stable of [false, true]) {
+      asks.push({ dex: f.name, kind: "solidly", feeBps: stable ? 5 : 30, stable });
+      calls.push({ to: f.address, data: encodeCall(FACTORY_FUNCTIONS.getPoolStable, [token, dex.weth, stable]) });
+    }
+  }
+  if (!calls.length) return [];
+
+  const raws = await rpc.callBatch(calls, block);
+  const found: MarketPool[] = [];
+  const seen = new Set<string>();
+  raws.forEach((raw, i) => {
+    try {
+      const [address] = decodeOutputs(FACTORY_FUNCTIONS.getPool, raw) as [string];
+      if (!address || address === ZERO_ADDRESS || seen.has(address)) return;
+      seen.add(address);
+      found.push({ ...asks[i], address, tokenIsToken0: false, tokenReserve: null, quoteReserve: null });
+    } catch {
+      // not a factory of this shape; the others are unaffected
+    }
+  });
+  if (!found.length) return found;
+
+  await hydrate(rpc, token, dex, found, block);
+  return found.sort((a, b) => {
+    const x = a.quoteReserve ?? -1n;
+    const y = b.quoteReserve ?? -1n;
+    return y > x ? 1 : y < x ? -1 : 0;
+  });
+}
+
+/** Reads each pool's direction, reserves and, for a V3 pool, its price and liquidity. */
+async function hydrate(rpc: RpcClient, token: string, dex: DexTable, pools: MarketPool[], block: number): Promise<void> {
+  const calls: { to: string; data: Hex }[] = [];
+  const plan: { pool: MarketPool; field: string }[] = [];
+  const want = (pool: MarketPool, field: string, to: string, data: Hex) => {
+    plan.push({ pool, field });
+    calls.push({ to, data });
+  };
+  for (const p of pools) {
+    want(p, "token0", p.address, encodeCall(POOL_FUNCTIONS.token0, []));
+    want(p, "tokenReserve", token, encodeCall(ERC20_FUNCTIONS.balanceOf, [p.address]));
+    want(p, "quoteReserve", dex.weth, encodeCall(ERC20_FUNCTIONS.balanceOf, [p.address]));
+    if (p.kind === "v3") {
+      want(p, "slot0", p.address, encodeCall(POOL_FUNCTIONS.slot0, []));
+      want(p, "liquidity", p.address, encodeCall(POOL_FUNCTIONS.liquidity, []));
+      want(p, "fee", p.address, encodeCall(POOL_FUNCTIONS.fee, []));
+    }
+  }
+  let raws: (Hex | Error)[];
+  try {
+    // Settled, not all-or-nothing: a pool without a slot0() must not cost the
+    // others their reserves, and a pool that is not a V3 pool at all is common.
+    raws = await rpc.callBatchSettled(calls, block);
+  } catch {
+    return; // the pools exist; their state is simply unread
+  }
+  plan.forEach(({ pool, field }, i) => {
+    const raw = raws[i];
+    if (raw instanceof Error) return;
+    try {
+      if (field === "token0") pool.tokenIsToken0 = (decodeOutputs(POOL_FUNCTIONS.token0, raw)[0] as string).toLowerCase() === token.toLowerCase();
+      else if (field === "tokenReserve") pool.tokenReserve = decodeOutputs(ERC20_FUNCTIONS.balanceOf, raw)[0] as bigint;
+      else if (field === "quoteReserve") pool.quoteReserve = decodeOutputs(ERC20_FUNCTIONS.balanceOf, raw)[0] as bigint;
+      else if (field === "slot0") pool.sqrtPriceX96 = decodeOutputs(POOL_FUNCTIONS.slot0, raw)[0] as bigint;
+      else if (field === "liquidity") pool.liquidity = decodeOutputs(POOL_FUNCTIONS.liquidity, raw)[0] as bigint;
+      else if (field === "fee") pool.feeBps = Number(decodeOutputs(POOL_FUNCTIONS.fee, raw)[0] as bigint) / 100;
+    } catch {
+      // one unread field must not discard the pool it belongs to
+    }
+  });
+}
+
+/** Whether this pool holds enough state to price a sale. */
+export function canPrice(pool: MarketPool): boolean {
+  if (pool.kind === "v3") return (pool.sqrtPriceX96 ?? 0n) > 0n && (pool.liquidity ?? 0n) > 0n;
+  if (pool.kind === "solidly" && pool.stable) return false;
+  return (pool.tokenReserve ?? 0n) > 0n && (pool.quoteReserve ?? 0n) > 0n;
+}
+
+/**
+ * Marginal price: quote-asset units for one whole token, before any fee.
+ * On a V3 pool it follows from sqrtPriceX96; on a constant-product pool it is
+ * the ratio of the reserves.
+ */
+export function spotPrice(pool: MarketPool, tokenDecimals: number): bigint | null {
+  const one = 10n ** BigInt(tokenDecimals);
+  if (pool.kind === "v3") {
+    const sqrt = pool.sqrtPriceX96 ?? 0n;
+    if (sqrt <= 0n) return null;
+    // price of token1 per token0 is (sqrtP / 2^96)^2.
+    return pool.tokenIsToken0 ? (sqrt * sqrt * one) / (Q96 * Q96) : (Q96 * Q96 * one) / (sqrt * sqrt);
+  }
+  const t = pool.tokenReserve ?? 0n;
+  const q = pool.quoteReserve ?? 0n;
+  if (t <= 0n || q <= 0n) return null;
+  return (q * one) / t;
+}
+
+/**
+ * What selling `tokensIn` into this pool pays, in quote-asset units.
+ *
+ * Constant product is exact. V3 is exact inside the current tick and
+ * optimistic beyond it, because the liquidity in the next tick range is not
+ * read; `beyondTick` marks a quote that leaves the range, and the slip says
+ * the real answer needs the ticks nobody read.
+ */
+export function quoteSale(pool: MarketPool, tokensIn: bigint): { out: bigint; beyondTick: boolean } | null {
+  if (tokensIn <= 0n || !canPrice(pool)) return null;
+  const feeBps = BigInt(Math.round(pool.feeBps));
+  const afterFee = (tokensIn * (10_000n - feeBps)) / 10_000n;
+  if (afterFee <= 0n) return { out: 0n, beyondTick: false };
+
+  if (pool.kind !== "v3") {
+    const t = pool.tokenReserve ?? 0n;
+    const q = pool.quoteReserve ?? 0n;
+    // x * y = k, with the fee already taken off the input.
+    const out = (afterFee * q) / (t + afterFee);
+    return { out: out > q ? q : out, beyondTick: false };
+  }
+
+  const sqrt = pool.sqrtPriceX96!;
+  const L = pool.liquidity!;
+  if (pool.tokenIsToken0) {
+    // Selling token0 pushes the price down: sqrtNext = L * sqrt / (L + dx * sqrt / Q96)
+    const denominator = L * Q96 + afterFee * sqrt;
+    if (denominator <= 0n) return null;
+    const sqrtNext = (L * Q96 * sqrt) / denominator;
+    const out = (L * (sqrt - sqrtNext)) / Q96;
+    return { out, beyondTick: sqrtNext * 2n < sqrt };
+  }
+  // Selling token1 pushes the price up: sqrtNext = sqrt + dy * Q96 / L
+  const sqrtNext = sqrt + (afterFee * Q96) / L;
+  if (sqrtNext <= sqrt) return { out: 0n, beyondTick: false };
+  const out = (L * Q96 * (sqrtNext - sqrt)) / (sqrtNext * sqrt);
+  return { out, beyondTick: sqrtNext > sqrt * 2n };
+}
+
+/**
+ * Prices a position walking out of the deepest pool that can be priced, at
+ * four sizes, the way the launchpad exit door does for a curve.
+ */
+export function readMarket(pools: MarketPool[], position: bigint, tokenDecimals: number, quoteSymbol: string): Market {
+  const priceable = pools.filter(canPrice);
+  const best = priceable[0] ?? null;
+  if (!best) {
+    return {
+      pools,
+      best: null,
+      spot: null,
+      quotes: [],
+      note: pools.length
+        ? `A pool exists but nothing in it could be priced: ${pools.every((p) => p.stable) ? "a Solidly stable pool uses an invariant this does not model" : "its reserves or price did not read"}.`
+        : `No ${quoteSymbol} pool on the chain's known DEX factories. It may trade on another venue, against another pair, or not at all.`,
+    };
+  }
+  const spot = spotPrice(best, tokenDecimals);
+  const one = 10n ** BigInt(tokenDecimals);
+  const quotes: MarketQuote[] = [];
+  for (const shareBps of [1_000, 2_500, 5_000, 10_000]) {
+    const tokensIn = (position * BigInt(shareBps)) / 10_000n;
+    const priced = quoteSale(best, tokensIn);
+    if (!priced || tokensIn <= 0n) continue;
+    const reference = spot !== null ? (spot * tokensIn) / one : 0n;
+    quotes.push({
+      shareBps,
+      tokensIn,
+      out: priced.out,
+      realisedBps: reference > 0n ? Number((priced.out * 10_000n) / reference) : 0,
+      beyondTick: priced.beyondTick,
+    });
+  }
+  const crosses = quotes.some((q) => q.beyondTick);
+  return {
+    pools,
+    best,
+    spot,
+    quotes,
+    note:
+      `Priced on the ${best.dex} ${best.kind === "v3" ? "V3" : best.kind === "v2" ? "V2" : "Solidly"} pool at ${(best.feeBps / 100).toFixed(2)}% fee, from its state at this block. ` +
+      (best.kind === "v3"
+        ? `Concentrated liquidity: exact inside the current tick${crosses ? ", and the larger sizes leave it, so the real answer depends on ticks this does not read" : ""}. `
+        : "Constant product, so the arithmetic is exact for the pool. ") +
+      `The token's own transfer tax, if it has one, is not included, and nothing here is a promise about a trade.`,
+  };
+}

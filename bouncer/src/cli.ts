@@ -15,11 +15,13 @@ import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { BlockscoutClient } from "./chain/blockscout.js";
 import { CHAINS, chainByKey, type ChainConfig } from "./chain/chains.js";
-import { GraduationPhase, PHASE_LABEL } from "./chain/pons.js";
-import { PonsReader } from "./chain/reader.js";
+import { decodeOutputs, encodeCall } from "./chain/abi.js";
+import { readMarket, readPools } from "./chain/market.js";
+import { ERC20_FUNCTIONS, GraduationPhase, PHASE_LABEL, type LaunchedToken } from "./chain/pons.js";
+import { NotAPonsLaunch, PonsReader, readTokenMeta } from "./chain/reader.js";
 import { RpcClient } from "./chain/rpc.js";
 import { findBlockByTimestamp } from "./chain/tape.js";
-import { flagNumber, flagString, parseArgs } from "./cli/args.js";
+import { flagNumber, flagString, parseArgs, type ParsedArgs } from "./cli/args.js";
 import { doctorReceipt, runDoctor } from "./cli/doctor.js";
 import { renderReceipt, type Receipt, type ReceiptFormat } from "./receipt.js";
 import { doorCard } from "./bouncer/card.js";
@@ -167,8 +169,14 @@ export async function main(argv: string[], write: (text: string) => void = (t) =
         const token = args.positionals[0] ?? (demo ? DEMO.tokens.late.token : undefined);
         if (!token) throw new Error("usage: bouncer exit <token> [--amount tokens]");
         const head = await rpc.blockNumber();
-        const launch = await new PonsReader(rpc, requireFactory()).launchedToken(token, head);
         const amountFlag = flagString(args.flags, "amount");
+        const launch = await launchOrNull(rpc, token, head, chain, args);
+        if (!launch) {
+          // Not a launchpad launch: price the sale on whatever pool the chain's
+          // dex table can find. Refusing to answer would be the wrong answer to
+          // the question people actually ask about a token they hold.
+          return await marketExit(rpc, token, head, chain, amountFlag, format, emit);
+        }
         const position = amountFlag ? BigInt(Math.round(Number(amountFlag))) * 10n ** 18n : 10n ** 25n;
         const exit = await readExitDoor(rpc, launch, { position, block: head, factory: requireFactory() });
         if (format === "json") return json(exit), 0;
@@ -203,7 +211,14 @@ export async function main(argv: string[], write: (text: string) => void = (t) =
         const wallet = args.positionals[1] ?? (demo ? DEMO.tokens.late.buys[1][1] : undefined);
         if (!token || !wallet) throw new Error("usage: bouncer wallet <token> <wallet>");
         const head = await rpc.blockNumber();
-        const launch = await new PonsReader(rpc, requireFactory()).launchedToken(token, head);
+        const maybeLaunch = await launchOrNull(rpc, token, head, chain, args);
+        if (!maybeLaunch) {
+          // An ordinary token: the curve trade history does not exist, but the
+          // balance and what it would fetch do, and those are the two numbers
+          // a holder came for.
+          return await marketBag(rpc, token, wallet, head, chain, format, emit);
+        }
+        const launch = maybeLaunch;
         const launchBlock = await findLaunchBlock(rpc, launch.token, head, demo ? 400_000 : flagNumber(args.flags, "launch-blocks", 0) || Math.round(30 * 86_400 * chain.blocksPerSecond), requireFactory(), chunk);
         const position = await readPosition(rpc, launch, wallet, launchBlock ?? 0, head, requireFactory(), chunk);
         if (format === "json") return json(position), 0;
@@ -408,6 +423,123 @@ export async function main(argv: string[], write: (text: string) => void = (t) =
     write(`bouncer: ${error instanceof Error ? error.message : String(error)}\n`);
     return 1;
   }
+}
+
+/**
+ * The launch record when this token is one, null when it is not. An ordinary
+ * token is the common case on most chains, and on a chain with no launchpad at
+ * all it is the only case, so "not a launch" is an answer, not an error.
+ */
+async function launchOrNull(rpc: RpcClient, token: string, block: number, chain: ChainConfig, args: ParsedArgs): Promise<LaunchedToken | null> {
+  const factory = (flagString(args.flags, "factory") ?? chain.factory ?? "").toLowerCase();
+  if (!factory) return null;
+  try {
+    return await new PonsReader(rpc, factory).launchedToken(token, block);
+  } catch (error) {
+    if (error instanceof NotAPonsLaunch) return null;
+    throw error;
+  }
+}
+
+/** What selling this token would pay, for a token with no curve behind it. */
+async function marketExit(
+  rpc: RpcClient,
+  token: string,
+  head: number,
+  chain: ChainConfig,
+  amountFlag: string | undefined,
+  format: string,
+  emit: (text: string) => void,
+): Promise<number> {
+  if (!chain.dex) throw new Error(`${token} is not a launch on ${chain.name}, and ${chain.name} has no DEX table to price a sale with`);
+  const meta = await readTokenMeta(rpc, token, head).catch(() => null);
+  const decimals = meta?.decimals ?? 18;
+  const pools = await readPools(rpc, token.toLowerCase(), chain.dex, head, decimals);
+  const supply = await readSupply(rpc, token, head).catch(() => 0n);
+  const position = amountFlag ? BigInt(Math.round(Number(amountFlag))) * 10n ** BigInt(decimals) : supply > 0n ? supply / 100n : 0n;
+  const market = readMarket(pools, position, decimals, chain.dex.wethSymbol);
+  if (format === "json") return emit(slipJson({ token: token.toLowerCase(), block: head, position: position.toString(), market })), 0;
+  const q = chain.native;
+  emit(
+    renderReceipt(
+      {
+        title: `BOUNCER · exit door${meta ? ` · ${meta.symbol}` : ""}`,
+        subtitle: `${token.toLowerCase()} · ${market.best ? `${market.best.dex} ${market.best.kind}` : "no pool"} · block ${head}`,
+        sections: [
+          {
+            title: "walk out now",
+            rows: [
+              { label: "position", value: `${formatUnits(position, decimals, 0)} tokens`, note: amountFlag ? "as asked" : "1% of supply unless you pass --amount" },
+              { label: "spot", value: market.spot === null ? "unknown" : `${formatUnits(market.spot, q.decimals, 12)} ${chain.dex.wethSymbol} per token` },
+              ...market.quotes.map((x) => ({
+                label: `sell ${x.shareBps / 100}%`,
+                value: `${formatUnits(x.out, q.decimals, 6)} ${chain.dex!.wethSymbol}`,
+                note: `${(x.realisedBps / 100).toFixed(1)}% of spot${x.beyondTick ? " · leaves the current tick" : ""}`,
+              })),
+            ],
+          },
+          {
+            title: "pools",
+            rows: pools.length
+              ? pools.map((p) => ({
+                  label: `${p.dex} ${p.kind}`,
+                  value: `${p.quoteReserve === null ? "unread" : formatUnits(p.quoteReserve, q.decimals, 3)} ${chain.dex!.wethSymbol} · fee ${(p.feeBps / 100).toFixed(2)}%`,
+                  note: p.address,
+                }))
+              : [{ label: "pools", value: `none against ${chain.dex.wethSymbol} on the chain's known DEX factories` }],
+          },
+        ],
+        footnotes: [market.note],
+        meta: { pools: pools.length, priced: market.best !== null },
+      },
+      asReceiptFormat(format),
+    ),
+  );
+  return 0;
+}
+
+/** One wallet's balance in an ordinary token, and what it would fetch right now. */
+async function marketBag(rpc: RpcClient, token: string, wallet: string, head: number, chain: ChainConfig, format: string, emit: (text: string) => void): Promise<number> {
+  const meta = await readTokenMeta(rpc, token, head).catch(() => null);
+  const decimals = meta?.decimals ?? 18;
+  const balance = await readBalanceOf(rpc, token, wallet, head);
+  const pools = chain.dex ? await readPools(rpc, token.toLowerCase(), chain.dex, head, decimals) : [];
+  const market = chain.dex ? readMarket(pools, balance, decimals, chain.dex.wethSymbol) : null;
+  const whole = market?.quotes.find((x) => x.shareBps === 10_000) ?? null;
+  if (format === "json") return emit(slipJson({ token: token.toLowerCase(), wallet: wallet.toLowerCase(), block: head, balance: balance.toString(), market })), 0;
+  const q = chain.native;
+  emit(
+    renderReceipt(
+      {
+        title: `BOUNCER · the bag${meta ? ` · ${meta.symbol}` : ""}`,
+        subtitle: `${wallet.toLowerCase()} on ${token.toLowerCase()} · block ${head}`,
+        sections: [
+          {
+            title: "holding",
+            rows: [
+              { label: "balance", value: `${formatUnits(balance, decimals, 4)} tokens` },
+              { label: "worth now", value: whole ? `${formatUnits(whole.out, q.decimals, 6)} ${chain.dex?.wethSymbol ?? q.symbol}` : "not priced", note: whole ? `${(whole.realisedBps / 100).toFixed(1)}% of the marginal price` : market?.note },
+              { label: "cost basis", value: "not read", note: "this token has no launchpad curve, so there is no trade history to total up here" },
+            ],
+          },
+        ],
+        footnotes: [market?.note ?? `${chain.name} has no DEX table, so nothing could be priced.`],
+        meta: { balance: balance.toString() },
+      },
+      asReceiptFormat(format),
+    ),
+  );
+  return 0;
+}
+
+async function readSupply(rpc: RpcClient, token: string, block: number): Promise<bigint> {
+  const [raw] = await rpc.callBatch([{ to: token, data: encodeCall(ERC20_FUNCTIONS.totalSupply, []) }], block);
+  return decodeOutputs(ERC20_FUNCTIONS.totalSupply, raw)[0] as bigint;
+}
+
+async function readBalanceOf(rpc: RpcClient, token: string, who: string, block: number): Promise<bigint> {
+  const [raw] = await rpc.callBatch([{ to: token, data: encodeCall(ERC20_FUNCTIONS.balanceOf, [who]) }], block);
+  return decodeOutputs(ERC20_FUNCTIONS.balanceOf, raw)[0] as bigint;
 }
 
 function liveRpc(chain: ChainConfig, override?: string): RpcClient {
