@@ -58,7 +58,14 @@ export const DEMO_BLOCKSCOUT = "https://demo.blockscout.invalid";
 export const DEMO_V1 = { token: "0x0000000000000000000000000000000000001d1e", deployer: "0x00000000000000000000000000000000000001d1", positionId: 777n, restrictionsEndBlock: BigInt(HEAD + 40), name: "Old School", symbol: "OLDIE" };
 
 /** Not a Pons launch: an upgradeable proxy token somebody named after a real one. */
-export const DEMO_IMPOSTOR = { token: "0x00000000000000000000000000000000000bad01", implementation: "0x00000000000000000000000000000000000bad02" };
+export const DEMO_IMPOSTOR = {
+  token: "0x00000000000000000000000000000000000bad01",
+  implementation: "0x00000000000000000000000000000000000bad02",
+  deployer: "0x00000000000000000000000000000000000bad03",
+  creationTx: "0xdemoimpostorcreate",
+  /** Deployed after the real SPRINT launch, which is what makes it the copy. */
+  createdAt: HEAD - 900,
+};
 
 /**
  * Not a Pons launch, not an impostor: an ordinary owned ERC-20 with mint,
@@ -75,17 +82,22 @@ export const DEMO_PLAIN = {
   createdAt: HEAD - 50_000,
   creationTx: "0xdemoplaincreate",
   supply: 10n ** 27n,
-  /** [holder, share in bps, is contract, explorer label]. */
+  /** [holder, share in bps, is contract, explorer label, EIP-7702 delegated]. */
   holders: [
-    ["0x000000000000000000000000000000000000900f", 3_000, true, "UniswapV3Pool"],
-    ["0x00000000000000000000000000000000000000f1", 2_500, false, null],
-    ["0x000000000000000000000000000000000000c500", 800, false, null],
-    ["0x000000000000000000000000000000000000c501", 500, false, null],
-    ["0x000000000000000000000000000000000000c502", 300, false, null],
-    ["0x000000000000000000000000000000000000dead", 200, false, null],
-  ] as [string, number, boolean, string | null][],
+    ["0x000000000000000000000000000000000000900f", 3_000, true, "UniswapV3Pool", false],
+    ["0x00000000000000000000000000000000000000f1", 2_500, false, null, false],
+    ["0x000000000000000000000000000000000000c500", 800, false, null, false],
+    ["0x000000000000000000000000000000000000c501", 500, false, null, false],
+    ["0x000000000000000000000000000000000000c502", 300, false, null, false],
+    // A wallet whose owner signed an EIP-7702 delegation. The explorer calls it a
+    // contract; it is a person, and counting it as a pool would understate how
+    // concentrated this token is.
+    ["0x000000000000000000000000000000000000c503", 400, true, null, true],
+    ["0x000000000000000000000000000000000000dead", 200, false, null, false],
+  ] as [string, number, boolean, string | null, boolean][],
   blacklisted: "0x000000000000000000000000000000000000c501",
-  powers: ["mint(address,uint256)", "pause()", "unpause()", "paused()", "owner()", "renounceOwnership()", "transferOwnership(address)", "setFees(uint256,uint256)", "blacklist(address,bool)", "tradingOpen()", "excludeFromFees(address,bool)"],
+  /** Every function in the dispatcher, not only the dangerous ones. */
+  powers: ["mint(address,uint256)", "pause()", "unpause()", "paused()", "owner()", "renounceOwnership()", "transferOwnership(address)", "setFees(uint256,uint256)", "blacklist(address,bool)", "tradingOpen()", "excludeFromFees(address,bool)", "transfer(address,uint256)", "balanceOf(address)", "totalSupply()", "name()", "symbol()", "decimals()"],
 };
 
 /** FRESH: launched nine seconds before the head; dev buy at the door, one sniper paid 61%. */
@@ -247,6 +259,7 @@ export function demoFetch(): typeof fetch {
         case "eth_getTransactionReceipt": {
           const hash = (request.params as [string])[0];
           if (hash === DEMO_PLAIN.creationTx) return ok({ transactionHash: hash, blockNumber: `0x${DEMO_PLAIN.createdAt.toString(16)}`, from: DEMO_PLAIN.owner, status: "0x1", logs: [] });
+          if (hash === DEMO_IMPOSTOR.creationTx) return ok({ transactionHash: hash, blockNumber: `0x${DEMO_IMPOSTOR.createdAt.toString(16)}`, from: DEMO_IMPOSTOR.deployer, status: "0x1", logs: [] });
           for (const t of Object.values(DEMO.tokens)) {
             const logs = curveLogs(t, 0, DEMO.head) as { transactionHash: string; blockNumber: string }[];
             const hit = logs.filter((l) => l.transactionHash === hash);
@@ -368,7 +381,7 @@ export function demoFetch(): typeof fetch {
             if (s === sel("buybackQuoteBalance()")) return one(2n * 10n ** 16n, "uint256");
             if (s === sel("isNativeQuote()")) return one(true, "bool");
           }
-          return err(`demo chain has no answer for ${to} ${s}`);
+          return { jsonrpc: "2.0", id: request.id, error: { code: 3, message: "execution reverted", data: "0x" } };
         }
         default: return err(`demo chain does not serve ${request.method}`);
       }
@@ -424,10 +437,19 @@ export function demoBlockscoutFetch(): typeof fetch {
     if (v) return json({ is_verified: tokens.some((t) => t.token === v[1].toLowerCase() || t.curve === v[1].toLowerCase()) });
     const plain = DEMO_PLAIN;
     if (url.pathname === `/api/v2/addresses/${plain.token}`) return json({ is_contract: true, is_verified: false, name: null, creator_address_hash: plain.owner, creation_transaction_hash: plain.creationTx });
+    if (url.pathname === `/api/v2/addresses/${DEMO_IMPOSTOR.token}`) {
+      return json({ is_contract: true, is_verified: false, is_scam: false, name: null, creator_address_hash: DEMO_IMPOSTOR.deployer, creation_transaction_hash: DEMO_IMPOSTOR.creationTx });
+    }
     if (url.pathname === `/api/v2/tokens/${plain.token}`) return json({ holders_count: "143", type: "ERC-20", name: plain.name, symbol: plain.symbol });
     if (url.pathname === `/api/v2/tokens/${plain.token}/counters`) return json({ token_holders_count: "143", transfers_count: "2210" });
     if (url.pathname === `/api/v2/tokens/${plain.token}/holders`) {
-      return json({ items: plain.holders.map(([hash, bps, is_contract, name]) => ({ address: { hash, is_contract, name }, value: ((plain.supply * BigInt(bps)) / 10_000n).toString() })), next_page_params: null });
+      return json({
+        items: plain.holders.map(([hash, bps, is_contract, name, delegated]) => ({
+          address: { hash, is_contract, name, proxy_type: delegated ? "eip7702" : null },
+          value: ((plain.supply * BigInt(bps)) / 10_000n).toString(),
+        })),
+        next_page_params: null,
+      });
     }
     if (url.pathname === `/api/v2/tokens/${plain.token}/transfers`) {
       const at = (block: number) => new Date(Math.round(DEMO.genesisTimestamp + block * 0.1) * 1000).toISOString();
@@ -476,6 +498,52 @@ export const DEMO_CODE = {
 
 export function demoRpc(): RpcClient {
   return new RpcClient({ urls: ["demo://robinhood-chain"], expectedChainId: ROBINHOOD_CHAIN_ID, fetchImpl: demoFetch(), minSpacingMs: 0 });
+}
+
+export interface DemoOverride {
+  /** Answer with a JSON-RPC error, the way a node answers a revert. */
+  error?: { code: number; message: string; data?: string };
+  /** Answer with this raw hex result instead of the fixture's. */
+  result?: string;
+  /** Fail the whole request the way an unreachable or overloaded endpoint does. */
+  transport?: string;
+}
+
+/**
+ * The demo chain with selected answers rewritten. Real chains produce states a
+ * fixture never will — a rate-limited endpoint, a token with no transfer
+ * function, a totalSupply that reverts — and those are exactly the states where
+ * a reader is tempted to print a guess as a fact. This is how the tests reach
+ * them without a network.
+ */
+export function demoRpcWith(override: (method: string, params: unknown[]) => DemoOverride | null): RpcClient {
+  const base = demoFetch();
+  const fetchImpl = (async (url: string | URL | Request, init?: RequestInit) => {
+    const body = JSON.parse(String(init?.body)) as RpcJson | RpcJson[];
+    const requests = Array.isArray(body) ? body : [body];
+    const decided = new Map<number, DemoOverride>();
+    for (const request of requests) {
+      const decision = override(request.method, request.params);
+      if (!decision) continue;
+      if (decision.transport) throw new TypeError(decision.transport);
+      decided.set(request.id, decision);
+    }
+    const response = await base(url as string, init);
+    if (!decided.size) return response;
+    const answered = JSON.parse(await response.text()) as { id: number }[] | { id: number };
+    const items = (Array.isArray(answered) ? answered : [answered]).map((item) => {
+      const decision = decided.get(item.id);
+      if (!decision) return item;
+      return decision.error ? { jsonrpc: "2.0", id: item.id, error: decision.error } : { jsonrpc: "2.0", id: item.id, result: decision.result };
+    });
+    return new Response(JSON.stringify(Array.isArray(answered) ? items : items[0]), { headers: { "content-type": "application/json" } });
+  }) as typeof fetch;
+  return new RpcClient({ urls: ["demo://robinhood-chain"], expectedChainId: ROBINHOOD_CHAIN_ID, fetchImpl, minSpacingMs: 0, rateLimitRetries: 0 });
+}
+
+/** A dispatcher carrying exactly these signatures, for testing what happens when one is missing. */
+export function dispatcherCode(signatures: string[]): string {
+  return `0x6080604052${signatures.map((sig) => `63${selector(sig).slice(2)}1461000057`).join("")}${"5b".repeat(60)}00${CBOR_TRAILER}`;
 }
 
 export const DEMO_ETH = ETH;

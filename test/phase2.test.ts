@@ -4,7 +4,7 @@ import { BlockscoutClient } from "../src/chain/blockscout.js";
 import { CHAINS, chainById, chainByKey } from "../src/chain/chains.js";
 import { PONS_V2_FACTORY, ZERO_ADDRESS } from "../src/chain/pons.js";
 import { PonsReader } from "../src/chain/reader.js";
-import { DEMO, DEMO_BLOCKSCOUT, DEMO_FUNDER, DEMO_HOOK, DEMO_IMPOSTOR, demoBlockscoutFetch, demoRpc } from "../src/bouncer/demo.js";
+import { DEMO, DEMO_BLOCKSCOUT, DEMO_FUNDER, DEMO_HOOK, DEMO_IMPOSTOR, DEMO_PLAIN, demoBlockscoutFetch, demoRpc } from "../src/bouncer/demo.js";
 import { readDoor } from "../src/bouncer/door.js";
 import { fullRangeReserves, poolIdFor, quoteExit, readExitDoor } from "../src/bouncer/exitDoor.js";
 import { readLookalikes } from "../src/bouncer/lookalike.js";
@@ -26,8 +26,17 @@ test("chains: keys, ids, Arc has USDC as the native quote", () => {
   assert.throws(() => chainByKey("solana"), /unknown chain/);
 });
 
-test("a chain without a published factory refuses the door politely", async () => {
-  await assert.rejects(readDoor(demoRpc(), DEMO.tokens.fresh.token, { chain: CHAINS.arc }), /not published yet/);
+test("a chain without a published factory still checks the token, and says which question it could not ask", async () => {
+  // Arc mainnet has tokens on it whether or not Radian has published its factory.
+  // Refusing every address because the launch question cannot be asked would throw
+  // away every answer that does not need a factory.
+  const slip = await readDoor(demoRpc(), DEMO_PLAIN.token, { chain: { ...CHAINS.arc, chainId: CHAINS.robinhood.chainId }, blockscout: null, skipDev: true });
+  assert.equal(slip.stamp, "NOT A LAUNCH");
+  assert.equal(slip.id.registered, false);
+  assert.ok(slip.open, "the open-door check runs without a factory");
+  assert.equal(slip.open!.owner?.address, DEMO_PLAIN.owner);
+  assert.ok(slip.skipped.some((x) => x.section === "launch record" && /not published/.test(x.reason)));
+  assert.ok(slip.notes.some((n) => n.code === "skipped" && /launch record/.test(n.text)));
 });
 
 test("pool id: currencies sorted, token side detected", () => {

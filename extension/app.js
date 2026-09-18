@@ -16,7 +16,9 @@
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), this.timeoutMs);
       try {
-        const response = await this.fetchImpl(`${this.baseUrl}${path}`, { method: "GET", headers: { accept: "application/json", "user-agent": _BlockscoutClient.USER_AGENT }, signal: controller.signal });
+        const headers = { accept: "application/json" };
+        if (typeof globalThis.window === "undefined") headers["user-agent"] = _BlockscoutClient.USER_AGENT;
+        const response = await this.fetchImpl(`${this.baseUrl}${path}`, { method: "GET", headers, signal: controller.signal });
         if (!response.ok) throw new Error(`blockscout ${response.status} for ${path}`);
         return await response.json();
       } finally {
@@ -59,6 +61,7 @@
         address: (h.address?.hash ?? "").toLowerCase(),
         value: BigInt(h.value ?? "0"),
         isContract: Boolean(h.address?.is_contract),
+        delegated: (h.address?.proxy_type ?? "").toLowerCase() === "eip7702",
         name: h.address?.name ?? h.address?.metadata?.tags?.[0]?.name ?? null
       }));
     }
@@ -104,7 +107,8 @@
       try {
         const body = await this.get(`/api/v2/smart-contracts/${address}`);
         return Boolean(body.is_verified ?? body.is_fully_verified);
-      } catch {
+      } catch (error) {
+        if (error instanceof Error && /\b404\b/.test(error.message)) return false;
         return null;
       }
     }
@@ -565,11 +569,11 @@
     return hex;
   }
   function hexToBytes(hex) {
-    const clean = hex.startsWith("0x") ? hex.slice(2) : hex;
-    if (clean.length % 2 !== 0) throw new Error(`odd-length hex: ${hex}`);
-    const out2 = new Uint8Array(clean.length / 2);
+    const clean2 = hex.startsWith("0x") ? hex.slice(2) : hex;
+    if (clean2.length % 2 !== 0) throw new Error(`odd-length hex: ${hex}`);
+    const out2 = new Uint8Array(clean2.length / 2);
     for (let i = 0; i < out2.length; i++) {
-      out2[i] = Number.parseInt(clean.slice(i * 2, i * 2 + 2), 16);
+      out2[i] = Number.parseInt(clean2.slice(i * 2, i * 2 + 2), 16);
     }
     return out2;
   }
@@ -815,11 +819,27 @@
     "eth_getStorageAt"
   ]);
   var RpcError = class extends Error {
-    constructor(message, code, data) {
+    constructor(message, code, data, kind = "transport") {
       super(message);
       this.code = code;
       this.data = data;
+      this.kind = kind;
       this.name = "RpcError";
+    }
+    /**
+     * True when the node ran the call and the EVM reverted. That is a fact about
+     * the contract; every other error is a fact about the network, and the two
+     * must never be confused: a rate-limited probe is not a trapping token.
+     */
+    get isRevert() {
+      if (this.kind !== "application") return false;
+      if (typeof this.data === "string" && this.data.startsWith("0x")) return true;
+      if (this.code === 3) return true;
+      return /execution reverted|execution error|invalid opcode|out of gas/i.test(this.message);
+    }
+    /** True when the endpoint is asking us to slow down, whether it said so in HTTP or in JSON-RPC. */
+    get isRateLimit() {
+      return this.code === 429 || this.code === -32005 || /rate limited|rate limit|too many requests/i.test(this.message);
     }
   };
   var RpcClient = class {
@@ -958,16 +978,16 @@
           return payload.map((request) => {
             const item = byId.get(request.id);
             if (!item) throw new RpcError(`missing response for ${request.method}`);
-            if (item.error) throw new RpcError(item.error.message, item.error.code, item.error.data);
+            if (item.error) throw new RpcError(item.error.message, item.error.code, item.error.data, "application");
             return item.result;
           });
         } catch (error) {
           lastError = error;
-          const rateLimited = error instanceof RpcError && (error.code === 429 || /rate|limit|too many/i.test(error.message));
-          if (rateLimited) {
+          if (error instanceof RpcError && error.isRateLimit) {
             await new Promise((resolve) => setTimeout(resolve, 300 * 2 ** Math.min(attempt, 4)));
             continue;
           }
+          if (error instanceof RpcError && error.isRevert) throw error;
           this.activeIndex = (this.activeIndex + 1) % this.urls.length;
           this.verifiedChain = false;
         }
@@ -1343,6 +1363,7 @@
   var EIP1967_BEACON_SLOT = "0xa3f0ad74e5423aebfd80d3ef4346578335a9a72aeaee59ff6cb3582b35133d50";
   function scanBytecode(code) {
     const bytes = hexToBytes(code);
+    const read = readSelectors(code);
     const scan = {
       bytes: bytes.length,
       codeHash: keccak256Hex(bytes),
@@ -1350,7 +1371,9 @@
       metadataBytes: metadataTrailerLength(bytes),
       opcodes: { selfdestruct: 0, delegatecall: 0, callcode: 0, create: 0, create2: 0 },
       minimalProxyTarget: minimalProxyTarget(bytes),
-      selectors: pushedSelectors(code)
+      selectors: read.all,
+      dispatcherSelectors: read.push4,
+      delegatedTo: delegationTarget(bytes)
     };
     const end = bytes.length - scan.metadataBytes;
     for (let i = 0; i < end; i++) {
@@ -1371,8 +1394,21 @@
     if (bytes.length < 4) return 0;
     const length = bytes[bytes.length - 2] << 8 | bytes[bytes.length - 1];
     if (length === 0 || length + 2 > bytes.length) return 0;
-    const first = bytes[bytes.length - 2 - length];
-    return first >= 161 && first <= 163 ? length + 2 : 0;
+    const start = bytes.length - 2 - length;
+    const first = bytes[start];
+    if (first < 161 || first > 163) return 0;
+    const keyHeader = bytes[start + 1];
+    if (keyHeader === void 0 || keyHeader < 97 || keyHeader > 111) return 0;
+    const keyLength = keyHeader - 96;
+    for (let i = 0; i < keyLength; i++) {
+      const c = bytes[start + 2 + i];
+      if (c === void 0 || !(c >= 97 && c <= 122 || c >= 48 && c <= 57)) return 0;
+    }
+    return length + 2;
+  }
+  function delegationTarget(bytes) {
+    if (bytes.length !== 23 || bytes[0] !== 239 || bytes[1] !== 1 || bytes[2] !== 0) return null;
+    return `0x${Array.from(bytes.slice(3), (b) => b.toString(16).padStart(2, "0")).join("")}`;
   }
   var MINIMAL_PROXY_PREFIX = "363d3d373d3d3d363d73";
   var MINIMAL_PROXY_SUFFIX = "5af43d82803e903d91602b57fd5bf3";
@@ -1388,10 +1424,11 @@
   function storageWordAddress(word) {
     return `0x${word.replace(/^0x/, "").padStart(64, "0").slice(24)}`;
   }
-  function pushedSelectors(code) {
+  function readSelectors(code) {
     const bytes = hexToBytes(code);
     const end = bytes.length - metadataTrailerLength(bytes);
-    const out2 = /* @__PURE__ */ new Set();
+    const all = /* @__PURE__ */ new Set();
+    const push4 = /* @__PURE__ */ new Set();
     for (let i = 0; i < end; i++) {
       const op = bytes[i];
       if (op < OP_PUSH1 || op > OP_PUSH32) continue;
@@ -1399,11 +1436,13 @@
       if (size <= 4 && i + size < end) {
         let hex = "";
         for (let j = 1; j <= size; j++) hex += bytes[i + j].toString(16).padStart(2, "0");
-        out2.add(`0x${hex.padStart(8, "0")}`);
+        const padded = `0x${hex.padStart(8, "0")}`;
+        all.add(padded);
+        if (size === 4) push4.add(padded);
       }
       i += size;
     }
-    return out2;
+    return { all, push4 };
   }
 
   // src/bouncer/exitDoor.ts
@@ -1418,9 +1457,9 @@
     return { poolId: keccak256Hex(hexToBytes2(encoded)), tokenIsCurrency0 };
   }
   function hexToBytes2(hex) {
-    const clean = hex.replace(/^0x/, "");
-    const out2 = new Uint8Array(clean.length / 2);
-    for (let i = 0; i < out2.length; i++) out2[i] = parseInt(clean.slice(i * 2, i * 2 + 2), 16);
+    const clean2 = hex.replace(/^0x/, "");
+    const out2 = new Uint8Array(clean2.length / 2);
+    for (let i = 0; i < out2.length; i++) out2[i] = parseInt(clean2.slice(i * 2, i * 2 + 2), 16);
     return out2;
   }
   async function readPoolState(rpc, poolManager, launch, hooks, block) {
@@ -1530,7 +1569,14 @@
   var DEMO_FUNDER = "0x000000000000000000000000000000000000feed";
   var DEMO_BLOCKSCOUT = "https://demo.blockscout.invalid";
   var DEMO_V1 = { token: "0x0000000000000000000000000000000000001d1e", deployer: "0x00000000000000000000000000000000000001d1", positionId: 777n, restrictionsEndBlock: BigInt(HEAD + 40), name: "Old School", symbol: "OLDIE" };
-  var DEMO_IMPOSTOR = { token: "0x00000000000000000000000000000000000bad01", implementation: "0x00000000000000000000000000000000000bad02" };
+  var DEMO_IMPOSTOR = {
+    token: "0x00000000000000000000000000000000000bad01",
+    implementation: "0x00000000000000000000000000000000000bad02",
+    deployer: "0x00000000000000000000000000000000000bad03",
+    creationTx: "0xdemoimpostorcreate",
+    /** Deployed after the real SPRINT launch, which is what makes it the copy. */
+    createdAt: HEAD - 900
+  };
   var DEMO_PLAIN = {
     token: "0x0000000000000000000000000000000000f1a1a1",
     owner: "0x00000000000000000000000000000000000000f1",
@@ -1540,17 +1586,22 @@
     createdAt: HEAD - 5e4,
     creationTx: "0xdemoplaincreate",
     supply: 10n ** 27n,
-    /** [holder, share in bps, is contract, explorer label]. */
+    /** [holder, share in bps, is contract, explorer label, EIP-7702 delegated]. */
     holders: [
-      ["0x000000000000000000000000000000000000900f", 3e3, true, "UniswapV3Pool"],
-      ["0x00000000000000000000000000000000000000f1", 2500, false, null],
-      ["0x000000000000000000000000000000000000c500", 800, false, null],
-      ["0x000000000000000000000000000000000000c501", 500, false, null],
-      ["0x000000000000000000000000000000000000c502", 300, false, null],
-      ["0x000000000000000000000000000000000000dead", 200, false, null]
+      ["0x000000000000000000000000000000000000900f", 3e3, true, "UniswapV3Pool", false],
+      ["0x00000000000000000000000000000000000000f1", 2500, false, null, false],
+      ["0x000000000000000000000000000000000000c500", 800, false, null, false],
+      ["0x000000000000000000000000000000000000c501", 500, false, null, false],
+      ["0x000000000000000000000000000000000000c502", 300, false, null, false],
+      // A wallet whose owner signed an EIP-7702 delegation. The explorer calls it a
+      // contract; it is a person, and counting it as a pool would understate how
+      // concentrated this token is.
+      ["0x000000000000000000000000000000000000c503", 400, true, null, true],
+      ["0x000000000000000000000000000000000000dead", 200, false, null, false]
     ],
     blacklisted: "0x000000000000000000000000000000000000c501",
-    powers: ["mint(address,uint256)", "pause()", "unpause()", "paused()", "owner()", "renounceOwnership()", "transferOwnership(address)", "setFees(uint256,uint256)", "blacklist(address,bool)", "tradingOpen()", "excludeFromFees(address,bool)"]
+    /** Every function in the dispatcher, not only the dangerous ones. */
+    powers: ["mint(address,uint256)", "pause()", "unpause()", "paused()", "owner()", "renounceOwnership()", "transferOwnership(address)", "setFees(uint256,uint256)", "blacklist(address,bool)", "tradingOpen()", "excludeFromFees(address,bool)", "transfer(address,uint256)", "balanceOf(address)", "totalSupply()", "name()", "symbol()", "decimals()"]
   };
   var freshBuys = [[1, DEV_C, 400n * 10n ** 15n], [22, buyer(900), 300n * 10n ** 15n, 6e3], [70, buyer(901), 100n * 10n ** 15n, 1900]];
   var sprintBuys = [[3, DEV_A, 2600n * 10n ** 15n]];
@@ -1700,6 +1751,7 @@
           case "eth_getTransactionReceipt": {
             const hash = request.params[0];
             if (hash === DEMO_PLAIN.creationTx) return ok({ transactionHash: hash, blockNumber: `0x${DEMO_PLAIN.createdAt.toString(16)}`, from: DEMO_PLAIN.owner, status: "0x1", logs: [] });
+            if (hash === DEMO_IMPOSTOR.creationTx) return ok({ transactionHash: hash, blockNumber: `0x${DEMO_IMPOSTOR.createdAt.toString(16)}`, from: DEMO_IMPOSTOR.deployer, status: "0x1", logs: [] });
             for (const t of Object.values(DEMO.tokens)) {
               const logs = curveLogs(t, 0, DEMO.head);
               const hit = logs.filter((l) => l.transactionHash === hash);
@@ -1821,7 +1873,7 @@
               if (s === sel("buybackQuoteBalance()")) return one(2n * 10n ** 16n, "uint256");
               if (s === sel("isNativeQuote()")) return one(true, "bool");
             }
-            return err(`demo chain has no answer for ${to} ${s}`);
+            return { jsonrpc: "2.0", id: request.id, error: { code: 3, message: "execution reverted", data: "0x" } };
           }
           default:
             return err(`demo chain does not serve ${request.method}`);
@@ -1868,10 +1920,19 @@
       if (v) return json({ is_verified: tokens.some((t) => t.token === v[1].toLowerCase() || t.curve === v[1].toLowerCase()) });
       const plain = DEMO_PLAIN;
       if (url.pathname === `/api/v2/addresses/${plain.token}`) return json({ is_contract: true, is_verified: false, name: null, creator_address_hash: plain.owner, creation_transaction_hash: plain.creationTx });
+      if (url.pathname === `/api/v2/addresses/${DEMO_IMPOSTOR.token}`) {
+        return json({ is_contract: true, is_verified: false, is_scam: false, name: null, creator_address_hash: DEMO_IMPOSTOR.deployer, creation_transaction_hash: DEMO_IMPOSTOR.creationTx });
+      }
       if (url.pathname === `/api/v2/tokens/${plain.token}`) return json({ holders_count: "143", type: "ERC-20", name: plain.name, symbol: plain.symbol });
       if (url.pathname === `/api/v2/tokens/${plain.token}/counters`) return json({ token_holders_count: "143", transfers_count: "2210" });
       if (url.pathname === `/api/v2/tokens/${plain.token}/holders`) {
-        return json({ items: plain.holders.map(([hash, bps, is_contract, name]) => ({ address: { hash, is_contract, name }, value: (plain.supply * BigInt(bps) / 10000n).toString() })), next_page_params: null });
+        return json({
+          items: plain.holders.map(([hash, bps, is_contract, name, delegated]) => ({
+            address: { hash, is_contract, name, proxy_type: delegated ? "eip7702" : null },
+            value: (plain.supply * BigInt(bps) / 10000n).toString()
+          })),
+          next_page_params: null
+        });
       }
       if (url.pathname === `/api/v2/tokens/${plain.token}/transfers`) {
         const at = (block) => new Date(Math.round(DEMO.genesisTimestamp + block * 0.1) * 1e3).toISOString();
@@ -2051,11 +2112,12 @@
     let launch = null;
     let resolvedAs = "unknown";
     try {
+      if (options.skipLaunchLookup) throw new NotAPonsLaunch(address);
       launch = await reader.launchedToken(address, block);
       resolvedAs = "token";
     } catch (error) {
       if (!(error instanceof NotAPonsLaunch)) throw error;
-      const viaCurve = await tokenOfCurve(rpc, address, block);
+      const viaCurve = options.skipLaunchLookup ? null : await tokenOfCurve(rpc, address, block);
       if (viaCurve) {
         try {
           const record = await reader.launchedToken(viaCurve, block);
@@ -2347,30 +2409,32 @@
     ],
     trading: ["enableTrading()", "openTrading()", "startTrading()", "setTradingEnabled(bool)", "setTrading(bool)", "setTradingOpen(bool)", "enableTrading(bool)", "tradingStatus(bool)", "setTradingStatus(bool)", "toggleTrading()", "activateTrading()", "setTradingActive(bool)", "setLaunched(bool)"],
     upgrade: ["upgradeTo(address)", "upgradeToAndCall(address,bytes)", "setImplementation(address)", "changeImplementation(address)"],
-    "burn-others": ["burn(address,uint256)", "burnFrom(address,uint256)", "burnTokens(address,uint256)"],
+    "burn-others": ["burn(address,uint256)", "burnTokens(address,uint256)"],
     exempt: ["excludeFromFees(address,bool)", "excludeFromFee(address)", "excludeFromFee(address,bool)", "setExcludedFromFees(address,bool)", "excludeFromLimits(address,bool)", "setExcludedFromMaxTransaction(address,bool)", "excludeMultipleAccountsFromFees(address[],bool)", "setFeeExempt(address,bool)", "setIsExcludedFromFee(address,bool)", "excludeFromMaxTransaction(address,bool)", "setExcludeFromMaxWallet(address,bool)"],
     sweep: ["manualSwap()", "manualswap()", "manualSend()", "manualsend()", "clearStuckBalance()", "clearStuckBalance(uint256)", "withdrawStuckETH()", "withdrawStuckEth()", "withdrawStuckTokens(address)", "withdrawStuckTokens(address,uint256)", "rescueTokens(address)", "rescueTokens(address,uint256)", "rescueETH()", "rescueETH(uint256)", "claimStuckTokens(address)", "sweep(address)", "recoverERC20(address,uint256)"]
   };
-  var V3_FACTORY_FUNCTIONS = {
-    getPool: { name: "getPool", inputs: ["address", "address", "uint24"], outputs: ["address"] }
-  };
-  var V3_FEE_TIERS = [100n, 500n, 3000n, 10000n];
   var OWNER_FUNCTIONS = {
     owner: { name: "owner", inputs: [], outputs: ["address"] },
     getOwner: { name: "getOwner", inputs: [], outputs: ["address"] },
     paused: { name: "paused", inputs: [], outputs: ["bool"] },
     transfer: { name: "transfer", inputs: ["address", "uint256"], outputs: ["bool"] }
   };
+  var V3_FACTORY_FUNCTIONS = {
+    getPool: { name: "getPool", inputs: ["address", "address", "uint24"], outputs: ["address"] }
+  };
+  var V3_FEE_TIERS = [100n, 500n, 3000n, 10000n];
   var TRADING_VIEWS = ["tradingOpen()", "tradingEnabled()", "tradingActive()", "isTradingEnabled()", "tradingIsEnabled()", "launched()", "tradingLive()", "tradingStarted()"];
   var RENOUNCE_SIGNATURES = ["renounceOwnership()", "transferOwnership(address)"];
+  var TRANSFER_SIGNATURE = "transfer(address,uint256)";
   var PROBE_RECIPIENT = "0x000000000000000000000000000000000000b0ce";
   var BURN_ADDRESSES = /* @__PURE__ */ new Set([ZERO_ADDRESS, "0x000000000000000000000000000000000000dead", "0x0000000000000000000000000000000000000001"]);
   async function readOpenDoor(rpc, token, meta, block, options = {}) {
     const address = token.address.toLowerCase();
     let surfaceFrom = "token";
     let code = await rpc.getCode(address, block);
-    const implementation = token.proxyImplementation ?? token.code.minimalProxyTarget;
+    const implementation = token.proxyImplementation ?? token.proxyBeacon ?? token.code.minimalProxyTarget;
     if (implementation) {
+      surfaceFrom = "implementation-unreadable";
       try {
         const implCode = await rpc.getCode(implementation, block);
         if (implCode.length > 2) {
@@ -2380,15 +2444,16 @@
       } catch {
       }
     }
-    const present = pushedSelectors(code);
+    const { all: present, push4 } = readSelectors(code);
     const has = (signature) => present.has(selector(signature));
     const powers = [];
     for (const kind of Object.keys(POWER_SIGNATURES)) {
       for (const signature of POWER_SIGNATURES[kind]) if (has(signature)) powers.push({ kind, signature });
     }
     const ownable = RENOUNCE_SIGNATURES.some(has);
-    const owner = await readOwner(rpc, address, block, has);
-    const paused = has("paused()") ? await readBool(rpc, address, OWNER_FUNCTIONS.paused, block) : null;
+    const ownerRead = await readOwner(rpc, address, block);
+    const owner = ownerRead.owner;
+    const paused = await readBool(rpc, address, OWNER_FUNCTIONS.paused, block);
     let tradingOpen = null;
     for (const view2 of TRADING_VIEWS) {
       if (!has(view2)) continue;
@@ -2396,71 +2461,8 @@
       if (open !== null) tradingOpen = { view: view2, open };
       break;
     }
-    const supply = meta?.totalSupply ?? 0n;
-    const bps = (v) => supply > 0n ? Number(v * 10000n / supply) : 0;
-    let holders = null;
-    let deployer = null;
-    let activity = null;
-    let verified = null;
-    let explorer = null;
-    let topHolders = [];
-    const bs = options.blockscout;
-    if (bs) {
-      verified = await bs.isVerified(address);
-      try {
-        const info = await bs.addressInfo(address);
-        explorer = { isScam: info.isScam, priceUsd: null, volume24hUsd: null, marketCapUsd: null };
-        if (info.creator) {
-          let createdAtBlock = null;
-          let createdAt = null;
-          if (info.creationTx) {
-            try {
-              const receipt = await rpc.send("eth_getTransactionReceipt", [info.creationTx]);
-              if (receipt?.blockNumber) {
-                createdAtBlock = Number(BigInt(receipt.blockNumber));
-                createdAt = (await rpc.getBlock(createdAtBlock)).timestamp;
-              }
-            } catch {
-            }
-          }
-          const balance = await readBalance(rpc, address, info.creator, block);
-          deployer = { address: info.creator, creationTx: info.creationTx, createdAtBlock, createdAt, balance, bps: bps(balance) };
-        }
-      } catch {
-        deployer = null;
-      }
-      try {
-        const [list, info] = await Promise.all([bs.tokenHolders(address, 50), bs.tokenInfo(address).catch(() => ({ holders: null, transfers: null, type: null, priceUsd: null, volume24hUsd: null, marketCapUsd: null }))]);
-        topHolders = list;
-        explorer = { isScam: explorer?.isScam ?? false, priceUsd: info.priceUsd, volume24hUsd: info.volume24hUsd, marketCapUsd: info.marketCapUsd };
-        const top = list.map((h) => ({
-          address: h.address,
-          value: h.value,
-          bps: bps(h.value),
-          isContract: h.isContract,
-          name: h.name,
-          role: h.address === deployer?.address ? "deployer" : owner && h.address === owner.address ? "owner" : h.address === address ? "token" : BURN_ADDRESSES.has(h.address) ? "burn" : null
-        }));
-        const wallets = top.filter((h) => !h.isContract && h.role !== "burn" && h.role !== "token");
-        holders = {
-          count: info.holders,
-          transfers: info.transfers,
-          top,
-          top10WalletsBps: wallets.slice(0, 10).reduce((a, h) => a + h.bps, 0),
-          contractsBps: top.filter((h) => h.isContract || h.role === "token").reduce((a, h) => a + h.bps, 0),
-          burnedBps: top.filter((h) => h.role === "burn").reduce((a, h) => a + h.bps, 0)
-        };
-      } catch {
-        holders = null;
-      }
-      try {
-        const transfers = await bs.tokenTransfers(address);
-        activity = summariseActivity(transfers);
-      } catch {
-        activity = null;
-      }
-    }
-    const ownerBalance = owner && !owner.renounced ? await readBalance(rpc, address, owner.address, block).then((balance) => ({ balance, bps: bps(balance) })).catch(() => null) : null;
+    const supply = meta?.totalSupply ?? null;
+    const bps = (v) => supply !== null && supply > 0n ? Number(v * 10000n / supply) : null;
     let pools = null;
     if (options.dex) {
       try {
@@ -2469,50 +2471,178 @@
         pools = null;
       }
     }
-    const probes = [];
-    const candidates = topHolders.filter((h) => !h.isContract && !BURN_ADDRESSES.has(h.address) && h.address !== address && h.value > 0n).map((h) => h.address);
-    if (!candidates.length && deployer && deployer.balance > 0n) candidates.push(deployer.address);
-    for (const from of candidates.slice(0, options.probeHolders ?? 3)) probes.push(await probeTransfer(rpc, address, from, block));
-    return { selectors: present.size, surfaceFrom, powers, ownable, owner, paused, tradingOpen, probes, verified, deployer, ownerBalance, explorer, pools, holders, activity };
-  }
-  async function readPools(rpc, token, dex, block) {
-    const asks = [];
-    const calls = [];
-    for (const f of dex.v3Factories) {
-      for (const fee of V3_FEE_TIERS) {
-        asks.push({ dex: f.name, fee });
-        calls.push({ to: f.address, data: encodeCall(V3_FACTORY_FUNCTIONS.getPool, [token, dex.weth, fee]) });
-      }
-    }
-    const raws = await rpc.callBatch(calls, block);
-    const found = [];
-    raws.forEach((raw, i) => {
+    let holders = null;
+    let deployer = null;
+    let activity = null;
+    let verified = null;
+    let explorer = null;
+    let explorerError = null;
+    let topHolders = [];
+    const note = (error) => {
+      const text = error instanceof Error ? error.message : String(error);
+      explorerError = explorerError ? `${explorerError}; ${text}` : text;
+    };
+    const bs = options.blockscout;
+    if (bs) {
+      let info = null;
       try {
-        const [pool] = decodeOutputs(V3_FACTORY_FUNCTIONS.getPool, raw);
-        if (pool && pool !== ZERO_ADDRESS) found.push({ dex: asks[i].dex, address: pool, feeBps: Number(asks[i].fee) / 100, tokenReserve: 0n, quoteReserve: 0n });
-      } catch {
+        const read = await bs.addressInfo(address);
+        info = read;
+        verified = read.isVerified;
+        if (read.creator) {
+          let createdAtBlock = null;
+          let createdAt = null;
+          if (read.creationTx) {
+            try {
+              const receipt = await rpc.send("eth_getTransactionReceipt", [read.creationTx]);
+              if (receipt?.blockNumber) {
+                createdAtBlock = Number(BigInt(receipt.blockNumber));
+                createdAt = (await rpc.getBlock(createdAtBlock)).timestamp;
+              }
+            } catch {
+            }
+          }
+          const balance = await readBalance(rpc, address, read.creator, block).catch(() => null);
+          deployer = { address: read.creator, creationTx: read.creationTx, createdAtBlock, createdAt, balance: balance ?? 0n, bps: balance === null ? null : bps(balance) };
+        }
+      } catch (error) {
+        note(error);
       }
-    });
-    if (!found.length) return found;
-    const balances = await rpc.callBatch(found.flatMap((p) => [{ to: token, data: encodeCall(ERC20_FUNCTIONS.balanceOf, [p.address]) }, { to: dex.weth, data: encodeCall(ERC20_FUNCTIONS.balanceOf, [p.address]) }]), block);
-    found.forEach((p, i) => {
-      p.tokenReserve = decodeOutputs(ERC20_FUNCTIONS.balanceOf, balances[i * 2])[0];
-      p.quoteReserve = decodeOutputs(ERC20_FUNCTIONS.balanceOf, balances[i * 2 + 1])[0];
-    });
-    return found.sort((a, b) => b.quoteReserve > a.quoteReserve ? 1 : b.quoteReserve < a.quoteReserve ? -1 : 0);
-  }
-  async function readOwner(rpc, token, block, has) {
-    const fn = has("owner()") ? OWNER_FUNCTIONS.owner : has("getOwner()") ? OWNER_FUNCTIONS.getOwner : null;
-    if (!fn) return null;
-    try {
-      const [raw] = await rpc.callBatch([{ to: token, data: encodeCall(fn, []) }], block);
-      const [address] = decodeOutputs(fn, raw);
-      const renounced = address === ZERO_ADDRESS || BURN_ADDRESSES.has(address);
-      const isContract = renounced ? false : (await rpc.getCode(address, block)).length > 2;
-      return { address, renounced, isContract };
-    } catch {
-      return null;
+      try {
+        const [list, tokenInfo] = await Promise.all([
+          bs.tokenHolders(address, 50),
+          bs.tokenInfo(address).catch(() => ({ holders: null, transfers: null, type: null, priceUsd: null, volume24hUsd: null, marketCapUsd: null }))
+        ]);
+        topHolders = list;
+        explorer = {
+          isScam: info ? info.isScam : null,
+          priceUsd: tokenInfo.priceUsd,
+          volume24hUsd: tokenInfo.volume24hUsd,
+          marketCapUsd: tokenInfo.marketCapUsd,
+          tokenType: tokenInfo.type
+        };
+        const top = list.map((h) => ({
+          address: h.address,
+          value: h.value,
+          bps: bps(h.value),
+          isContract: h.isContract && !h.delegated,
+          delegated: h.delegated,
+          name: h.name,
+          role: h.address === deployer?.address ? "deployer" : owner && h.address === owner.address ? "owner" : h.address === address ? "token" : BURN_ADDRESSES.has(h.address) ? "burn" : null
+        }));
+        const wallets = top.filter((h) => !h.isContract && h.role !== "burn" && h.role !== "token");
+        const share = (rows) => {
+          if (supply === null || supply <= 0n || !rows.length) return null;
+          return rows.reduce((a, h) => a + (h.bps ?? 0), 0);
+        };
+        holders = {
+          count: tokenInfo.holders,
+          transfers: tokenInfo.transfers,
+          top,
+          rows: top.length,
+          top10WalletsBps: share(wallets.slice(0, 10)),
+          contractsBps: share(top.filter((h) => h.isContract || h.role === "token")),
+          burnedBps: share(top.filter((h) => h.role === "burn"))
+        };
+      } catch (error) {
+        note(error);
+        holders = null;
+      }
+      if (explorer === null && info) explorer = { isScam: info.isScam, priceUsd: null, volume24hUsd: null, marketCapUsd: null, tokenType: null };
+      try {
+        activity = summariseActivity(await bs.tokenTransfers(address));
+      } catch (error) {
+        note(error);
+        activity = null;
+      }
     }
+    const ownerBalance = owner && !owner.renounced ? await readBalance(rpc, address, owner.address, block).then((balance) => ({ balance, bps: bps(balance) })).catch(() => null) : null;
+    const probes = [];
+    let probesSkipped = null;
+    if (!has(TRANSFER_SIGNATURE)) {
+      probesSkipped = surfaceFrom === "implementation-unreadable" ? "the code that actually runs could not be read, so no transfer was simulated" : "this contract has no transfer(address,uint256) function, so it is not an ERC-20 and no transfer was simulated";
+    } else {
+      const candidates = await probeCandidates(rpc, address, block, topHolders, deployer?.address ?? null, owner?.address ?? null, options.probeHolders ?? 3);
+      if (!candidates.length) {
+        probesSkipped = "no wallet with a readable balance to simulate from";
+      } else {
+        const deepest = (pools ?? []).filter((p) => (p.quoteReserve ?? 0n) > 0n)[0] ?? null;
+        for (const c of candidates) {
+          probes.push(await probeTransfer(rpc, address, c.address, PROBE_RECIPIENT, "fresh-wallet", c.source, block));
+          if (deepest) probes.push(await probeTransfer(rpc, address, c.address, deepest.address, "pool", c.source, block));
+        }
+      }
+    }
+    return {
+      selectors: push4.size,
+      constants: present.size,
+      surfaceFrom,
+      powers,
+      ownable,
+      owner,
+      ownerUnread: ownerRead.unread,
+      paused,
+      tradingOpen,
+      probes,
+      probesSkipped,
+      verified,
+      deployer,
+      ownerBalance,
+      explorer,
+      explorerError,
+      pools,
+      holders,
+      activity
+    };
+  }
+  async function probeCandidates(rpc, token, block, holders, deployer, owner, want) {
+    const excluded = new Set([token, deployer, owner].filter((x) => Boolean(x)).map((x) => x.toLowerCase()));
+    const shortlist = holders.filter((h) => (!h.isContract || h.delegated) && !BURN_ADDRESSES.has(h.address) && !excluded.has(h.address) && h.value > 0n).slice(0, Math.max(want * 3, 9)).map((h) => h.address);
+    const out2 = [];
+    if (shortlist.length) {
+      try {
+        const balances = await rpc.callBatch(
+          shortlist.map((who) => ({ to: token, data: encodeCall(ERC20_FUNCTIONS.balanceOf, [who]) })),
+          block
+        );
+        shortlist.forEach((who, i) => {
+          try {
+            const [balance] = decodeOutputs(ERC20_FUNCTIONS.balanceOf, balances[i]);
+            if (balance > 0n) out2.push({ address: who, source: "holder" });
+          } catch {
+          }
+        });
+      } catch {
+        for (const who of shortlist) out2.push({ address: who, source: "holder" });
+      }
+    }
+    if (!out2.length && deployer) {
+      const balance = await readBalance(rpc, token, deployer, block).catch(() => 0n);
+      if (balance > 0n) out2.push({ address: deployer, source: "deployer" });
+    }
+    return out2.slice(0, want);
+  }
+  async function readOwner(rpc, token, block) {
+    for (const fn of [OWNER_FUNCTIONS.owner, OWNER_FUNCTIONS.getOwner]) {
+      let address;
+      try {
+        const [raw] = await rpc.callBatch([{ to: token, data: encodeCall(fn, []) }], block);
+        [address] = decodeOutputs(fn, raw);
+      } catch (error) {
+        if (error instanceof RpcError && error.isRevert) continue;
+        return { owner: null, unread: true };
+      }
+      const renounced = address === ZERO_ADDRESS || BURN_ADDRESSES.has(address);
+      let isContract = false;
+      if (!renounced) {
+        try {
+          isContract = (await rpc.getCode(address, block)).length > 2;
+        } catch {
+        }
+      }
+      return { owner: { address, renounced, isContract }, unread: false };
+    }
+    return { owner: null, unread: false };
   }
   async function readBool(rpc, token, fn, block) {
     try {
@@ -2528,32 +2658,83 @@
     const [balance] = decodeOutputs(ERC20_FUNCTIONS.balanceOf, raw);
     return balance;
   }
-  async function probeTransfer(rpc, token, from, block) {
-    const data = encodeCall(OWNER_FUNCTIONS.transfer, [PROBE_RECIPIENT, 1n]);
+  async function probeTransfer(rpc, token, from, to, target, source, block) {
+    const data = encodeCall(OWNER_FUNCTIONS.transfer, [to, 1n]);
     try {
       const raw = await rpc.send("eth_call", [{ from, to: token, data }, toTag(block)]);
-      const ok = raw === "0x" || raw.length < 66 || BigInt(raw.slice(0, 66)) !== 0n;
-      return { from, ok, reason: ok ? null : "transfer returned false" };
+      if (raw === "0x") return { from, to, target, status: "ok", reason: null, source };
+      if (raw.length < 66) return { from, to, target, status: "unread", reason: "the call returned data too short to read", source };
+      return BigInt(raw.slice(0, 66)) !== 0n ? { from, to, target, status: "ok", reason: null, source } : { from, to, target, status: "reverts", reason: "transfer returned false", source };
     } catch (error) {
-      return { from, ok: false, reason: revertReason(error) };
+      if (error instanceof RpcError && error.isRevert) return { from, to, target, status: "reverts", reason: revertReason(error), source };
+      return { from, to, target, status: "unread", reason: error instanceof Error ? error.message : String(error), source };
     }
   }
   function toTag(block) {
     return `0x${block.toString(16)}`;
   }
   function revertReason(error) {
-    if (error instanceof RpcError) {
-      const data = typeof error.data === "string" ? error.data : "";
-      if (data.startsWith("0x08c379a0") && data.length >= 10 + 128) {
-        try {
-          const [text] = decodeOutputs({ name: "Error", inputs: [], outputs: ["string"] }, `0x${data.slice(10)}`);
-          if (text) return text;
-        } catch {
-        }
+    const data = typeof error.data === "string" ? error.data : "";
+    if (data.startsWith("0x08c379a0") && data.length >= 10 + 128) {
+      try {
+        const [text] = decodeOutputs({ name: "Error", inputs: [], outputs: ["string"] }, `0x${data.slice(10)}`);
+        if (text) return text;
+      } catch {
       }
-      return error.message || null;
     }
-    return error instanceof Error ? error.message : null;
+    if (data.startsWith("0x4e487b71") && data.length >= 10 + 64) {
+      return `panic 0x${BigInt(`0x${data.slice(10, 74)}`).toString(16)}`;
+    }
+    if (data.length > 10) return `custom error ${data.slice(0, 10)}`;
+    const message = error.message.replace(/^execution reverted:?\s*/i, "").trim();
+    return message || null;
+  }
+  async function readPools(rpc, token, dex, block) {
+    const asks = [];
+    const calls = [];
+    for (const f of dex.v3Factories) {
+      for (const fee of V3_FEE_TIERS) {
+        asks.push({ dex: f.name, fee });
+        calls.push({ to: f.address, data: encodeCall(V3_FACTORY_FUNCTIONS.getPool, [token, dex.weth, fee]) });
+      }
+    }
+    const raws = await rpc.callBatch(calls, block);
+    const found = [];
+    raws.forEach((raw, i) => {
+      try {
+        const [pool] = decodeOutputs(V3_FACTORY_FUNCTIONS.getPool, raw);
+        if (pool && pool !== ZERO_ADDRESS) found.push({ dex: asks[i].dex, address: pool, feeBps: Number(asks[i].fee) / 100, tokenReserve: null, quoteReserve: null });
+      } catch {
+      }
+    });
+    if (!found.length) return found;
+    try {
+      const balances = await rpc.callBatch(
+        found.flatMap((p) => [
+          { to: token, data: encodeCall(ERC20_FUNCTIONS.balanceOf, [p.address]) },
+          { to: dex.weth, data: encodeCall(ERC20_FUNCTIONS.balanceOf, [p.address]) }
+        ]),
+        block
+      );
+      found.forEach((p, i) => {
+        try {
+          p.tokenReserve = decodeOutputs(ERC20_FUNCTIONS.balanceOf, balances[i * 2])[0];
+        } catch {
+          p.tokenReserve = null;
+        }
+        try {
+          p.quoteReserve = decodeOutputs(ERC20_FUNCTIONS.balanceOf, balances[i * 2 + 1])[0];
+        } catch {
+          p.quoteReserve = null;
+        }
+      });
+    } catch {
+    }
+    return found.sort((a, b) => {
+      const x = a.quoteReserve ?? -1n;
+      const y = b.quoteReserve ?? -1n;
+      return y > x ? 1 : y < x ? -1 : 0;
+    });
   }
   function summariseActivity(transfers) {
     if (!transfers.length) return { lastTransferAt: null, lastTransferBlock: null, recent: 0, recentWallets: 0 };
@@ -2569,6 +2750,12 @@
     const order = ["upgrade", "mint", "pause", "blacklist", "trading", "fees", "limits", "burn-others", "exempt", "sweep"];
     const have = new Set(o.powers.map((p) => p.kind));
     return order.filter((k) => have.has(k));
+  }
+  function sellProbes(o) {
+    return o.probes.filter((p) => p.target === "pool");
+  }
+  function moveProbes(o) {
+    return o.probes.filter((p) => p.target === "fresh-wallet");
   }
 
   // src/bouncer/room.ts
@@ -2639,12 +2826,17 @@
   async function readDoor(rpc, input, options = {}) {
     const chain2 = options.chain ?? DEFAULT_CHAIN;
     const factory = (options.factory ?? chain2.factory ?? "").toLowerCase();
-    if (!factory) throw new Error(`${chain2.name}: the launchpad factory address is not published yet; pass --factory 0x\u2026`);
+    const launchpadKnown = Boolean(factory);
     await rpc.assertChain();
     const headNumber = await rpc.blockNumber();
     const head = await rpc.getBlock(headNumber);
     const searchBlocks = options.launchSearchBlocks ?? Math.round(7 * 86400 * chain2.blocksPerSecond);
-    const id = await readIdCheck(rpc, input, head.number, factory, { factoryV1: chain2.factoryV1, olderFactoriesV1: chain2.olderFactoriesV1, native: chain2.native });
+    const id = await readIdCheck(rpc, input, head.number, factory || void 0, {
+      factoryV1: chain2.factoryV1,
+      olderFactoriesV1: chain2.olderFactoriesV1,
+      native: chain2.native,
+      skipLaunchLookup: !launchpadKnown
+    });
     const slip = {
       chain: { key: chain2.key, name: chain2.name, chainId: chain2.chainId, launchpad: chain2.launchpad, native: chain2.native },
       at: { block: head.number, timestamp: head.timestamp },
@@ -2671,17 +2863,18 @@
         slip.skipped.push({ section, reason: error instanceof Error ? error.message : String(error) });
       }
     };
+    if (!launchpadKnown) slip.skipped.push({ section: "launch record", reason: `the ${chain2.launchpad} factory address is not published for ${chain2.name} yet; pass --factory 0x\u2026 to check launches here` });
     if (!id.launch && !id.token.code.empty) {
       if (!id.registered) slip.stamp = "NOT A LAUNCH";
       await attempt("open door", async () => {
         slip.open = await readOpenDoor(rpc, id.token, id.meta, head.number, { blockscout: options.blockscout ?? null, dex: chain2.dex });
       });
-      if (!id.registered && options.blockscout && !options.skipLookalikes && id.meta?.symbol) {
+      if (!id.registered && launchpadKnown && options.blockscout && !options.skipLookalikes && id.meta?.symbol) {
         await attempt("lookalikes", async () => {
           slip.lookalikes = await readLookalikes(rpc, options.blockscout, id.input, id.meta.symbol, head.number, factory, searchBlocks, 8, false);
-          if (registeredLookalikes(slip.lookalikes).length) slip.stamp = "NOT ON THE LIST";
         });
       }
+      if (!id.registered && impostorOf(slip)) slip.stamp = "NOT ON THE LIST";
     }
     if (!id.launch) {
       slip.notes = doorNotes(slip);
@@ -2819,8 +3012,16 @@
       if (d.repeatedSymbols.length) notes.push({ level: "watch", code: "dev-repeat", text: `This dev launched the same ticker more than once: ${d.repeatedSymbols.join(", ")}.` });
       if (d.counts.graduated > 0) notes.push({ level: "info", code: "dev-graduated", text: `This dev has ${d.counts.graduated} graduation${d.counts.graduated === 1 ? "" : "s"} in the window${d.medianSecondsToSweep !== null ? `, typically ${formatDuration(d.medianSecondsToSweep)} from launch to a full curve` : ""}.` });
     }
-    for (const s of slip.skipped) notes.push({ level: "info", code: "skipped", text: `${s.section} could not be read: ${s.reason}` });
-    return notes;
+    return withSkipped(slip, notes);
+  }
+  function impostorOf(slip) {
+    if (slip.known || !slip.lookalikes) return null;
+    const subjectBlock = slip.open?.deployer?.createdAtBlock ?? null;
+    if (subjectBlock === null) return null;
+    for (const candidate of registeredLookalikes(slip.lookalikes)) {
+      if (candidate.launchBlock !== null && candidate.launchBlock < subjectBlock) return candidate;
+    }
+    return null;
   }
   function openDoorNotes(slip, findings) {
     const notes = [];
@@ -2828,18 +3029,31 @@
     const factories = `the ${slip.chain.launchpad} factory${slip.chain.key === "robinhood" ? " nor the Pons V1 factory" : ""}`;
     if (t.code.empty) {
       notes.push({ level: "stop", code: "not-registered", text: `No contract at this address on ${slip.chain.name}.` });
-      return notes;
+      return withSkipped(slip, notes);
+    }
+    if (t.code.delegatedTo) {
+      notes.push({ level: "info", code: "delegated-wallet", text: `This is a wallet, not a token: its code is an EIP-7702 delegation to ${shortAddress(t.code.delegatedTo)}, which its owner signed. There is nothing at this address to check for launch terms.` });
+      return withSkipped(slip, notes);
     }
     const named = slip.id.meta ? `"${slip.id.meta.name}" (${slip.id.meta.symbol})` : "this contract";
-    if (slip.lookalikes) {
-      const real = registeredLookalikes(slip.lookalikes);
-      if (real.length) {
-        notes.push({ level: "stop", code: "lookalike-impostor", text: `A real ${slip.chain.launchpad} launch is called ${slip.lookalikes.query} (${shortAddress(real[0].address)}${real[0].launchBlock !== null ? `, block ${real[0].launchBlock}` : ""}); this address is not it. If someone is selling this as that launch, it is not one.` });
-      }
+    const impostor = impostorOf(slip);
+    if (impostor) {
+      notes.push({
+        level: "stop",
+        code: "lookalike-impostor",
+        text: `A real ${slip.chain.launchpad} launch is called ${slip.lookalikes.query} (${shortAddress(impostor.address)}, block ${impostor.launchBlock}) and it is older than this contract. This address is not it. If someone is selling this as that launch, it is not one.`
+      });
+    } else if (slip.lookalikes && registeredLookalikes(slip.lookalikes).length) {
+      notes.push({
+        level: "watch",
+        code: "lookalike-shared-ticker",
+        text: `${registeredLookalikes(slip.lookalikes).length} launchpad token${registeredLookalikes(slip.lookalikes).length === 1 ? " carries" : "s carry"} the ticker ${slip.lookalikes.query} as well. Which came first could not be established, so neither is called a copy here; check the address the team posted.`
+      });
     }
     if (slip.id.claimedFactory) notes.push({ level: "watch", code: "claimed-factory", text: `The token names ${shortAddress(slip.id.claimedFactory)} as its launch factory (launchFactory()), but that factory is not one BOUNCER knows or its record does not confirm this token. A contract can claim any factory; only a known factory's record counts.` });
     if (slip.known) notes.push({ level: "info", code: "known-address", text: `This is ${slip.known}` });
-    else notes.push({ level: "info", code: "not-registered", text: `Not a launchpad token: neither ${factories} deployed ${named}, so curves, door tax and locked pools do not apply. Checked instead as an ordinary token on ${slip.chain.name}: who can change its rules, whether holders can move it, who holds it.` });
+    else if (slip.open) notes.push({ level: "info", code: "not-registered", text: `Not a launchpad token: neither ${factories} deployed ${named}, so curves, door tax and locked pools do not apply. Checked instead as an ordinary token on ${slip.chain.name}: who can change its rules, whether holders can move it, who holds it.` });
+    else notes.push({ level: "watch", code: "not-registered", text: `Not a launchpad token: neither ${factories} deployed ${named}. The ordinary-token check could not be run, so nothing below was read.` });
     const o = slip.open;
     for (const f of findings) {
       if (f.startsWith("SELFDESTRUCT") || f.startsWith("CALLCODE")) notes.push({ level: "stop", code: "code", text: `Code can vanish: ${f}.` });
@@ -2847,55 +3061,72 @@
       else if (f.startsWith("DELEGATECALL")) notes.push({ level: "watch", code: "code", text: `Runs other contracts' code in its own storage: ${f}.` });
       else notes.push({ level: "info", code: "code", text: `${f.charAt(0).toUpperCase()}${f.slice(1)}.` });
     }
-    if (!o) return notes;
+    if (!o) return withSkipped(slip, notes);
     notes.push(...openDoorFactNotes(slip, o));
+    return withSkipped(slip, notes);
+  }
+  function withSkipped(slip, notes) {
+    for (const s of slip.skipped) notes.push({ level: "info", code: "skipped", text: `${s.section} could not be read: ${s.reason}` });
     return notes;
+  }
+  function pct(bps) {
+    return bps === null ? "an unknown share" : `${(bps / 100).toFixed(1)}%`;
   }
   function openDoorFactNotes(slip, o) {
     const notes = [];
+    if (o.surfaceFrom === "implementation-unreadable") {
+      notes.push({ level: "watch", code: "surface-unreadable", text: "This address is a proxy and the code it points at could not be read, so nothing below about its functions is a finding: the switches it carries are unknown, not absent." });
+    }
+    if (o.explorer?.tokenType && o.explorer.tokenType !== "ERC-20") {
+      notes.push({ level: "info", code: "not-erc20", text: `The explorer indexes this as ${o.explorer.tokenType}, not ERC-20. The questions below are asked of fungible tokens; read them with that in mind.` });
+    }
+    if (o.explorerError) notes.push({ level: "info", code: "explorer-unread", text: `The explorer could not be read, so holders, the deployer and recent trades are missing: ${o.explorerError}` });
     const kinds = powerKinds(o).filter((k) => k !== "exempt" && k !== "sweep");
     const owner = o.owner;
-    if (o.paused === true) notes.push({ level: "stop", code: "paused", text: "Transfers are paused right now (paused() returns true): nobody can move this token until the owner unpauses it." });
-    if (o.tradingOpen && !o.tradingOpen.open) notes.push({ level: "stop", code: "trading-closed", text: `Trading is switched off (${o.tradingOpen.view} returns false): only wallets the owner exempts can trade until it is switched on.` });
+    const movesWork = o.probes.length > 0 && o.probes.every((p) => p.status === "ok");
+    if (o.paused === true) {
+      notes.push(
+        movesWork ? { level: "watch", code: "paused", text: "paused() returns true, yet every simulated transfer went through. Either the pause does not gate transfers in this contract or it exempts the wallets that were tried; read the source before trusting either reading." } : { level: "stop", code: "paused", text: "Transfers are paused right now: paused() returns true, so nobody can move this token until whoever holds that switch unpauses it." }
+      );
+    }
+    if (o.tradingOpen && !o.tradingOpen.open) {
+      notes.push(
+        movesWork ? { level: "watch", code: "trading-closed", text: `${o.tradingOpen.view} returns false, yet every simulated transfer went through: the switch exists but is not stopping the wallets that were tried.` } : { level: "stop", code: "trading-closed", text: `Trading is switched off: ${o.tradingOpen.view} returns false, so only wallets that are exempted can trade until it is switched on.` }
+      );
+    }
     if (kinds.length) {
-      const what = kinds.map((k) => `${k}: ${POWER_MEANING[k]}`).join("; ");
-      if (owner && !owner.renounced) notes.push({ level: "watch", code: "owner-powers", text: `The owner (${shortAddress(owner.address)}${owner.isContract ? ", a contract" : ""}) still holds the keys. The code lets its controller ${what}. Ownership is not renounced.` });
-      else if (owner && owner.renounced) notes.push({ level: "info", code: "renounced-with-powers", text: `Ownership is renounced, so the owner-only functions in the code (${kinds.join(", ")}) have no owner left to call them; a separate admin role, if the code has one, is not covered by this check.` });
-      else notes.push({ level: "watch", code: "powers-no-owner", text: `The code carries ${what}, and has no owner() function, so who may call them cannot be read off the chain.` });
-    } else if (owner && !owner.renounced) {
-      notes.push({ level: "info", code: "owner-plain", text: `Has an owner (${shortAddress(owner.address)}) but no mint, pause, blacklist, fee or trading switch was seen in the code.` });
-    } else if (owner?.renounced) {
-      notes.push({ level: "info", code: "renounced", text: "Ownership is renounced and no mint, pause, blacklist, fee or trading switch was seen in the code: the rules are what they are." });
+      const what = kinds.map((k) => `${k} (${POWER_MEANING[k]})`).join("; ");
+      const who = o.ownerUnread ? "owner() is in the code but the chain would not answer it, so who holds those keys is unknown" : owner === null ? "there is no owner() view, so who may call them cannot be read off the chain" : owner.renounced ? "ownership is renounced, so any function guarded by the owner has nobody left to call it; a separate admin role, if the code has one, is not covered by this check" : `ownership is not renounced: ${shortAddress(owner.address)}${owner.isContract ? ", a contract," : ""} holds it`;
+      notes.push({ level: owner?.renounced ? "info" : "watch", code: "powers", text: `The code carries ${what}. Which of them is guarded, and by whom, is not readable from bytecode; what is readable is that ${who}.` });
+    } else if (o.surfaceFrom !== "implementation-unreadable") {
+      const tail = owner === null ? "and no owner() view either" : owner.renounced ? "and ownership is renounced" : `though ${shortAddress(owner.address)} is still its owner`;
+      notes.push({ level: "info", code: "no-powers", text: `No mint, pause, blacklist, fee, limit, trading or upgrade function was seen among the ${o.selectors} functions in the code, ${tail}.` });
     }
     if (o.verified === false) notes.push({ level: "watch", code: "unverified", text: "Source code is not verified on the explorer: nobody can read what the contract does beyond what its bytes show here." });
-    if (o.explorer?.isScam) notes.push({ level: "stop", code: "explorer-scam", text: "The explorer flags this address as a scam." });
-    if (o.probes.length) {
-      const failed2 = o.probes.filter((p) => !p.ok);
-      if (failed2.length === o.probes.length) {
-        notes.push({ level: "stop", code: "transfer-reverts", text: `A transfer from ${o.probes.length === 1 ? "the largest wallet holding it" : `each of the ${o.probes.length} largest wallets holding it`} reverts right now${failed2[0].reason ? ` ("${failed2[0].reason}")` : ""}. Simulated on the chain, nothing was sent. This is what a paused, closed or trapping token looks like from the outside.` });
-      } else if (failed2.length) {
-        notes.push({ level: "watch", code: "transfer-some-revert", text: `${failed2.length} of the ${o.probes.length} largest wallets cannot transfer right now${failed2[0].reason ? ` ("${failed2[0].reason}")` : ""}; the others can. A blacklist or a lock on specific wallets looks like this.` });
-      } else {
-        notes.push({ level: "info", code: "transfer-ok", text: `Transfers work: the ${o.probes.length === 1 ? "largest wallet" : `${o.probes.length} largest wallets`} holding it could move tokens right now (simulated on the chain, nothing sent).` });
-      }
-    }
+    if (o.explorer?.isScam === true) notes.push({ level: "stop", code: "explorer-scam", text: "The explorer flags this address as a scam." });
+    if (o.probesSkipped) notes.push({ level: "info", code: "no-probe", text: `No transfer was simulated: ${o.probesSkipped}.` });
+    notes.push(...probeNotes(o, moveProbes(o), "move"));
+    notes.push(...probeNotes(o, sellProbes(o), "sell"));
     const h = o.holders;
     if (h) {
-      if (h.top10WalletsBps >= 5e3) notes.push({ level: "watch", code: "concentrated", text: `The 10 largest wallets hold ${(h.top10WalletsBps / 100).toFixed(1)}% of supply (contracts and burn addresses not counted).` });
-      else if (h.count !== null && h.count >= 100) notes.push({ level: "info", code: "spread", text: `${h.count} holders; the 10 largest wallets hold ${(h.top10WalletsBps / 100).toFixed(1)}% of supply.` });
-      if (h.contractsBps >= 1e3) notes.push({ level: "info", code: "in-contracts", text: `${(h.contractsBps / 100).toFixed(1)}% of supply sits in contracts (pools, lockers, vaults, the token itself).` });
-      if (h.burnedBps >= 100) notes.push({ level: "info", code: "burned", text: `${(h.burnedBps / 100).toFixed(1)}% of supply sits at a burn address.` });
+      const over = h.rows >= 50 ? " (counted over the first 50 holders the explorer lists)" : "";
+      if (h.top10WalletsBps !== null && h.top10WalletsBps >= 5e3) notes.push({ level: "watch", code: "concentrated", text: `The 10 largest wallets hold ${pct(h.top10WalletsBps)} of supply${over}. Contracts and burn addresses are not counted; wallets that delegated under EIP-7702 are.` });
+      else if (h.count !== null && h.count >= 100 && h.top10WalletsBps !== null) notes.push({ level: "info", code: "spread", text: `${h.count} holders; the 10 largest wallets hold ${pct(h.top10WalletsBps)} of supply${over}.` });
+      else if (h.count !== null && h.top10WalletsBps === null) notes.push({ level: "info", code: "shares-unknown", text: `${h.count} holders. What share each holds could not be worked out: totalSupply() did not read.` });
+      if (h.contractsBps !== null && h.contractsBps >= 1e3) notes.push({ level: "info", code: "in-contracts", text: `${pct(h.contractsBps)} of supply sits in contracts (pools, lockers, vaults, the token itself).` });
+      if (h.burnedBps !== null && h.burnedBps >= 100) notes.push({ level: "info", code: "burned", text: `${pct(h.burnedBps)} of supply sits at a burn address.` });
     }
-    if (o.deployer && o.deployer.bps >= 2e3) notes.push({ level: "watch", code: "deployer-holds", text: `The deployer (${shortAddress(o.deployer.address)}) holds ${(o.deployer.bps / 100).toFixed(1)}% of supply.` });
-    if (o.ownerBalance && o.ownerBalance.bps >= 2e3 && o.owner && o.owner.address !== o.deployer?.address) notes.push({ level: "watch", code: "owner-holds", text: `The owner holds ${(o.ownerBalance.bps / 100).toFixed(1)}% of supply.` });
+    if (o.deployer && o.deployer.bps !== null && o.deployer.bps >= 2e3) notes.push({ level: "watch", code: "deployer-holds", text: `The deployer (${shortAddress(o.deployer.address)}) holds ${pct(o.deployer.bps)} of supply.` });
+    if (o.ownerBalance && o.ownerBalance.bps !== null && o.ownerBalance.bps >= 2e3 && o.owner && o.owner.address !== o.deployer?.address) notes.push({ level: "watch", code: "owner-holds", text: `The owner holds ${pct(o.ownerBalance.bps)} of supply.` });
     if (o.pools) {
-      const live = o.pools.filter((p) => p.quoteReserve > 0n);
+      const live = o.pools.filter((p) => (p.quoteReserve ?? 0n) > 0n);
       const q2 = slip.chain.native;
-      if (live.length) notes.push({ level: "info", code: "pools", text: `Trades in ${live.length} ${live[0].dex} pool${live.length === 1 ? "" : "s"} against W${q2.symbol}: the deepest (${live[0].feeBps.toFixed(2)}% fee) holds ${formatUnits(live[0].quoteReserve, q2.decimals, 3)} W${q2.symbol}. Whether that liquidity is locked is not read here.` });
+      if (live.length) notes.push({ level: "info", code: "pools", text: `Trades in ${live.length} ${live[0].dex} pool${live.length === 1 ? "" : "s"} against W${q2.symbol}: the deepest (${(live[0].feeBps / 100).toFixed(2)}% fee) holds ${formatUnits(live[0].quoteReserve ?? 0n, q2.decimals, 3)} W${q2.symbol}. Whether that liquidity is locked is not read here, and pools on other venues or against other pairs are not counted.` });
       else if (o.pools.length) notes.push({ level: "watch", code: "pools-empty", text: `A ${o.pools[0].dex} pool exists but holds no W${q2.symbol}: nothing to sell into there.` });
-      else notes.push({ level: "info", code: "no-pool", text: `No ${slip.chain.native.symbol} pool on the chain's known DEX factories; it may trade elsewhere (another DEX, another pair) or not at all.` });
+      else notes.push({ level: "info", code: "no-pool", text: `No W${q2.symbol} pool on the chain's known DEX factories. It may trade elsewhere (another DEX, a Uniswap V4 pool, another pair) or not at all.` });
     }
-    if (o.explorer?.priceUsd !== null && o.explorer?.priceUsd !== void 0) notes.push({ level: "info", code: "price", text: `The explorer's price feed says $${o.explorer.priceUsd < 0.01 ? o.explorer.priceUsd.toPrecision(3) : o.explorer.priceUsd.toFixed(o.explorer.priceUsd < 1 ? 4 : 2)}${o.explorer.volume24hUsd !== null ? `, ${usd(o.explorer.volume24hUsd)} traded in 24 h` : ""}${o.explorer.marketCapUsd !== null ? `, ${usd(o.explorer.marketCapUsd)} market cap` : ""}. That feed is the explorer's, not the chain's.` });
+    const price = o.explorer?.priceUsd;
+    if (price !== null && price !== void 0) notes.push({ level: "info", code: "price", text: `The explorer's price feed says ${money(price)}${o.explorer.volume24hUsd !== null ? `, ${usd(o.explorer.volume24hUsd)} traded in 24 h` : ""}${o.explorer.marketCapUsd !== null ? `, ${usd(o.explorer.marketCapUsd)} market cap` : ""}. That feed is the explorer's, not the chain's.` });
     if (o.deployer?.createdAt) notes.push({ level: "info", code: "deployed", text: `Deployed ${formatDuration(Math.max(0, slip.at.timestamp - o.deployer.createdAt))} ago by ${shortAddress(o.deployer.address)}.` });
     if (o.activity) {
       if (o.activity.lastTransferAt !== null) {
@@ -2905,6 +3136,48 @@
       } else if (o.activity.recent === 0) notes.push({ level: "watch", code: "quiet", text: "The explorer has indexed no transfers of this token at all." });
     }
     return notes;
+  }
+  function probeNotes(o, probes, kind) {
+    if (!probes.length) return [];
+    const reverted = probes.filter((p) => p.status === "reverts");
+    const unread = probes.filter((p) => p.status === "unread");
+    const ok = probes.filter((p) => p.status === "ok");
+    const from = probes[0].source === "deployer" ? "the deployer's wallet" : probes.length === 1 ? "a wallet holding it" : `each of ${probes.length} wallets holding it`;
+    const what = kind === "sell" ? "into the pool" : "to a fresh wallet";
+    const why = reverted[0]?.reason ? ` ("${reverted[0].reason}")` : "";
+    const notes = [];
+    if (!ok.length && !reverted.length) {
+      notes.push({ level: "info", code: `${kind}-unread`, text: `The ${kind === "sell" ? "sale" : "transfer"} simulation could not be run: the node would not answer${unread[0]?.reason ? ` (${unread[0].reason})` : ""}. Nothing is claimed either way.` });
+      return notes;
+    }
+    if (reverted.length && !ok.length) {
+      notes.push({
+        level: "stop",
+        code: `${kind}-reverts`,
+        text: kind === "sell" ? `Sending 1 unit ${what} from ${from} reverts right now${why}. A sale is a transfer into the pool, so on this reading the token cannot be sold. Simulated on the chain, nothing was sent.` : `A transfer ${what} from ${from} reverts right now${why}. Simulated on the chain, nothing was sent. This is what a paused, closed or trapping token looks like from the outside.`
+      });
+    } else if (reverted.length) {
+      notes.push({
+        level: "watch",
+        code: `${kind}-some-revert`,
+        text: `${reverted.length} of the ${probes.length} wallets tried cannot ${kind === "sell" ? "send tokens into the pool" : "transfer"} right now${why}; the others can. A blacklist or a lock on chosen wallets looks like this.`
+      });
+    } else {
+      notes.push({
+        level: "info",
+        code: `${kind}-ok`,
+        text: kind === "sell" ? `Sending 1 unit ${what} from ${from} goes through. That is the shape of a sale and it is not blocked at this block. It is one unit, not a priced trade: a fee on transfer, a cap on size or a rule that changes tomorrow would not show up here.` : `Tokens can move: a 1-unit transfer ${what} from ${from} goes through (simulated on the chain, nothing sent).`
+      });
+    }
+    if (unread.length) notes.push({ level: "info", code: `${kind}-partial`, text: `${unread.length} further ${kind === "sell" ? "sale" : "transfer"} simulation${unread.length === 1 ? "" : "s"} could not be run and ${unread.length === 1 ? "is" : "are"} not counted above.` });
+    return notes;
+  }
+  function money(value) {
+    if (!Number.isFinite(value)) return "an unreadable number";
+    if (value === 0) return "$0";
+    if (value >= 1) return `$${value.toFixed(2)}`;
+    const digits = Math.min(18, Math.max(2, 2 - Math.floor(Math.log10(Math.abs(value)))));
+    return `$${value.toFixed(digits)}`;
   }
   function usd(value) {
     if (value >= 1e9) return `$${(value / 1e9).toFixed(2)}B`;
@@ -3578,30 +3851,48 @@
   function openDoorSentence(slip) {
     const t = slip.id.token;
     if (t.code.empty) return `There is no contract at this address on ${slip.chain.name}.`;
+    if (t.code.delegatedTo) return `This is a wallet, not a token: its code is an EIP-7702 delegation its owner signed.`;
     const parts = [];
-    const real = slip.lookalikes ? registeredLookalikes(slip.lookalikes) : [];
-    if (real.length) parts.push(`a real ${slip.chain.launchpad} launch is called ${slip.lookalikes.query} and this is not it`);
+    const impostor = impostorOf(slip);
+    if (impostor) parts.push(`an older ${slip.chain.launchpad} launch is called ${slip.lookalikes.query} and this is not it`);
     if (slip.known) parts.push(`this is ${slip.known.replace(/\.$/, "")}`);
     else parts.push(`not a ${slip.chain.launchpad} launch, checked as an ordinary token`);
     if (t.proxyImplementation || t.code.minimalProxyTarget) parts.push("its code can be replaced (proxy)");
     if (t.code.opcodes.selfdestruct) parts.push("it can self-destruct");
     const o = slip.open;
     if (o) {
-      const kinds = powerKinds(o).filter((k) => k !== "exempt" && k !== "sweep");
-      if (o.paused) parts.push("transfers are paused right now");
-      if (o.tradingOpen && !o.tradingOpen.open) parts.push("trading is switched off");
-      if (kinds.length && o.owner && !o.owner.renounced) parts.push(`the owner can still ${kinds.join(", ")}`);
-      else if (kinds.length && o.owner?.renounced) parts.push(`ownership renounced, so its ${kinds.join(", ")} functions have no owner left`);
-      else if (o.owner?.renounced) parts.push("ownership renounced, no special powers seen");
-      else if (kinds.length) parts.push(`the code can ${kinds.join(", ")} and has no owner() to tell who may`);
-      else if (o.owner) parts.push("has an owner but no mint, pause, blacklist or fee switch was seen");
-      if (o.probes.length) {
-        const failed2 = o.probes.filter((p) => !p.ok).length;
-        parts.push(failed2 === o.probes.length ? "the largest wallets cannot transfer right now" : failed2 ? `${failed2} of the ${o.probes.length} largest wallets cannot transfer` : "transfers work");
+      if (o.surfaceFrom === "implementation-unreadable") {
+        parts.push("the code it actually runs could not be read, so what it can do is unknown");
+        return sentence(parts);
       }
-      if (o.holders) parts.push(`the 10 largest wallets hold ${(o.holders.top10WalletsBps / 100).toFixed(0)}%`);
+      const kinds = powerKinds(o).filter((k) => k !== "exempt" && k !== "sweep");
+      if (o.paused === true) parts.push("paused() is true");
+      if (o.tradingOpen && !o.tradingOpen.open) parts.push("its trading switch is off");
+      if (kinds.length) parts.push(`the code carries ${kinds.join(", ")}${o.owner && !o.owner.renounced ? " and ownership is not renounced" : o.owner?.renounced ? " but ownership is renounced" : ""}`);
+      else if (o.owner?.renounced) parts.push("ownership renounced, no special powers seen");
+      else if (o.owner) parts.push("has an owner but no mint, pause, blacklist or fee switch was seen");
+      const sell = sellProbes(o);
+      const move = moveProbes(o);
+      const verdict = (ps, yes, no, some) => {
+        const reverted = ps.filter((p) => p.status === "reverts").length;
+        const ok = ps.filter((p) => p.status === "ok").length;
+        if (!ok && !reverted) return null;
+        if (reverted && !ok) return no;
+        if (reverted) return some;
+        return yes;
+      };
+      const sellSays = verdict(sell, "a 1-unit sale into the pool goes through", "a 1-unit sale into the pool reverts", "some wallets cannot send into the pool");
+      if (sellSays) parts.push(sellSays);
+      else {
+        const moveSays = verdict(move, "a 1-unit transfer to a fresh wallet goes through", "a 1-unit transfer reverts", "some wallets cannot transfer");
+        if (moveSays) parts.push(moveSays);
+      }
+      if (o.holders?.top10WalletsBps != null) parts.push(`the 10 largest wallets hold ${(o.holders.top10WalletsBps / 100).toFixed(0)}%`);
       if (o.deployer?.createdAt) parts.push(`deployed ${formatDuration(Math.max(0, slip.at.timestamp - o.deployer.createdAt))} ago`);
     }
+    return sentence(parts);
+  }
+  function sentence(parts) {
     return parts.map((x) => x.charAt(0).toUpperCase() + x.slice(1)).join(". ") + ".";
   }
   function renderSlip(slip) {
@@ -3611,6 +3902,7 @@
     const sym = meta ? esc2(meta.symbol) : shortAddress(slip.subject);
     const name = meta ? esc2(meta.name) : slip.known ? "known contract, not a launch" : slip.id.token.code.empty ? "no contract at this address" : "contract without a name";
     const o = slip.open;
+    const tradesText = o ? tradesBody(slip) : "";
     const qd = slip.rules?.quote ?? slip.chain.native;
     const amt = (v) => `${formatUnits(v, qd.decimals)} ${esc2(qd.symbol)}`;
     const c = slip.cover;
@@ -3703,7 +3995,7 @@
     <div class="stack">
       ${section("s-id", "Is it real?", "Did the launchpad's factory deploy this token, and can its code change later?", idBody, !o)}
       ${o ? section("s-control", "Who controls it", "Which switches the code has (mint, pause, blacklist, fees), who holds the keys, and whether holders can move tokens right now.", controlBody(slip), true) : ""}
-      ${o && (o.pools || o.explorer) ? section("s-trades", "Where it trades", "Pools on the chain's DEX factories and what they hold, plus the explorer's price feed.", tradesBody(slip), true) : ""}
+      ${o && tradesText ? section("s-trades", "Where it trades", "Pools on the chain's DEX factories and what they hold, plus the explorer's price feed.", tradesText, true) : ""}
       ${o && (o.holders || o.deployer || o.activity) ? section("s-holders", "Who holds it", "The largest wallets, the deployer's share, what sits in pools and contracts, and when it last moved.", holdersBody(slip), true) : ""}
       ${registered && !v1 ? section("s-cover", "Door tax", `The anti-snipe tax in the first ${c?.terms.seconds ?? 15} seconds, and who paid it.`, coverBody, c?.status === "open") : ""}
       ${r ? section("s-rules", "Fees and rules", "What every trade costs, where the creator's cut goes, what buyback really does.", rulesBody, false) : ""}
@@ -3785,60 +4077,84 @@
       }, 1e3);
     }
   }
+  function clean(text, max = 160) {
+    const flat = text.replace(/[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u2028\u2029\u202a-\u202e\u2066-\u2069]/g, " ").replace(/\s+/g, " ").trim();
+    return flat.length > max ? `${flat.slice(0, max - 1)}\u2026` : flat;
+  }
+  function pctText(bps) {
+    return bps === null ? "unknown" : `${(bps / 100).toFixed(1)}%`;
+  }
+  function money2(value) {
+    if (!Number.isFinite(value)) return "unreadable";
+    if (value === 0) return "$0";
+    if (value >= 1) return `$${value.toFixed(2)}`;
+    const digits = Math.min(18, Math.max(2, 2 - Math.floor(Math.log10(Math.abs(value)))));
+    return `$${value.toFixed(digits)}`;
+  }
+  function usdShort(v) {
+    return v >= 1e9 ? `$${(v / 1e9).toFixed(2)}B` : v >= 1e6 ? `$${(v / 1e6).toFixed(1)}M` : v >= 1e3 ? `$${(v / 1e3).toFixed(0)}K` : `$${v.toFixed(0)}`;
+  }
+  function probeVerdict(probes) {
+    if (!probes.length) return { value: "\u2014", bad: false, note: "not simulated" };
+    const ok = probes.filter((p) => p.status === "ok").length;
+    const reverted = probes.filter((p) => p.status === "reverts").length;
+    if (!ok && !reverted) return { value: "\u2014", bad: false, note: "the node would not run the simulation" };
+    if (reverted && !ok) return { value: "NO", bad: true, note: `reverts from ${reverted === 1 ? "the wallet tried" : `all ${reverted} wallets tried`}` };
+    if (reverted) return { value: `${ok}/${ok + reverted}`, bad: true, note: "some wallets can, some cannot" };
+    return { value: "YES", bad: false, note: `goes through from ${ok === 1 ? "the wallet tried" : `all ${ok} wallets tried`}` };
+  }
   function openDoorTiles(slip) {
     const o = slip.open;
     const kinds = powerKinds(o).filter((k) => k !== "exempt" && k !== "sweep");
-    const failed2 = o.probes.filter((p) => !p.ok).length;
-    const ownerV = o.owner === null ? "NONE" : o.owner.renounced ? "GONE" : "KEYS";
-    const ownerS = o.owner === null ? "no owner() function" : o.owner.renounced ? "ownership renounced" : `owner ${shortAddress(o.owner.address)}${o.owner.isContract ? " (contract)" : ""}`;
-    const moveV = o.paused ? "PAUSED" : o.tradingOpen && !o.tradingOpen.open ? "CLOSED" : o.probes.length ? failed2 === o.probes.length ? "NO" : failed2 ? `${o.probes.length - failed2}/${o.probes.length}` : "YES" : "\u2014";
-    const moveS = o.paused ? "paused() is true" : o.tradingOpen && !o.tradingOpen.open ? `${o.tradingOpen.view} is false` : o.probes.length ? `of the ${o.probes.length} largest wallets can transfer now` : "no holder to simulate from";
-    const moveBad = o.paused || o.tradingOpen && !o.tradingOpen.open || o.probes.length > 0 && failed2 === o.probes.length;
+    const unreadable = o.surfaceFrom === "implementation-unreadable";
+    const ownerV = unreadable ? "?" : o.ownerUnread ? "?" : o.owner === null ? "NONE" : o.owner.renounced ? "GONE" : "KEYS";
+    const ownerS = unreadable ? "the code it runs could not be read" : o.ownerUnread ? "owner() did not answer" : o.owner === null ? "no owner() function" : o.owner.renounced ? "ownership renounced" : `owner ${shortAddress(o.owner.address)}${o.owner.isContract ? " (contract)" : ""}`;
+    const sell = probeVerdict(sellProbes(o));
     const h = o.holders;
     return `<div class="tiles">
-    <div class="tile"><div class="l">Owner</div><div class="v ${o.owner && !o.owner.renounced && kinds.length ? "bad" : ""}">${ownerV}</div><div class="s">${esc2(ownerS)}</div></div>
-    <div class="tile"><div class="l">Can still</div><div class="v ${kinds.length ? "bad" : ""}">${kinds.length ? kinds.length : "0"}</div><div class="s">${kinds.length ? esc2(kinds.join(", ")) : "no mint, pause, blacklist, fee or trading switch seen"}</div></div>
-    <div class="tile"><div class="l">Can holders sell?</div><div class="v ${moveBad ? "bad" : ""}">${moveV}</div><div class="s">${esc2(moveS)}</div></div>
-    <div class="tile"><div class="l">Top 10 wallets</div><div class="v ${h && h.top10WalletsBps >= 5e3 ? "bad" : ""}">${h ? `${(h.top10WalletsBps / 100).toFixed(0)}%` : "\u2014"}</div><div class="s">${h ? `of supply \xB7 ${h.count ?? "?"} holders` : "explorer not reachable"}</div></div>
+    <div class="tile"><div class="l">Owner</div><div class="v ${!unreadable && o.owner && !o.owner.renounced && kinds.length ? "bad" : ""}">${ownerV}</div><div class="s">${esc2(ownerS)}</div></div>
+    <div class="tile"><div class="l">Code can</div><div class="v ${kinds.length ? "bad" : ""}">${unreadable ? "?" : kinds.length || "0"}</div><div class="s">${unreadable ? "the implementation could not be read" : kinds.length ? esc2(kinds.join(", ")) : "no mint, pause, blacklist, fee or trading switch seen"}</div></div>
+    <div class="tile"><div class="l">Sale into the pool</div><div class="v ${sell.bad ? "bad" : ""}">${sell.value}</div><div class="s">${esc2(sell.note)}</div></div>
+    <div class="tile"><div class="l">Top 10 wallets</div><div class="v ${h && h.top10WalletsBps !== null && h.top10WalletsBps >= 5e3 ? "bad" : ""}">${h && h.top10WalletsBps !== null ? `${(h.top10WalletsBps / 100).toFixed(0)}%` : "\u2014"}</div><div class="s">${h ? h.top10WalletsBps === null ? "supply not readable" : `of supply \xB7 ${h.count ?? "?"} holders` : "explorer not reachable"}</div></div>
   </div>`;
   }
   function controlBody(slip) {
     const o = slip.open;
-    const pct = (b) => `${(b / 100).toFixed(1)}%`;
-    const powers = o.powers.length ? `<div class="tbl"><table class="buys"><thead><tr><th>function in the code</th><th>lets its caller</th></tr></thead><tbody>${o.powers.map((p) => `<tr><td><span class="mono">${esc2(p.signature)}</span></td><td>${esc2(POWER_MEANING[p.kind])}</td></tr>`).join("")}</tbody></table></div>` : `<p style="color:var(--muted);font-size:13px;margin:8px 0 0">No mint, pause, blacklist, fee, limit, trading or upgrade function was seen among the ${o.selectors} functions in the code.</p>`;
-    const probes = o.probes.length ? `<div class="tbl"><table class="buys"><thead><tr><th>transfer from</th><th>result</th></tr></thead><tbody>${o.probes.map((p) => `<tr><td><span class="mono">${shortAddress(p.from)}</span></td><td>${p.ok ? '<span class="flag ok">works</span>' : `<span class="flag bad">reverts</span> ${p.reason ? esc2(p.reason) : ""}`}</td></tr>`).join("")}</tbody></table></div><p style="color:var(--dim);font-size:12px;margin:6px 0 0">Simulated on the chain with eth_call from the largest plain wallets holding it; nothing was sent.</p>` : "";
+    const powers = o.powers.length ? `<div class="tbl"><table class="buys"><thead><tr><th>function in the code</th><th>lets whoever may call it</th></tr></thead><tbody>${o.powers.map((p) => `<tr><td><span class="mono">${esc2(p.signature)}</span></td><td>${esc2(POWER_MEANING[p.kind])}</td></tr>`).join("")}</tbody></table></div><p style="color:var(--dim);font-size:12px;margin:6px 0 0">A name in the dispatcher is not a permission. Whether each is guarded by the owner, by a role, or by nothing at all is not readable from bytecode.</p>` : o.surfaceFrom === "implementation-unreadable" ? `<p style="color:var(--muted);font-size:13px;margin:8px 0 0">The code this proxy points at could not be read, so no function list is shown. Its switches are unknown, not absent.</p>` : `<p style="color:var(--muted);font-size:13px;margin:8px 0 0">No mint, pause, blacklist, fee, limit, trading or upgrade function was seen among the ${o.selectors} four-byte selectors in the code.</p>`;
+    const probeRows = o.probes.length ? `<div class="tbl"><table class="buys"><thead><tr><th>simulated</th><th>from</th><th>result</th></tr></thead><tbody>${o.probes.map(
+      (p) => `<tr><td>${p.target === "pool" ? "sale into the pool" : "transfer to a fresh wallet"}</td><td><span class="mono">${shortAddress(p.from)}</span>${p.source === "deployer" ? ' <span class="flag">deployer</span>' : ""}</td><td>${p.status === "ok" ? '<span class="flag ok">goes through</span>' : p.status === "reverts" ? `<span class="flag bad">reverts</span> ${esc2(clean(p.reason ?? ""))}` : `<span class="flag">not run</span> ${esc2(clean(p.reason ?? ""))}`}</td></tr>`
+    ).join("")}</tbody></table></div><p style="color:var(--dim);font-size:12px;margin:6px 0 0">Run with eth_call from wallets that hold the token; nothing was signed or sent. One unit, at this block: a fee on transfer, a cap on size, or a rule the owner flips tomorrow would not show up here.</p>` : o.probesSkipped ? `<p style="color:var(--muted);font-size:13px;margin:8px 0 0">No transfer was simulated: ${esc2(o.probesSkipped)}.</p>` : "";
     return `<dl class="kv">
-    <dt>owner</dt><dd>${o.owner === null ? "no owner() function in the code" : o.owner.renounced ? '<span class="flag ok">renounced</span> nobody can call owner-only functions' : `<span class="mono">${esc2(o.owner.address)}</span>${o.owner.isContract ? " (a contract)" : ""}${o.ownerBalance ? ` \xB7 holds ${pct(o.ownerBalance.bps)}` : ""}${o.ownable ? "" : " \xB7 no renounceOwnership()"}`}</dd>
+    <dt>owner</dt><dd>${o.ownerUnread ? "owner() is in the code but the chain would not answer it" : o.owner === null ? "no owner() function in the code" : o.owner.renounced ? '<span class="flag ok">renounced</span> nobody can call owner-only functions' : `<span class="mono">${esc2(o.owner.address)}</span>${o.owner.isContract ? " (a contract)" : ""}${o.ownerBalance?.bps != null ? ` \xB7 holds ${pctText(o.ownerBalance.bps)}` : ""}${o.ownable ? "" : " \xB7 no renounceOwnership()"}`}</dd>
     ${o.paused !== null ? `<dt>paused</dt><dd>${o.paused ? '<span class="flag bad">yes</span>' : '<span class="flag ok">no</span>'}</dd>` : ""}
     ${o.tradingOpen ? `<dt>${esc2(o.tradingOpen.view)}</dt><dd>${o.tradingOpen.open ? '<span class="flag ok">true</span> trading is open' : '<span class="flag bad">false</span> trading is switched off'}</dd>` : ""}
     <dt>source</dt><dd>${o.verified === null ? "explorer not reachable" : o.verified ? '<span class="flag ok">verified</span> the code can be read on the explorer' : '<span class="flag bad">not verified</span> only the bytes can be read'}</dd>
-    <dt>read from</dt><dd>${o.surfaceFrom === "implementation" ? "the proxy's current implementation" : "the token's own bytecode"} \xB7 ${o.selectors} functions</dd>
-  </dl>${powers}${probes}`;
+    <dt>read from</dt><dd>${o.surfaceFrom === "implementation" ? "the proxy's current implementation" : o.surfaceFrom === "implementation-unreadable" ? '<span class="flag bad">unreadable</span> this is a proxy and its implementation code did not load' : "the token's own bytecode"} \xB7 ${o.selectors} four-byte selectors${o.constants > o.selectors ? `, ${o.constants - o.selectors} shorter constants ignored` : ""}</dd>
+  </dl>${powers}${probeRows}`;
   }
   function tradesBody(slip) {
     const o = slip.open;
     const q2 = slip.chain.native;
     const dec = slip.id.meta?.decimals ?? 18;
     const explorer = chain().blockscout;
-    const usd2 = (v) => v >= 1e9 ? `$${(v / 1e9).toFixed(2)}B` : v >= 1e6 ? `$${(v / 1e6).toFixed(1)}M` : v >= 1e3 ? `$${(v / 1e3).toFixed(0)}K` : `$${v.toFixed(0)}`;
-    const pools = o.pools ? o.pools.length ? `<div class="tbl"><table class="buys"><thead><tr><th>pool</th><th>fee</th><th>W${esc2(q2.symbol)} inside</th><th>tokens inside</th></tr></thead><tbody>${o.pools.map((p) => `<tr><td>${explorer && mode !== "demo" ? `<a href="${explorer}/address/${p.address}" target="_blank" rel="noopener">${esc2(p.dex)} \xB7 ${shortAddress(p.address)}</a>` : `${esc2(p.dex)} \xB7 ${shortAddress(p.address)}`}</td><td>${p.feeBps.toFixed(2)}%</td><td>${formatUnits(p.quoteReserve, q2.decimals, 3)}</td><td>${formatUnits(p.tokenReserve, dec, 0)}</td></tr>`).join("")}</tbody></table></div><p style="color:var(--dim);font-size:12px;margin:6px 0 0">Reserves are the pool's balances at this block. Whether the liquidity is locked is not read here.</p>` : `<p style="color:var(--muted);font-size:13px;margin:0">No W${esc2(q2.symbol)} pool on the chain's known DEX factories. It may trade on another DEX, against another pair, or not at all.</p>` : "";
-    const feed = o.explorer && o.explorer.priceUsd !== null ? `<dl class="kv"><dt>explorer price</dt><dd>$${o.explorer.priceUsd < 0.01 ? o.explorer.priceUsd.toPrecision(3) : o.explorer.priceUsd.toFixed(o.explorer.priceUsd < 1 ? 4 : 2)}${o.explorer.volume24hUsd !== null ? ` \xB7 ${usd2(o.explorer.volume24hUsd)} in 24 h` : ""}${o.explorer.marketCapUsd !== null ? ` \xB7 ${usd2(o.explorer.marketCapUsd)} market cap` : ""} <small style="color:var(--dim)">the explorer's feed, not the chain's</small></dd></dl>` : "";
+    const amount = (v, decimals, fraction) => v === null ? "unread" : formatUnits(v, decimals, fraction);
+    const pools = o.pools ? o.pools.length ? `<div class="tbl"><table class="buys"><thead><tr><th>pool</th><th>fee</th><th>W${esc2(q2.symbol)} inside</th><th>tokens inside</th></tr></thead><tbody>${o.pools.map((p) => `<tr><td>${explorer && mode !== "demo" ? `<a href="${esc2(explorer)}/address/${esc2(p.address)}" target="_blank" rel="noopener">${esc2(p.dex)} \xB7 ${shortAddress(p.address)}</a>` : `${esc2(p.dex)} \xB7 ${shortAddress(p.address)}`}</td><td>${(p.feeBps / 100).toFixed(2)}%</td><td>${amount(p.quoteReserve, q2.decimals, 3)}</td><td>${amount(p.tokenReserve, dec, 0)}</td></tr>`).join("")}</tbody></table></div><p style="color:var(--dim);font-size:12px;margin:6px 0 0">Reserves are the pool's balances at this block. Whether the liquidity is locked is not read here, and pools on other venues or against other pairs are not counted.</p>` : `<p style="color:var(--muted);font-size:13px;margin:0">No W${esc2(q2.symbol)} pool on the chain's known DEX factories. It may trade on another DEX, in a Uniswap V4 pool, against another pair, or not at all.</p>` : "";
+    const feed = o.explorer && o.explorer.priceUsd != null ? `<dl class="kv"><dt>explorer price</dt><dd>${money2(o.explorer.priceUsd)}${o.explorer.volume24hUsd !== null ? ` \xB7 ${usdShort(o.explorer.volume24hUsd)} in 24 h` : ""}${o.explorer.marketCapUsd !== null ? ` \xB7 ${usdShort(o.explorer.marketCapUsd)} market cap` : ""} <small style="color:var(--dim)">the explorer's feed, not the chain's</small></dd></dl>` : "";
     return `${feed}${pools}`;
   }
   function holdersBody(slip) {
     const o = slip.open;
     const h = o.holders;
-    const pct = (b) => `${(b / 100).toFixed(1)}%`;
-    const role = (x) => x.role === "deployer" ? '<span class="flag">deployer</span>' : x.role === "owner" ? '<span class="flag">owner</span>' : x.role === "burn" ? '<span class="flag ok">burn</span>' : x.role === "token" ? '<span class="flag">the token</span>' : x.isContract ? `<span class="flag">${esc2(x.name ?? "contract")}</span>` : "";
+    const role = (x) => x.role === "deployer" ? '<span class="flag">deployer</span>' : x.role === "owner" ? '<span class="flag">owner</span>' : x.role === "burn" ? '<span class="flag ok">burn</span>' : x.role === "token" ? '<span class="flag">the token</span>' : x.delegated ? '<span class="flag">wallet \xB7 7702</span>' : x.isContract ? `<span class="flag">${esc2(x.name ?? "contract")}</span>` : "";
     const explorer = chain().blockscout;
     return `<dl class="kv">
-    ${o.deployer ? `<dt>deployer</dt><dd><span class="mono">${esc2(o.deployer.address)}</span> \xB7 holds ${pct(o.deployer.bps)}${o.deployer.createdAt ? ` \xB7 deployed ${isoUtc(o.deployer.createdAt)} (${formatDuration(Math.max(0, slip.at.timestamp - o.deployer.createdAt))} ago)` : ""}</dd>` : ""}
+    ${o.deployer ? `<dt>deployer</dt><dd><span class="mono">${esc2(o.deployer.address)}</span> \xB7 holds ${pctText(o.deployer.bps)}${o.deployer.createdAt ? ` \xB7 deployed ${isoUtc(o.deployer.createdAt)} (${formatDuration(Math.max(0, slip.at.timestamp - o.deployer.createdAt))} ago)` : ""}</dd>` : ""}
     ${h ? `<dt>holders</dt><dd>${h.count ?? "unknown"}${h.transfers !== null ? ` \xB7 ${h.transfers} transfers indexed` : ""}</dd>
-    <dt>top 10 wallets</dt><dd>${pct(h.top10WalletsBps)} of supply (contracts and burn addresses not counted)</dd>
-    <dt>in contracts</dt><dd>${pct(h.contractsBps)} (pools, lockers, vaults, the token itself)${h.burnedBps ? ` \xB7 burned ${pct(h.burnedBps)}` : ""}</dd>` : ""}
+    <dt>top 10 wallets</dt><dd>${pctText(h.top10WalletsBps)} of supply, over the ${h.rows} rows the explorer returned. Contracts and burn addresses are not counted; wallets that delegated under EIP-7702 are.</dd>
+    <dt>in contracts</dt><dd>${pctText(h.contractsBps)} (pools, lockers, vaults, the token itself)${h.burnedBps ? ` \xB7 burned ${pctText(h.burnedBps)}` : ""}</dd>` : ""}
     ${o.activity ? `<dt>last transfer</dt><dd>${o.activity.lastTransferAt ? `${formatDuration(Math.max(0, slip.at.timestamp - o.activity.lastTransferAt))} ago \xB7 ${o.activity.recentWallets} wallets in the last ${o.activity.recent} transfers` : "none indexed by the explorer"}</dd>` : ""}
   </dl>
-  ${h && h.top.length ? `<div class="tbl"><table class="buys"><thead><tr><th>#</th><th>holder</th><th>share</th></tr></thead><tbody>${h.top.slice(0, 15).map((x, i) => `<tr><td>${i + 1}</td><td>${explorer && mode !== "demo" ? `<a href="${explorer}/address/${x.address}" target="_blank" rel="noopener"><span class="mono">${shortAddress(x.address)}</span></a>` : `<span class="mono">${shortAddress(x.address)}</span>`} ${role(x)}</td><td>${pct(x.bps)}</td></tr>`).join("")}</tbody></table></div>` : ""}`;
+  ${h && h.top.length ? `<div class="tbl"><table class="buys"><thead><tr><th>#</th><th>holder</th><th>share</th></tr></thead><tbody>${h.top.slice(0, 15).map((x, i) => `<tr><td>${i + 1}</td><td>${explorer && mode !== "demo" ? `<a href="${esc2(explorer)}/address/${esc2(x.address)}" target="_blank" rel="noopener"><span class="mono">${shortAddress(x.address)}</span></a>` : `<span class="mono">${shortAddress(x.address)}</span>`} ${role(x)}</td><td>${pctText(x.bps)}</td></tr>`).join("")}</tbody></table></div>` : ""}`;
   }
   function devSection(d, subject, standalone, bodyOnly = false) {
     const inner = `<dl class="kv"><dt>deployer</dt><dd><span class="mono">${esc2(d.deployer)}</span></dd><dt>in window</dt><dd>${esc2(devReportLine(d))}</dd>${standalone ? `<dt>blocks</dt><dd>${d.window.fromBlock}\u2013${d.window.toBlock}</dd>` : ""}</dl>

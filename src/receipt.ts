@@ -37,7 +37,17 @@ export function renderReceipt(receipt: Receipt, format: ReceiptFormat): string {
 function formatValue(value: ReceiptValue): string {
   if (value === null) return "unknown";
   if (typeof value === "boolean") return value ? "yes" : "no";
-  return String(value);
+  return plain(String(value));
+}
+
+/**
+ * Strips control characters from a string before it reaches a terminal or a
+ * markdown table. Revert reasons and explorer labels are written by whoever
+ * deployed the contract, and an escape sequence in one of them would let them
+ * paint the receipt. Nothing else about the text is changed.
+ */
+export function plain(text: string): string {
+  return text.replace(/[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u2028\u2029\u202a-\u202e\u2066-\u2069]/g, " ").replace(/[ \t]+/g, " ").trim();
 }
 
 const MAX_VALUE_WIDTH = 96;
@@ -45,7 +55,7 @@ const MAX_VALUE_WIDTH = 96;
 function renderText(receipt: Receipt): string {
   const labelWidths = receipt.sections.map((section) => Math.max(...section.rows.map((row) => row.label.length), 1));
   const valueLines = (row: ReceiptRow): string[] => {
-    const text = `${formatValue(row.value)}${row.note ? `  (${row.note})` : ""}`;
+    const text = `${formatValue(row.value)}${row.note ? `  (${plain(row.note)})` : ""}`;
     return text.length <= MAX_VALUE_WIDTH ? [text] : wrap(text, MAX_VALUE_WIDTH);
   };
   const width = Math.max(
@@ -88,7 +98,7 @@ function renderMarkdown(receipt: Receipt): string {
   for (const section of receipt.sections) {
     out.push("", `### ${section.title}`, "", "| | |", "| --- | --- |");
     for (const row of section.rows) {
-      const value = row.note ? `${formatValue(row.value)} _(${row.note})_` : formatValue(row.value);
+      const value = row.note ? `${formatValue(row.value)} _(${plain(row.note)})_` : formatValue(row.value);
       out.push(`| ${row.label} | ${value} |`);
     }
   }
