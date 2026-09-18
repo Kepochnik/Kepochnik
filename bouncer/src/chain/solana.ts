@@ -25,6 +25,7 @@ const READ_ONLY_METHODS = new Set([
   "getMultipleAccounts",
   "getTokenSupply",
   "getTokenLargestAccounts",
+  "getTokenAccountsByOwner",
   "getSlot",
   "getBlockTime",
   "getHealth",
@@ -157,6 +158,26 @@ export class SolanaRpc {
     } catch {
       return null;
     }
+  }
+
+  /**
+   * Every token account one address holds, with its mint and balance. This is
+   * how both sides of a pool are read without a program scan: the pool owns its
+   * vaults, so asking the pool for its token accounts returns the pair.
+   */
+  async tokenAccountsByOwner(owner: string, programId = TOKEN_PROGRAM): Promise<{ address: string; mint: string; amount: bigint }[]> {
+    const result = (await this.send("getTokenAccountsByOwner", [owner, { programId }, { encoding: "base64", commitment: "confirmed" }])) as
+      | { value: { pubkey: string; account: RawAccount }[] }
+      | null;
+    const out: { address: string; mint: string; amount: bigint }[] = [];
+    for (const entry of result?.value ?? []) {
+      const account = decodeAccount(entry.account);
+      if (!account || account.data.length < 72) continue;
+      let amount = 0n;
+      for (let i = 71; i >= 64; i--) amount = (amount << 8n) | BigInt(account.data[i] ?? 0);
+      out.push({ address: entry.pubkey, mint: base58Encode(account.data.slice(0, 32)), amount });
+    }
+    return out;
   }
 
   /** The 20 largest token accounts, which are accounts and not yet people: their owners are a second read. */

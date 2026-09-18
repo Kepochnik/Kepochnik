@@ -201,13 +201,16 @@ test("a Metaplex metadata account gives the name, and says whether it can be cha
   assert.equal(parsed.mint, base58Encode(key(7)));
 });
 
-test("the slip renders, and says plainly that pools are not read here", () => {
+test("the slip renders, and names the venues it does and does not read", () => {
   const mint = parseMint(mintAccount({ supply: 1_000n, decimals: 6 }))!;
   const text = renderReceipt(splReceipt(slipFor(mint)), "text");
   assert.match(text, /SPL Token/);
   assert.match(text, /freeze authority/);
   assert.match(text, /NOT A LAUNCH/);
-  assert.match(text, /not read on Solana/);
+  // The list is a boundary, not a boast: a pool against another pair, or on a
+  // venue not named, is not counted, and the slip has to say so.
+  assert.match(text, /Venues read here/);
+  assert.match(text, /not counted/);
 });
 
 test("solana is in the chain table and the EVM lookup never returns it", () => {
@@ -227,6 +230,7 @@ function slipFor(mint: ReturnType<typeof parseMint>): SplSlip {
     metadata: null,
     metadataInline: false,
     holders: null,
+    market: null,
     notes: [],
     skipped: [],
   };

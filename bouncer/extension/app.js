@@ -571,7 +571,7 @@
       launchpad: null,
       native: { symbol: "SOL", decimals: 9 },
       blocksPerSecond: 2.5,
-      notes: "Read as SPL: the mint account says outright whether anyone can print more tokens or freeze yours, and Token-2022 extensions say whether a transfer costs a fee, runs someone's code, or can be reversed by a permanent delegate. Pools and prices are not read here yet."
+      notes: "Read as SPL: the mint account says outright whether anyone can print more tokens or freeze yours, and Token-2022 extensions say whether a transfer costs a fee, runs someone's code, or can be reversed by a permanent delegate. Where it trades is read too: the pump.fun bonding curve exactly, and Raydium, Orca, Meteora and pump.fun AMM pools against SOL or USDC. A ranged pool is shown but not priced, because its vault balances are not what a trade moves through."
     },
     "arc-testnet": {
       key: "arc-testnet",
@@ -1421,6 +1421,7 @@
     "getMultipleAccounts",
     "getTokenSupply",
     "getTokenLargestAccounts",
+    "getTokenAccountsByOwner",
     "getSlot",
     "getBlockTime",
     "getHealth",
@@ -1526,6 +1527,23 @@
       } catch {
         return null;
       }
+    }
+    /**
+     * Every token account one address holds, with its mint and balance. This is
+     * how both sides of a pool are read without a program scan: the pool owns its
+     * vaults, so asking the pool for its token accounts returns the pair.
+     */
+    async tokenAccountsByOwner(owner, programId = TOKEN_PROGRAM) {
+      const result = await this.send("getTokenAccountsByOwner", [owner, { programId }, { encoding: "base64", commitment: "confirmed" }]);
+      const out2 = [];
+      for (const entry of result?.value ?? []) {
+        const account = decodeAccount(entry.account);
+        if (!account || account.data.length < 72) continue;
+        let amount = 0n;
+        for (let i = 71; i >= 64; i--) amount = amount << 8n | BigInt(account.data[i] ?? 0);
+        out2.push({ address: entry.pubkey, mint: base58Encode(account.data.slice(0, 32)), amount });
+      }
+      return out2;
     }
     /** The 20 largest token accounts, which are accounts and not yet people: their owners are a second read. */
     async largestAccounts(mint) {
@@ -1699,6 +1717,176 @@
     return { updateAuthority, mint, name, symbol, uri, sellerFeeBasisPoints, primarySaleHappened: d[offset] === 1, isMutable: d[offset + 1] === 1 };
   }
 
+  // src/chain/solanaPools.ts
+  var WSOL = "So11111111111111111111111111111111111111112";
+  var USDC = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
+  var PUMP_PROGRAM = "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P";
+  var POOL_PROGRAMS = {
+    "675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8": { name: "Raydium AMM v4", concentrated: false },
+    CPMMoo8L3F4NbTegBCKVNunggL7H1ZpdTHKxQB5qKP1C: { name: "Raydium CPMM", concentrated: false },
+    CAMMCzo5YL8w4VFF8KVHrK22GGUsp5VTaW7grrKgrWqK: { name: "Raydium CLMM", concentrated: true },
+    whirLbMiicVdio4qvUfM5KAg6Ct8VwpYzGff3uctyCc: { name: "Orca Whirlpool", concentrated: true },
+    LBUZKhRxPF3XUpBCjp4YzTKgLccjZhTSDM9YuVaPwxo: { name: "Meteora DLMM", concentrated: true },
+    Eo7WjKq67rjJQSZxS6z3YkapzY3eMj6Xy8X5EQVn5UaB: { name: "Meteora Dynamic AMM", concentrated: false },
+    pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA: { name: "pump.fun AMM", concentrated: false }
+  };
+  var enc = new TextEncoder();
+  var u64 = (data, offset) => {
+    let value = 0n;
+    for (let i = 7; i >= 0; i--) value = value << 8n | BigInt(data[offset + i] ?? 0);
+    return value;
+  };
+  function pumpCurveAddress(mint) {
+    let key;
+    try {
+      key = base58Decode(mint);
+    } catch {
+      return null;
+    }
+    if (key.length !== 32) return null;
+    return findProgramAddress([enc.encode("bonding-curve"), key], PUMP_PROGRAM)?.address ?? null;
+  }
+  function parsePumpCurve(address, account) {
+    if (account.owner !== PUMP_PROGRAM) return null;
+    if (account.data.length < 49) return null;
+    return {
+      address,
+      virtualTokens: u64(account.data, 8),
+      virtualSol: u64(account.data, 16),
+      realTokens: u64(account.data, 24),
+      realSol: u64(account.data, 32),
+      complete: account.data[48] === 1
+    };
+  }
+  var PUMP_FEE_BPS = 100n;
+  function quoteCurveSale(curve, tokensIn) {
+    if (tokensIn <= 0n || curve.virtualTokens === 0n || curve.virtualSol === 0n) return 0n;
+    const k = curve.virtualSol * curve.virtualTokens;
+    const solAfter = k / (curve.virtualTokens + tokensIn);
+    const gross = curve.virtualSol > solAfter ? curve.virtualSol - solAfter : 0n;
+    const capped = gross > curve.realSol ? curve.realSol : gross;
+    return capped - capped * PUMP_FEE_BPS / 10000n;
+  }
+  function quotePoolSale(pool, tokensIn, feeBps = 25n) {
+    if (tokensIn <= 0n || pool.tokenReserve === 0n || pool.quoteReserve === 0n) return 0n;
+    const afterFee = tokensIn - tokensIn * feeBps / 10000n;
+    return pool.quoteReserve * afterFee / (pool.tokenReserve + afterFee);
+  }
+  var QUOTES = {
+    [WSOL]: { symbol: "SOL", decimals: 9 },
+    [USDC]: { symbol: "USDC", decimals: 6 }
+  };
+  async function readSolanaPools(rpc, mint) {
+    const largest = await rpc.largestAccounts(mint);
+    if (!largest.length) return [];
+    const accounts = await rpc.multipleAccounts(largest.map((l) => l.address));
+    const authorities = [];
+    for (const account of accounts) {
+      if (!account || account.data.length < 72) continue;
+      const authority = base58Encode(account.data.slice(32, 64));
+      if (!authorities.includes(authority)) authorities.push(authority);
+    }
+    if (!authorities.length) return [];
+    const authorityAccounts = await rpc.multipleAccounts(authorities);
+    const pools = [];
+    for (let i = 0; i < authorities.length; i++) {
+      const account = authorityAccounts[i];
+      if (!account) continue;
+      const program = POOL_PROGRAMS[account.owner];
+      if (!program) continue;
+      let vaults;
+      try {
+        vaults = await rpc.tokenAccountsByOwner(authorities[i]);
+      } catch {
+        continue;
+      }
+      const ours = vaults.find((v) => v.mint === mint);
+      const other = vaults.find((v) => v.mint !== mint && QUOTES[v.mint]);
+      if (!ours || !other) continue;
+      const quote = QUOTES[other.mint];
+      pools.push({
+        address: authorities[i],
+        program: account.owner,
+        name: program.name,
+        concentrated: program.concentrated,
+        tokenReserve: ours.amount,
+        quoteMint: other.mint,
+        quoteSymbol: quote.symbol,
+        quoteDecimals: quote.decimals,
+        quoteReserve: other.amount
+      });
+    }
+    return pools.sort((a, b) => b.quoteReserve > a.quoteReserve ? 1 : b.quoteReserve < a.quoteReserve ? -1 : 0);
+  }
+  var SHARES = [1e3, 2500, 5e3, 1e4];
+  async function readSolanaMarket(rpc, mint, position, tokenDecimals) {
+    const empty = { curve: null, pools: [], best: null, spot: null, quoteSymbol: "SOL", quotes: [], note: "" };
+    let curve = null;
+    const curveAddress = pumpCurveAddress(mint);
+    if (curveAddress) {
+      try {
+        const account = await rpc.accountInfo(curveAddress);
+        if (account) curve = parsePumpCurve(curveAddress, account);
+      } catch {
+      }
+    }
+    if (curve && !curve.complete) {
+      const scale2 = 10 ** tokenDecimals;
+      const spot2 = curve.virtualTokens > 0n ? Number(curve.virtualSol) / 1e9 / (Number(curve.virtualTokens) / scale2) : null;
+      const quotes2 = position > 0n ? priced(SHARES.map((b) => ({ shareBps: b, tokensIn: position * BigInt(b) / 10000n })), (t) => quoteCurveSale(curve, t), spot2, tokenDecimals, 9) : [];
+      return {
+        curve,
+        pools: [],
+        best: { kind: "curve", name: "the pump.fun bonding curve" },
+        spot: spot2,
+        quoteSymbol: "SOL",
+        quotes: quotes2,
+        note: "Priced on the pump.fun bonding curve's own virtual reserves, with its 1% fee, and capped at the SOL the curve actually holds. It has not graduated, so there is no pool yet."
+      };
+    }
+    let pools = [];
+    try {
+      pools = await readSolanaPools(rpc, mint);
+    } catch {
+      return { ...empty, curve, note: "The pools could not be read from this endpoint." };
+    }
+    if (!pools.length) {
+      return { ...empty, curve, note: curve?.complete ? "The bonding curve has graduated, but no pool against SOL or USDC was found among the largest accounts holding this mint." : "No pool against SOL or USDC was found among the largest accounts holding this mint. It may trade elsewhere, or not at all." };
+    }
+    const priceable = pools.filter((p) => !p.concentrated && p.tokenReserve > 0n && p.quoteReserve > 0n);
+    const best = priceable[0] ?? null;
+    if (!best) {
+      return {
+        ...empty,
+        curve,
+        pools,
+        quoteSymbol: pools[0].quoteSymbol,
+        note: `Found ${pools.length} pool${pools.length === 1 ? "" : "s"}, ${pools.every((p) => p.concentrated) ? "all of them concentrated" : "none of them priceable"}. A concentrated pool keeps its liquidity in ranges, so its vault balances are not what a trade moves through and pricing a sale from them would overstate it \u2014 the reserves are shown, the sale is not priced.`
+      };
+    }
+    const scale = 10 ** tokenDecimals;
+    const spot = Number(best.quoteReserve) / 10 ** best.quoteDecimals / (Number(best.tokenReserve) / scale);
+    const quotes = position > 0n ? priced(SHARES.map((b) => ({ shareBps: b, tokensIn: position * BigInt(b) / 10000n })), (t) => quotePoolSale(best, t), spot, tokenDecimals, best.quoteDecimals) : [];
+    const concentrated = pools.filter((p) => p.concentrated).length;
+    return {
+      curve,
+      pools,
+      best: { kind: "pool", name: best.name },
+      spot,
+      quoteSymbol: best.quoteSymbol,
+      quotes,
+      note: `Priced on the deepest constant-product pool (${best.name}) at a 0.25% fee${concentrated ? `; ${concentrated} concentrated pool${concentrated === 1 ? "" : "s"} found and deliberately not priced, since their vault balances are not what a trade moves through` : ""}. Pools against pairs other than SOL and USDC are not counted.`
+    };
+  }
+  function priced(sizes, sell, spot, tokenDecimals, quoteDecimals) {
+    return sizes.map(({ shareBps, tokensIn }) => {
+      const out2 = sell(tokensIn);
+      const atSpot = spot === null ? 0 : Number(tokensIn) / 10 ** tokenDecimals * spot;
+      const got = Number(out2) / 10 ** quoteDecimals;
+      return { shareBps, tokensIn, out: out2, realisedBps: atSpot > 0 ? Math.round(got / atSpot * 1e4) : 0 };
+    });
+  }
+
   // src/bouncer/spl.ts
   async function readSplDoor(rpc, input, chain2, options = {}) {
     if (!isSolanaAddress(input)) throw new Error(`${input} is not a Solana address`);
@@ -1714,6 +1902,7 @@
       metadata: null,
       metadataInline: false,
       holders: null,
+      market: null,
       notes: [],
       skipped: []
     };
@@ -1783,7 +1972,16 @@
         distinctOwners: byOwner.size
       };
     }, options.deadlineMs ?? 8e3);
-    await Promise.all([readName, readHolders]);
+    const readMarket2 = options.skipMarket ? Promise.resolve() : attempt(
+      "market",
+      async () => {
+        const supply = slip.mint.supply;
+        const position = supply > 0n ? supply / 100n : 0n;
+        slip.market = await readSolanaMarket(rpc, input, position, slip.mint.decimals);
+      },
+      options.deadlineMs ?? 8e3
+    );
+    await Promise.all([readName, readHolders, readMarket2]);
     slip.notes = splNotes(slip);
     return slip;
   }
@@ -1907,11 +2105,41 @@
     } else if (h) {
       notes.push({ level: "watch", code: "no-holders", text: "The node returned no token accounts for this mint: nobody holds it." });
     }
+    const mk = slip.market;
+    if (mk) {
+      const sol = (v) => (Number(v) / 1e9).toLocaleString("en-US", { maximumFractionDigits: 3 });
+      if (mk.curve && !mk.curve.complete) {
+        notes.push({
+          level: "watch",
+          code: "on-the-curve",
+          text: `This has not graduated: it trades against a pump.fun bonding curve holding ${sol(mk.curve.realSol)} SOL, not a pool. The curve is the only place to sell, its price is set by arithmetic rather than by anyone bidding, and it takes 1% of every sale.`
+        });
+      } else if (mk.curve?.complete && mk.pools.length === 0) {
+        notes.push({ level: "watch", code: "graduated-no-pool", text: "The bonding curve has graduated, but no pool against SOL or USDC turned up among the largest accounts holding this mint. Until one does, there is nothing here to sell into." });
+      }
+      if (mk.pools.length) {
+        const ranged = mk.pools.filter((p) => p.concentrated).length;
+        notes.push({
+          level: "info",
+          code: "pools",
+          text: `Trades in ${mk.pools.length} pool${mk.pools.length === 1 ? "" : "s"}: ${mk.pools.map((p) => p.name).join(", ")}.${ranged ? ` ${ranged} of them keep${ranged === 1 ? "s" : ""} liquidity in ranges, so their vault balances are not what a trade moves through and no sale is priced from them.` : ""}`
+        });
+      }
+      const whole = mk.quotes.find((q2) => q2.shareBps === 1e4);
+      if (whole && whole.realisedBps > 0 && whole.realisedBps < 5e3) {
+        notes.push({
+          level: "watch",
+          code: "exit-thin",
+          text: `Selling 1% of supply now would get only ${(whole.realisedBps / 100).toFixed(0)}% of the quoted price: the venue is thin enough that the sale moves it against you.`
+        });
+      }
+      if (!mk.best) notes.push({ level: "watch", code: "no-venue", text: mk.note });
+    }
     for (const s of slip.skipped) notes.push({ level: "info", code: "skipped", text: `${s.section} could not be read: ${s.reason}` });
     notes.push({
       level: "info",
-      code: "no-pools",
-      text: `Where this trades and what a sale would pay are not read on ${slip.chain.name} yet: the pool layouts of Raydium, Orca and Meteora each need their own reader, and guessing at them would be worse than saying so.`
+      code: "venues-read",
+      text: "Venues read here: the pump.fun bonding curve, and any Raydium, Orca, Meteora or pump.fun AMM pool that holds this mint among its largest accounts, paired against SOL or USDC. A pool against another pair, or on a venue not in that list, is not counted."
     });
     return notes;
   }
@@ -3378,15 +3606,15 @@
     const quotes = [];
     for (const shareBps of [1e3, 2500, 5e3, 1e4]) {
       const tokensIn = position * BigInt(shareBps) / 10000n;
-      const priced = quoteSale(best, tokensIn);
-      if (!priced || tokensIn <= 0n) continue;
+      const priced2 = quoteSale(best, tokensIn);
+      if (!priced2 || tokensIn <= 0n) continue;
       const reference = spot !== null ? spot * tokensIn / one : 0n;
       quotes.push({
         shareBps,
         tokensIn,
-        out: priced.out,
-        realisedBps: reference > 0n ? Number(priced.out * 10000n / reference) : 0,
-        beyondTick: priced.beyondTick
+        out: priced2.out,
+        realisedBps: reference > 0n ? Number(priced2.out * 10000n / reference) : 0,
+        beyondTick: priced2.beyondTick
       });
     }
     const crosses = quotes.some((q2) => q2.beyondTick);

@@ -14,6 +14,7 @@
  */
 import { base58Encode, isSolanaAddress } from "../chain/base58.js";
 import type { ChainConfig } from "../chain/chains.js";
+import { readSolanaMarket, type SolanaMarket } from "../chain/solanaPools.js";
 import {
   METADATA_PROGRAM,
   TOKEN_2022_PROGRAM,
@@ -53,6 +54,8 @@ export interface SplSlip {
   /** True when the name and symbol come from a Token-2022 extension rather than Metaplex. */
   metadataInline: boolean;
   holders: { top: SplHolder[]; top10Bps: number | null; distinctOwners: number | null } | null;
+  /** Where it trades and what a sale would pay: the bonding curve, or the pools. */
+  market: SolanaMarket | null;
   notes: DoorNote[];
   skipped: { section: string; reason: string }[];
 }
@@ -62,6 +65,8 @@ export interface SplOptions {
   topHolders?: number;
   /** How long one optional section may take before it is reported unread. */
   deadlineMs?: number;
+  /** Skip the market read (a handful of extra calls). */
+  skipMarket?: boolean;
 }
 
 export async function readSplDoor(rpc: SolanaRpc, input: string, chain: ChainConfig, options: SplOptions = {}): Promise<SplSlip> {
@@ -78,6 +83,7 @@ export async function readSplDoor(rpc: SolanaRpc, input: string, chain: ChainCon
     metadata: null,
     metadataInline: false,
     holders: null,
+    market: null,
     notes: [],
     skipped: [],
   };
@@ -164,7 +170,21 @@ export async function readSplDoor(rpc: SolanaRpc, input: string, chain: ChainCon
     };
   }, options.deadlineMs ?? 8_000);
 
-  await Promise.all([readName, readHolders]);
+  // Where it trades. Independent of both of the above, and the same rule
+  // applies: a slow or refused read costs this section, not the slip.
+  const readMarket = options.skipMarket
+    ? Promise.resolve()
+    : attempt(
+        "market",
+        async () => {
+          const supply = slip.mint!.supply;
+          const position = supply > 0n ? supply / 100n : 0n;
+          slip.market = await readSolanaMarket(rpc, input, position, slip.mint!.decimals);
+        },
+        options.deadlineMs ?? 8_000,
+      );
+
+  await Promise.all([readName, readHolders, readMarket]);
   slip.notes = splNotes(slip);
   return slip;
 }
@@ -306,11 +326,43 @@ export function splNotes(slip: SplSlip): DoorNote[] {
     notes.push({ level: "watch", code: "no-holders", text: "The node returned no token accounts for this mint: nobody holds it." });
   }
 
+  // ---- where it trades, and what walking out would actually pay
+  const mk = slip.market;
+  if (mk) {
+    const sol = (v: bigint) => (Number(v) / 1e9).toLocaleString("en-US", { maximumFractionDigits: 3 });
+    if (mk.curve && !mk.curve.complete) {
+      notes.push({
+        level: "watch",
+        code: "on-the-curve",
+        text: `This has not graduated: it trades against a pump.fun bonding curve holding ${sol(mk.curve.realSol)} SOL, not a pool. The curve is the only place to sell, its price is set by arithmetic rather than by anyone bidding, and it takes 1% of every sale.`,
+      });
+    } else if (mk.curve?.complete && mk.pools.length === 0) {
+      notes.push({ level: "watch", code: "graduated-no-pool", text: "The bonding curve has graduated, but no pool against SOL or USDC turned up among the largest accounts holding this mint. Until one does, there is nothing here to sell into." });
+    }
+    if (mk.pools.length) {
+      const ranged = mk.pools.filter((p) => p.concentrated).length;
+      notes.push({
+        level: "info",
+        code: "pools",
+        text: `Trades in ${mk.pools.length} pool${mk.pools.length === 1 ? "" : "s"}: ${mk.pools.map((p) => p.name).join(", ")}.${ranged ? ` ${ranged} of them keep${ranged === 1 ? "s" : ""} liquidity in ranges, so their vault balances are not what a trade moves through and no sale is priced from them.` : ""}`,
+      });
+    }
+    const whole = mk.quotes.find((q) => q.shareBps === 10_000);
+    if (whole && whole.realisedBps > 0 && whole.realisedBps < 5_000) {
+      notes.push({
+        level: "watch",
+        code: "exit-thin",
+        text: `Selling 1% of supply now would get only ${(whole.realisedBps / 100).toFixed(0)}% of the quoted price: the venue is thin enough that the sale moves it against you.`,
+      });
+    }
+    if (!mk.best) notes.push({ level: "watch", code: "no-venue", text: mk.note });
+  }
+
   for (const s of slip.skipped) notes.push({ level: "info", code: "skipped", text: `${s.section} could not be read: ${s.reason}` });
   notes.push({
     level: "info",
-    code: "no-pools",
-    text: `Where this trades and what a sale would pay are not read on ${slip.chain.name} yet: the pool layouts of Raydium, Orca and Meteora each need their own reader, and guessing at them would be worse than saying so.`,
+    code: "venues-read",
+    text: "Venues read here: the pump.fun bonding curve, and any Raydium, Orca, Meteora or pump.fun AMM pool that holds this mint among its largest accounts, paired against SOL or USDC. A pool against another pair, or on a venue not in that list, is not counted.",
   });
   return notes;
 }
@@ -347,6 +399,38 @@ export function splReceipt(slip: SplSlip): Receipt {
     sections.push({
       title: "Token-2022 extensions",
       rows: m.extensions.map((e) => ({ label: e.kind, value: describeExtension(e) })),
+    });
+  }
+  if (slip.market) {
+    const mk = slip.market;
+    const dec = m?.decimals ?? 6;
+    const amount = (v: bigint, d: number, frac = 4) => (Number(v) / 10 ** d).toLocaleString("en-US", { maximumFractionDigits: frac });
+    sections.push({
+      title: "Where it trades",
+      rows: [
+        { label: "venue", value: mk.best ? mk.best.name : "none found" },
+        ...(mk.curve
+          ? [
+              {
+                label: "bonding curve",
+                value: mk.curve.complete ? "graduated" : `${amount(mk.curve.realSol, 9)} SOL in, ${amount(mk.curve.realTokens, dec, 0)} tokens left`,
+                note: mk.curve.address,
+              },
+            ]
+          : []),
+        ...mk.pools.map((p) => ({
+          label: `${p.name}${p.concentrated ? " (ranged)" : ""}`,
+          value: `${amount(p.quoteReserve, p.quoteDecimals, 3)} ${p.quoteSymbol} · ${amount(p.tokenReserve, dec, 0)} tokens`,
+          note: p.address,
+        })),
+        ...(mk.spot !== null ? [{ label: "spot", value: `${mk.spot.toPrecision(6)} ${mk.quoteSymbol} per token` }] : []),
+        ...mk.quotes.map((q) => ({
+          label: `sell ${q.shareBps / 100}%`,
+          value: `${amount(q.out, mk.quoteSymbol === "SOL" ? 9 : 6, 6)} ${mk.quoteSymbol}`,
+          note: `${(q.realisedBps / 100).toFixed(1)}% of the marginal price`,
+        })),
+        ...(mk.note ? [{ label: "method", value: mk.note }] : []),
+      ],
     });
   }
   if (slip.holders && slip.holders.top.length) {
