@@ -84,7 +84,12 @@ export class SolanaRpc {
     this.timeoutMs = options.timeoutMs ?? 7_000;
     this.fetchImpl = options.fetchImpl ?? ((input: RequestInfo | URL, init?: RequestInit) => fetch(input, init));
     this.minSpacingMs = options.minSpacingMs ?? (options.fetchImpl ? 0 : 120);
-    this.retries = options.retries ?? 2;
+    // One pass over the endpoints, not two. A method a public endpoint does not
+    // serve — getTokenLargestAccounts is the one that bites — fails on every
+    // url, and the old default turned that into seven attempts and
+    // twenty-six seconds of certain failure. Rate limits get their own
+    // retry below; this is the budget for everything else.
+    this.retries = options.retries ?? 1;
   }
 
   get activeUrl(): string {
@@ -108,7 +113,8 @@ export class SolanaRpc {
     if (!READ_ONLY_METHODS.has(method)) throw new SolanaRpcError(`refusing non-read method ${method}`);
     let lastError: unknown;
     const startedAt = Date.now();
-    for (let attempt = 0; attempt <= this.urls.length * this.retries; attempt++) {
+    const maxAttempts = this.urls.length * Math.max(1, this.retries);
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
       const url = this.urls[this.activeIndex];
       try {
         await this.pace();

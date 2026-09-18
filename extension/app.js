@@ -1466,7 +1466,7 @@
       this.timeoutMs = options.timeoutMs ?? 7e3;
       this.fetchImpl = options.fetchImpl ?? ((input, init) => fetch(input, init));
       this.minSpacingMs = options.minSpacingMs ?? (options.fetchImpl ? 0 : 120);
-      this.retries = options.retries ?? 2;
+      this.retries = options.retries ?? 1;
     }
     get activeUrl() {
       return this.urls[this.activeIndex];
@@ -1486,7 +1486,8 @@
       if (!READ_ONLY_METHODS2.has(method)) throw new SolanaRpcError(`refusing non-read method ${method}`);
       let lastError;
       const startedAt = Date.now();
-      for (let attempt = 0; attempt <= this.urls.length * this.retries; attempt++) {
+      const maxAttempts = this.urls.length * Math.max(1, this.retries);
+      for (let attempt = 0; attempt < maxAttempts; attempt++) {
         const url = this.urls[this.activeIndex];
         try {
           await this.pace();
@@ -2024,7 +2025,10 @@
         distinctOwners: byOwner.size
       };
     })();
-    const readMarket2 = options.skipMarket ? Promise.resolve() : attempt(
+    if (!options.skipMarket && !scan) {
+      slip.skipped.push({ section: "market", reason: "it is found from the largest accounts holding the mint, and that read did not answer" });
+    }
+    const readMarket2 = options.skipMarket || !scan ? Promise.resolve() : attempt(
       "market",
       async () => {
         const supply = slip.mint.supply;

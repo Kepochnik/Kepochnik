@@ -274,3 +274,39 @@ test("the default request timeout leaves room to rotate within a section's budge
   const rpc = new SolanaRpc({ urls: ["https://a.invalid", "https://b.invalid"] });
   assert.ok((rpc as unknown as { timeoutMs: number }).timeoutMs <= 8_000);
 });
+
+test("a method no endpoint serves costs one pass, not several", async () => {
+  // The live profile that prompted this: getTokenLargestAccounts, one logical
+  // call, twenty-six seconds, failed. It is refused by every free endpoint in
+  // the list, and the retry budget turned that certainty into seven attempts.
+  let attempts = 0;
+  const rpc = new SolanaRpc({
+    urls: ["https://a.invalid", "https://b.invalid", "https://c.invalid"],
+    minSpacingMs: 0,
+    fetchImpl: (async () => {
+      attempts++;
+      return new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, error: { code: -32601, message: "method not supported" } }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }) as unknown as typeof fetch,
+  });
+
+  await assert.rejects(() => rpc.largestAccounts("mint"), /not supported/);
+  assert.equal(attempts, 3, `every endpoint should be asked once and no more; got ${attempts} attempts`);
+});
+
+test("the read profile says where the time went", async () => {
+  const rpc = new SolanaRpc({
+    urls: ["https://a.invalid"],
+    minSpacingMs: 0,
+    fetchImpl: (async (_input: RequestInfo | URL, _init?: RequestInit) =>
+      new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, result: 7 }), { status: 200, headers: { "content-type": "application/json" } })) as unknown as typeof fetch,
+  });
+  await rpc.slot();
+  await rpc.slot();
+  const stats = rpc.stats();
+  const slot = stats.find((s) => s.method === "getSlot");
+  assert.equal(slot?.calls, 2);
+  assert.equal(slot?.failures, 0);
+});
