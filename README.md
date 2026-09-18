@@ -5,7 +5,7 @@
 <p align="center"><strong>Check the list before you pay the cover.</strong><br/>Read-only door check for Pons V2 launches on Robinhood Chain, and for Radian (the Pons V2 port) on Circle's Arc.</p>
 
 <p align="center">
-  <img alt="tests 66 passing" src="https://img.shields.io/badge/tests-66_passing-c9a227?style=flat-square&labelColor=0e0d10" />
+  <img alt="tests 90 passing" src="https://img.shields.io/badge/tests-90_passing-c9a227?style=flat-square&labelColor=0e0d10" />
   <img alt="node 22+" src="https://img.shields.io/badge/node-22%2B-c9a227?style=flat-square&labelColor=0e0d10" />
   <img alt="runtime deps 0" src="https://img.shields.io/badge/runtime_deps-0-c9a227?style=flat-square&labelColor=0e0d10" />
   <img alt="Robinhood Chain 4663" src="https://img.shields.io/badge/Robinhood_Chain-4663-c9a227?style=flat-square&labelColor=0e0d10" />
@@ -27,6 +27,10 @@ Twenty-five thousand tokens launch on Pons every day. Each one has a door: a 99%
 BOUNCER reads it and prints a slip: **ID check** (did the factory really deploy this token, and can its code change), **cover charge** (is the door tax still open, what did the buys inside the window actually pay), **house rules** (the terms in plain words), **the room** (who bought, how much the creator funded, buys landing in the same block), the **exit door** (what 10 / 25 / 50 / 100% of a position fetches right now, on the curve or in the graduated pool), **one crew** (which of the first buyers were funded by the same hand), **lookalikes** (other tokens with the same ticker, and which came first) and the **dev report card** (what this deployer launched before and how it went). The stamp says `ON THE LIST` (the factory made it), `NOT A LAUNCH` (an ordinary token, checked as one) or `NOT ON THE LIST` (nothing there, or a token wearing a real launch's ticker). The notes say what to read before paying. Older Pons V1 tokens (fixed supply, Uniswap V3 pool from block one) are on the list too, with their own rules.
 
 **Any token gets a slip, not just launches.** For a contract the factory did not make, BOUNCER runs the **open door**: which switches the code carries (mint, pause, blacklist, fee, limit, trading, upgrade functions read off the bytecode's dispatcher), who holds the keys (`owner()`, renounced or not, `paused()`, the trading switch), **whether a holder could sell right now**, who holds the supply (top wallets, deployer's share, what sits in pools and contracts), where it trades (pools on the chain's Uniswap V3 factory and what they hold, the explorer's price feed), when it was deployed and when it last moved. V1 tokens get the same facts under their V1 rules.
+
+**Chains.** Robinhood Chain and Arc have a launchpad, so a token there is checked against its factory record first. Base, BNB Chain and Solana have none that BOUNCER knows, so every address is checked as an ordinary token, which is what most addresses are anywhere. Solana is read as SPL rather than as an EVM chain in disguise: the mint account says outright who can print more of a token and who can freeze a holder's account, and freezing is how a holder is stopped from selling. Token-2022 adds the rest, and each of those is a field rather than a guess about a dispatcher.
+
+**What a sale would pay.** Any token with a pool gets priced: Uniswap V3 and its forks from the price and the liquidity in the current tick, Uniswap V2 and its forks by exact constant product, Solidly forks such as Aerodrome. A Solidly stable pool uses an invariant this does not model and is reported unpriced rather than guessed at. `bouncer exit` and `bouncer wallet` answer for any token, not only for a launch.
 
 **The sale simulation.** A sale is a transfer into the pool, and the common honeypot is a contract that lets you move tokens between wallets and refuses that one transfer. So every holder is simulated twice with `eth_call`, once to a fresh wallet and once into the deepest pool; nothing is signed or sent. The owner and the deployer are excluded from the sample, because they are exactly the addresses such a contract exempts. Three outcomes, never two: it goes through, it reverts, or the node would not run it. A call that could not be run is never reported as a revert, so a rate-limited endpoint can never make a healthy token look like a trap.
 
@@ -217,7 +221,7 @@ docs/                       RULES, LIMITATIONS, LAUNCH-KIT
 ## Tests
 
 ```bash
-npm run check     # read-only check + build + 66 tests + site bundle, no network
+npm run check     # read-only check + build + 90 tests + site bundle, no network
 ```
 
 ## License
