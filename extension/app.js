@@ -1785,10 +1785,10 @@
     [WSOL]: { symbol: "SOL", decimals: 9 },
     [USDC]: { symbol: "USDC", decimals: 6 }
   };
-  async function readSolanaPools(rpc, mint) {
-    const largest = await rpc.largestAccounts(mint);
+  async function readSolanaPools(rpc, mint, scan) {
+    const largest = scan?.largest ?? await rpc.largestAccounts(mint);
     if (!largest.length) return [];
-    const accounts = await rpc.multipleAccounts(largest.map((l) => l.address));
+    const accounts = scan?.accounts ?? await rpc.multipleAccounts(largest.map((l) => l.address));
     const authorities = [];
     for (const account of accounts) {
       if (!account || account.data.length < 72) continue;
@@ -1806,7 +1806,7 @@
       candidates.push({ authority: authorities[i], program: account.owner, name: program.name, concentrated: program.concentrated });
     }
     if (!candidates.length) return [];
-    candidates.splice(10);
+    candidates.splice(6);
     const sides = await Promise.all(
       candidates.map((c) => rpc.tokenAccountsByOwner(c.authority).catch(() => null))
     );
@@ -1833,7 +1833,7 @@
     return pools.sort((a, b) => b.quoteReserve > a.quoteReserve ? 1 : b.quoteReserve < a.quoteReserve ? -1 : 0);
   }
   var SHARES = [1e3, 2500, 5e3, 1e4];
-  async function readSolanaMarket(rpc, mint, position, tokenDecimals) {
+  async function readSolanaMarket(rpc, mint, position, tokenDecimals, scan) {
     const empty = { curve: null, pools: [], best: null, spot: null, quoteSymbol: "SOL", quotes: [], note: "" };
     let curve = null;
     const curveAddress = pumpCurveAddress(mint);
@@ -1860,7 +1860,7 @@
     }
     let pools = [];
     try {
-      pools = await readSolanaPools(rpc, mint);
+      pools = await readSolanaPools(rpc, mint, scan);
     } catch {
       return { ...empty, curve, note: "The pools could not be read from this endpoint." };
     }
@@ -1956,18 +1956,35 @@
       },
       options.deadlineMs ?? 8e3
     );
-    const readHolders = attempt("holders", async () => {
-      const largest = (await rpc.largestAccounts(input)).slice(0, options.topHolders ?? 20);
+    let scan = null;
+    const readScan = attempt(
+      "holders",
+      async () => {
+        const largest = (await rpc.largestAccounts(input)).slice(0, options.topHolders ?? 20);
+        if (!largest.length) {
+          scan = { largest: [], accounts: [] };
+          return;
+        }
+        let owners = [];
+        try {
+          owners = await rpc.multipleAccounts(largest.map((a) => a.address));
+        } catch (error) {
+          slip.skipped.push({ section: "holder owners", reason: error instanceof Error ? error.message : String(error) });
+        }
+        scan = { largest, accounts: owners };
+      },
+      options.deadlineMs ?? 15e3
+    );
+    await readScan;
+    const readHolders = (async () => {
+      const found = scan;
+      if (!found) return;
+      const largest = found.largest;
       if (!largest.length) {
         slip.holders = { top: [], top10Bps: null, distinctOwners: null };
         return;
       }
-      let owners = [];
-      try {
-        owners = await rpc.multipleAccounts(largest.map((a) => a.address));
-      } catch (error) {
-        slip.skipped.push({ section: "holder owners", reason: error instanceof Error ? error.message : String(error) });
-      }
+      const owners = found.accounts;
       const supply = slip.mint.supply;
       const top = largest.map((a, i) => ({
         account: a.address,
@@ -1986,13 +2003,13 @@
         top10Bps: supply > 0n ? ranked.slice(0, 10).reduce((a, b) => a + b, 0) : null,
         distinctOwners: byOwner.size
       };
-    }, options.deadlineMs ?? 8e3);
+    })();
     const readMarket2 = options.skipMarket ? Promise.resolve() : attempt(
       "market",
       async () => {
         const supply = slip.mint.supply;
         const position = supply > 0n ? supply / 100n : 0n;
-        slip.market = await readSolanaMarket(rpc, input, position, slip.mint.decimals);
+        slip.market = await readSolanaMarket(rpc, input, position, slip.mint.decimals, scan ?? void 0);
       },
       // Several round trips rather than one, and a public endpoint paces
       // them. The eight seconds the other sections get was killing this one
