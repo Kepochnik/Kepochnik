@@ -45,7 +45,35 @@ export interface DexTable {
   v3Factories?: V3Factory[];
   v2Factories?: V2Factory[];
   solidlyFactories?: SolidlyFactory[];
+  /**
+   * The NonfungiblePositionManager that holds V3 positions as NFTs. Without it
+   * a V3 position can be found but not traced to whoever actually holds it, so
+   * the liquidity read says so rather than guessing.
+   */
+  v3PositionManager?: string;
 }
+
+/**
+ * Contracts that hold liquidity on somebody's behalf with a timer: address to
+ * the name to print. Only addresses that have been checked belong here. An
+ * address in this table is reported as locked, so a wrong entry would tell
+ * somebody their money is safe when it is not — the one mistake this file must
+ * never make. An unknown contract is deliberately NOT treated as a lock.
+ */
+export type LockerTable = Record<string, string>;
+
+/**
+ * No chain carries a third-party locker table yet, and that is deliberate
+ * rather than unfinished. Naming a contract here makes BOUNCER report the
+ * liquidity it holds as safe, so every entry has to be an address somebody has
+ * actually checked on that chain — not one recalled from a docs page. Until
+ * one is checked, a locker is read the same way as any other contract holding
+ * the liquidity: named by address, counted as withdrawable, and said so in
+ * words. That is wrong in the cautious direction.
+ *
+ * The launchpad's own locker is not in here because it does not need to be:
+ * the Pons V1 factory answers `locker()` on chain, which is exact.
+ */
 
 export interface ChainConfig {
   /** Short key used on the CLI (`--chain base`) and in site links. */
@@ -75,6 +103,8 @@ export interface ChainConfig {
   known?: Record<string, string>;
   /** Where ordinary tokens trade on this chain. */
   dex?: DexTable;
+  /** Contracts that hold liquidity with a timer, by address. See LockerTable. */
+  lockers?: LockerTable;
 }
 
 export const CHAINS: Record<string, ChainConfig> = {
@@ -100,6 +130,7 @@ export const CHAINS: Record<string, ChainConfig> = {
       weth: "0x0Bd7D308f8E1639FAb988df18A8011f41EAcAD73".toLowerCase(),
       wethSymbol: "WETH",
       v3Factories: [{ name: "Uniswap V3", address: "0x1f7d7550B1b028f7571E69A784071F0205FD2EfA".toLowerCase() }],
+      v3PositionManager: "0x943e6b11d6a2a0dD87eC5E23Cf58A63A8D9Ec2B7".toLowerCase(),
     },
   },
   base: {
@@ -120,6 +151,7 @@ export const CHAINS: Record<string, ChainConfig> = {
       v3Factories: [{ name: "Uniswap V3", address: "0x33128a8fC17869897dcE68Ed026d694621f6FDfD".toLowerCase() }],
       v2Factories: [{ name: "Uniswap V2", address: "0x8909Dc15e40173Ff4699343b6eB8132c65e18eC6".toLowerCase() }],
       solidlyFactories: [{ name: "Aerodrome", address: "0x420DD381b31aEf6683db6B902084cB0FFECe40Da".toLowerCase() }],
+      v3PositionManager: "0x03a520b32C04BF3bEEf7BEb72E919cf822Ed34f1".toLowerCase(),
     },
   },
   bnb: {
@@ -143,6 +175,7 @@ export const CHAINS: Record<string, ChainConfig> = {
         { name: "Uniswap V3", address: "0xdB1d10011AD0Ff90774D0C6Bb92e5C5c8b4461F7".toLowerCase() },
       ],
       v2Factories: [{ name: "PancakeSwap V2", address: "0xcA143Ce32Fe78f1f7019d7d551a6402fC5350c73".toLowerCase() }],
+      v3PositionManager: "0x46A15B0b27311cedF172AB29E4f4766fbE7F4364".toLowerCase(),
     },
   },
   solana: {

@@ -79,6 +79,10 @@ export interface DoorOptions {
   skipRoom?: boolean;
   skipCrew?: boolean;
   skipLookalikes?: boolean;
+  /** Skip reading who holds the pool's liquidity; it costs a log scan. */
+  skipLiquidity?: boolean;
+  /** How far back to look for the mints that opened the pool's positions. */
+  liquidityBlocks?: number;
   /** Token amount the exit door prices; default 1% of supply. */
   position?: bigint;
 }
@@ -142,7 +146,16 @@ export async function readDoor(rpc: RpcClient, input: string, options: DoorOptio
     // it trades); an ordinary token is also stamped as such.
     if (!id.registered) slip.stamp = "NOT A LAUNCH";
     await attempt("open door", async () => {
-      slip.open = await readOpenDoor(rpc, id.token, id.meta, head.number, { blockscout: options.blockscout ?? null, dex: chain.dex });
+      slip.open = await readOpenDoor(rpc, id.token, id.meta, head.number, {
+        blockscout: options.blockscout ?? null,
+        dex: chain.dex,
+        lockers: chain.lockers,
+        liquidity: options.skipLiquidity !== true,
+        // A week of this chain's blocks, capped so a fast chain does not turn
+        // one section into the whole read. A token older than the window reads
+        // as "no position opened here", which names the flag that widens it.
+        liquidityFromBlock: head.number - (options.liquidityBlocks ?? Math.min(500_000, Math.round(7 * 86_400 * chain.blocksPerSecond))),
+      });
     });
     if (!id.registered && launchpadKnown && options.blockscout && !options.skipLookalikes && id.meta?.symbol) {
       await attempt("lookalikes", async () => {
@@ -471,9 +484,35 @@ function openDoorFactNotes(slip: DoorSlip, o: OpenDoor): DoorNote[] {
   if (o.pools) {
     const live = o.pools.filter((p) => (p.quoteReserve ?? 0n) > 0n);
     const q = slip.chain.native;
-    if (live.length) notes.push({ level: "info", code: "pools", text: `Trades in ${live.length} ${live[0].dex} pool${live.length === 1 ? "" : "s"} against W${q.symbol}: the deepest (${(live[0].feeBps / 100).toFixed(2)}% fee) holds ${formatUnits(live[0].quoteReserve ?? 0n, q.decimals, 3)} W${q.symbol}. Whether that liquidity is locked is not read here, and pools on other venues or against other pairs are not counted.` });
+    if (live.length) notes.push({ level: "info", code: "pools", text: `Trades in ${live.length} ${live[0].dex} pool${live.length === 1 ? "" : "s"} against W${q.symbol}: the deepest (${(live[0].feeBps / 100).toFixed(2)}% fee) holds ${formatUnits(live[0].quoteReserve ?? 0n, q.decimals, 3)} W${q.symbol}. Pools on other venues or against other pairs are not counted.` });
     else if (o.pools.length) notes.push({ level: "watch", code: "pools-empty", text: `A ${o.pools[0].dex} pool exists but holds no W${q.symbol}: nothing to sell into there.` });
     else notes.push({ level: "info", code: "no-pool", text: `No W${q.symbol} pool on the chain's known DEX factories. It may trade elsewhere (another DEX, a Uniswap V4 pool, another pair) or not at all.` });
+  }
+
+  // ---- can they pull the liquidity out from under you
+  if (o.liquidity) {
+    const l = o.liquidity;
+    const held = l.holders.filter((h) => h.kind === "wallet" || h.kind === "contract");
+    if (l.burnedBps + l.lockedBps === 0 && l.freeBps > 0) {
+      notes.push({
+        level: "stop",
+        code: "liquidity-free",
+        text: `Every bit of the ${l.dex} pool's liquidity can be withdrawn: none of it is burned and none sits in a locker BOUNCER knows. ${held.length ? `It is held by ${held.slice(0, 3).map((h) => shortAddress(h.address)).join(", ")}${held.length > 3 ? ` and ${held.length - 3} more` : ""}.` : ""} Whoever holds it can take the pool away, and then there is nothing to sell into.`,
+      });
+    } else if (l.freeBps >= 2_000) {
+      notes.push({
+        level: "watch",
+        code: "liquidity-partly-free",
+        text: `${pct(l.freeBps)} of the ${l.dex} pool's liquidity can be withdrawn${l.burnedBps ? `, ${pct(l.burnedBps)} is burned` : ""}${l.lockedBps ? `, ${pct(l.lockedBps)} is in ${l.holders.find((h) => h.kind === "locked")?.name ?? "a locker"}` : ""}. Taking out the withdrawable part would thin the pool by that much.`,
+      });
+    } else if (l.burnedBps + l.lockedBps > 0) {
+      notes.push({
+        level: "info",
+        code: "liquidity-held",
+        text: `${pct(l.burnedBps + l.lockedBps)} of the ${l.dex} pool's liquidity cannot be withdrawn${l.burnedBps ? ` (${pct(l.burnedBps)} burned)` : ""}${l.lockedBps ? ` (${pct(l.lockedBps)} locked)` : ""}. A locked pool is not a promise about the price; it only means this liquidity stays put.`,
+      });
+    }
+    if (l.unread) notes.push({ level: "info", code: "liquidity-unread", text: `About the liquidity read: ${l.unread}.` });
   }
   const m = o.market;
   if (m && m.quotes.length && m.best) {
@@ -677,6 +716,23 @@ export function doorReceipt(slip: DoorSlip): Receipt {
             value: `${formatUnits(x.out, q.decimals, 4)} W${q.symbol}`,
             note: `${(x.realisedBps / 100).toFixed(1)}% of the marginal price${x.beyondTick ? " · leaves the current tick" : ""}`,
           })),
+          ...(o.liquidity
+            ? [
+                {
+                  label: "liquidity held by",
+                  value:
+                    o.liquidity.holders.length === 0
+                      ? o.liquidity.unread || "not read"
+                      : `${(o.liquidity.burnedBps / 100).toFixed(1)}% burned · ${(o.liquidity.lockedBps / 100).toFixed(1)}% locked · ${(o.liquidity.freeBps / 100).toFixed(1)}% withdrawable`,
+                  note: o.liquidity.unread || undefined,
+                },
+                ...o.liquidity.holders.slice(0, 5).map((h) => ({
+                  label: `  ${h.kind === "burned" ? "burned" : h.kind === "locked" ? (h.name ?? "locker") : h.kind}`,
+                  value: `${(h.shareBps / 100).toFixed(1)}%`,
+                  note: h.address,
+                })),
+              ]
+            : []),
           ...(o.market?.note ? [{ label: "method", value: o.market.note }] : []),
           ...(o.explorer?.priceUsd != null ? [{ label: "explorer price", value: money(o.explorer.priceUsd), note: [o.explorer.volume24hUsd !== null ? `${usd(o.explorer.volume24hUsd)} 24 h volume` : "", o.explorer.marketCapUsd !== null ? `${usd(o.explorer.marketCapUsd)} market cap` : ""].filter(Boolean).join(" · ") || undefined }] : []),
           ...(o.explorer?.isScam === true ? [{ label: "explorer flag", value: "scam" }] : []),
