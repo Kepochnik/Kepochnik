@@ -329,6 +329,45 @@ test("a rate limit is one short pause, not a long wait for the same refusal", as
   const started = Date.now();
   await assert.rejects(() => rpc.largestAccounts("mint"), /429|rate limited/i);
   const elapsed = Date.now() - started;
-  assert.ok(attempts <= 3, `a throttled method should not be hammered; got ${attempts} attempts`);
-  assert.ok(elapsed < 3_000, `backing off for ${elapsed}ms inside an eight-second section is how the section is lost`);
+  assert.ok(attempts <= 5, `a throttled method should not be hammered; got ${attempts} attempts`);
+  // Short enough to fit inside a section's budget, long enough that a brief
+  // throttle on a read the slip cannot do without does not kill the slip.
+  assert.ok(elapsed < 4_000, `backing off for ${elapsed}ms inside an eight-second section is how the section is lost`);
+  assert.ok(elapsed > 500, `giving up in ${elapsed}ms means a transient 429 takes the whole read down`);
+});
+
+test("one refused read does not take the whole slip down", async () => {
+  // The regression this pins: bounding the rate-limit retry to a single pause
+  // made a transient 429 on a mandatory read throw out of readSplDoor, so the
+  // reader got nothing instead of a slip with one section missing. Every
+  // optional section is allowed to fail; the slip is not.
+  let calls = 0;
+  const rpc = new SolanaRpc({
+    urls: ["https://a.invalid"],
+    minSpacingMs: 0,
+    retries: 1,
+    fetchImpl: (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      calls++;
+      const body = JSON.parse(String(init?.body ?? "{}")) as { method: string };
+      // The mint reads answer; everything heavier is throttled forever.
+      if (body.method === "getSlot") return new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, result: 1 }), { status: 200 });
+      if (body.method === "getBlockTime") return new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, result: 1_700_000_000 }), { status: 200 });
+      if (body.method === "getAccountInfo") {
+        const mint = Buffer.alloc(82);
+        mint[45] = 1; // initialized, no authorities
+        return new Response(
+          JSON.stringify({ jsonrpc: "2.0", id: 1, result: { value: { owner: TOKEN_PROGRAM, lamports: 1, executable: false, data: [mint.toString("base64"), "base64"] } } }),
+          { status: 200 },
+        );
+      }
+      return new Response("{}", { status: 429 });
+    }) as unknown as typeof fetch,
+  });
+
+  const slip = await readSplDoor(rpc, base58Encode(key(7)), CHAINS.solana, { deadlineMs: 2_000, marketDeadlineMs: 3_000 });
+  assert.equal(slip.stamp, "NOT A LAUNCH", "the slip must still be produced");
+  assert.ok(slip.mint, "the mint was readable and must be on it");
+  assert.ok(slip.skipped.length > 0, "the refused sections must be named");
+  assert.ok(slip.skipped.some((s) => /rate-limited/i.test(s.reason)), `a 429 should read as a rate limit; got ${JSON.stringify(slip.skipped)}`);
+  assert.ok(calls > 3);
 });

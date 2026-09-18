@@ -34,6 +34,9 @@ const READ_ONLY_METHODS = new Set([
   "getEpochInfo",
 ]);
 
+/** How many times a rate-limited call waits before giving the caller the refusal. */
+const RATE_LIMIT_RETRIES = 3;
+
 export class SolanaRpcError extends Error {
   constructor(message: string, readonly code?: number) {
     super(message);
@@ -114,6 +117,7 @@ export class SolanaRpc {
     let lastError: unknown;
     const startedAt = Date.now();
     const maxAttempts = this.urls.length * Math.max(1, this.retries);
+    let rateLimited = 0;
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
       const url = this.urls[this.activeIndex];
       try {
@@ -136,14 +140,16 @@ export class SolanaRpc {
       } catch (error) {
         lastError = error;
         if (error instanceof SolanaRpcError && error.code === 429) {
-          // Bounded on purpose. getTokenLargestAccounts is throttled per method
-          // on the only endpoint that serves it, so this path is taken often,
-          // and the old backoff — doubling to six seconds, several times over —
-          // is where twenty-six seconds of a fifteen-second section went. One
-          // short pause, then move on and let the caller report a rate limit,
-          // which is a truer answer than a long wait for the same refusal.
-          if (attempt >= 1) throw error;
-          await new Promise((resolve) => setTimeout(resolve, 400));
+          // Short but real. Two mistakes are available here and I made the
+          // second one after making the first: the original backoff doubled to
+          // six seconds over seven attempts, which is where twenty-six seconds
+          // of a fifteen-second section went; cutting it to a single pause
+          // then killed the whole slip the moment a mandatory read caught a
+          // transient 429. Three tries at 300/600/1200ms rides out a brief
+          // throttle in about two seconds and cannot eat a section.
+          if (rateLimited >= RATE_LIMIT_RETRIES) throw error;
+          await new Promise((resolve) => setTimeout(resolve, 300 * 2 ** rateLimited));
+          rateLimited++;
           continue;
         }
         this.activeIndex = (this.activeIndex + 1) % this.urls.length;

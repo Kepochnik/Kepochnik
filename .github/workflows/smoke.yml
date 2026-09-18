@@ -74,7 +74,10 @@ jobs:
               echo "--- $SUBJECT"
               timeout 240 $B door "$SUBJECT" --chain "$CHAIN" --format json > /tmp/m.json 2>/dev/null || true
               REQUIRE_VENUE=$([ "$SUBJECT" = "$MINT" ] && echo no || echo yes) node -e '
-                const j = JSON.parse(require("fs").readFileSync("/tmp/m.json","utf8"));
+                const raw = require("fs").readFileSync("/tmp/m.json","utf8").trim();
+                if (!raw) { console.error("::error::the door produced no output at all for this mint"); process.exit(1); }
+                let j;
+                try { j = JSON.parse(raw); } catch { console.error("::error::the door output is not JSON: " + raw.slice(0, 300)); process.exit(1); }
                 const m = j.market;
                 if (!m) {
                   console.error("::error::no market section on the slip at all");

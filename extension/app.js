@@ -1441,6 +1441,7 @@
     "getSignaturesForAddress",
     "getEpochInfo"
   ]);
+  var RATE_LIMIT_RETRIES = 3;
   var SolanaRpcError = class extends Error {
     constructor(message, code) {
       super(message);
@@ -1490,6 +1491,7 @@
       let lastError;
       const startedAt = Date.now();
       const maxAttempts = this.urls.length * Math.max(1, this.retries);
+      let rateLimited = 0;
       for (let attempt = 0; attempt < maxAttempts; attempt++) {
         const url = this.urls[this.activeIndex];
         try {
@@ -1512,8 +1514,9 @@
         } catch (error) {
           lastError = error;
           if (error instanceof SolanaRpcError && error.code === 429) {
-            if (attempt >= 1) throw error;
-            await new Promise((resolve) => setTimeout(resolve, 400));
+            if (rateLimited >= RATE_LIMIT_RETRIES) throw error;
+            await new Promise((resolve) => setTimeout(resolve, 300 * 2 ** rateLimited));
+            rateLimited++;
             continue;
           }
           this.activeIndex = (this.activeIndex + 1) % this.urls.length;
