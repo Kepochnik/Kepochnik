@@ -136,7 +136,14 @@ export class SolanaRpc {
       } catch (error) {
         lastError = error;
         if (error instanceof SolanaRpcError && error.code === 429) {
-          await new Promise((resolve) => setTimeout(resolve, 400 * 2 ** Math.min(attempt, 4)));
+          // Bounded on purpose. getTokenLargestAccounts is throttled per method
+          // on the only endpoint that serves it, so this path is taken often,
+          // and the old backoff — doubling to six seconds, several times over —
+          // is where twenty-six seconds of a fifteen-second section went. One
+          // short pause, then move on and let the caller report a rate limit,
+          // which is a truer answer than a long wait for the same refusal.
+          if (attempt >= 1) throw error;
+          await new Promise((resolve) => setTimeout(resolve, 400));
           continue;
         }
         this.activeIndex = (this.activeIndex + 1) % this.urls.length;

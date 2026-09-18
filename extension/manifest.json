@@ -1,6 +1,6 @@
 {
   "manifest_version": 3,
-  "name": "BOUNCER \u00b7 door check",
+  "name": "BOUNCER · door check",
   "version": "0.3.1",
   "description": "Read-only door check for any token: Robinhood Chain, Base, BNB Chain, Solana and Arc. Open the popup on a token page and see who controls it, whether a holder can sell right now, who holds the supply and where it trades. No wallet, no keys, no signing.",
   "permissions": [
@@ -25,7 +25,6 @@
     "https://rpc.testnet.arc.io/*",
     "https://rpc.testnet.arc.network/*",
     "https://solana-rpc.publicnode.com/*",
-    "https://solana.drpc.org/*",
     "https://testnet.arcscan.app/*"
   ],
   "action": {

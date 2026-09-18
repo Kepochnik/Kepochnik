@@ -109,7 +109,7 @@ export async function readSplDoor(rpc: SolanaRpc, input: string, chain: ChainCon
     try {
       await (deadlineMs ? withDeadline(run(), deadlineMs, section) : run());
     } catch (error) {
-      slip.skipped.push({ section, reason: error instanceof Error ? error.message : String(error) });
+      slip.skipped.push({ section, reason: reasonFor(error) });
     }
   };
 
@@ -217,6 +217,20 @@ export async function readSplDoor(rpc: SolanaRpc, input: string, chain: ChainCon
   await Promise.all([readName, readHolders, readMarket]);
   slip.notes = splNotes(slip);
   return slip;
+}
+
+/**
+ * Why a section is missing, in words a reader can act on. "Rate limited" and
+ * "did not answer" look the same in a stack trace and mean different things to
+ * somebody deciding whether to try again.
+ */
+function reasonFor(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  if (/\b429\b|rate limit|too many requests/i.test(message)) {
+    return `the public endpoint rate-limited this read (${message}). Point BOUNCER at your own endpoint with RPC_URL_SOLANA to get it.`;
+  }
+  if (/blocked|forbidden|\b403\b/i.test(message)) return `the public endpoint refused this read (${message})`;
+  return message;
 }
 
 /** Caps one read so a slow endpoint costs that section, not the whole slip. */

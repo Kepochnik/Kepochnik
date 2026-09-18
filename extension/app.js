@@ -567,13 +567,16 @@
       name: "Solana",
       family: "solana",
       chainId: 0,
-      // Ordered by what answers the heavy reads, not by what is quickest on a
-      // getSlot. The holder list and the pool search need getTokenLargestAccounts
-      // and getTokenAccountsByOwner, and the endpoints that are fastest on the
-      // light methods turned out not to serve those at all — putting them first
-      // cost both sections outright. The failover that makes this list worth
-      // having is in the client's request timeout, not in the order.
-      rpc: ["https://api.mainnet-beta.solana.com", "https://solana-rpc.publicnode.com", "https://solana.drpc.org"],
+      // Measured, not assumed. A probe asked eight public endpoints for the
+      // three methods this reader depends on:
+      //   api.mainnet-beta      getTokenAccountsByOwner 96ms, getMultipleAccounts
+      //                         58ms, getTokenLargestAccounts throttled (429)
+      //   solana-rpc.publicnode getMultipleAccounts 75ms, the other two blocked
+      // Everything else — drpc, ankr, public-rpc, omniatech, onfinality,
+      // blockeden — refused all three: paid plan, no key, or down. drpc was in
+      // this list and served nothing, so it was three wasted failover attempts
+      // on every call.
+      rpc: ["https://api.mainnet-beta.solana.com", "https://solana-rpc.publicnode.com"],
       blockscout: null,
       explorerUrl: "https://solscan.io",
       factory: null,
@@ -1509,7 +1512,8 @@
         } catch (error) {
           lastError = error;
           if (error instanceof SolanaRpcError && error.code === 429) {
-            await new Promise((resolve) => setTimeout(resolve, 400 * 2 ** Math.min(attempt, 4)));
+            if (attempt >= 1) throw error;
+            await new Promise((resolve) => setTimeout(resolve, 400));
             continue;
           }
           this.activeIndex = (this.activeIndex + 1) % this.urls.length;
@@ -2077,7 +2081,7 @@
       try {
         await (deadlineMs ? withDeadline(run(), deadlineMs, section2) : run());
       } catch (error) {
-        slip.skipped.push({ section: section2, reason: error instanceof Error ? error.message : String(error) });
+        slip.skipped.push({ section: section2, reason: reasonFor(error) });
       }
     };
     const inline = slip.mint.extensions.find((e) => e.kind === "token-metadata");
@@ -2158,6 +2162,14 @@
     await Promise.all([readName, readHolders, readMarket2]);
     slip.notes = splNotes(slip);
     return slip;
+  }
+  function reasonFor(error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (/\b429\b|rate limit|too many requests/i.test(message)) {
+      return `the public endpoint rate-limited this read (${message}). Point BOUNCER at your own endpoint with RPC_URL_SOLANA to get it.`;
+    }
+    if (/blocked|forbidden|\b403\b/i.test(message)) return `the public endpoint refused this read (${message})`;
+    return message;
   }
   async function withDeadline(work, ms, section2) {
     let timer;

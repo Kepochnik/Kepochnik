@@ -310,3 +310,25 @@ test("the read profile says where the time went", async () => {
   assert.equal(slot?.calls, 2);
   assert.equal(slot?.failures, 0);
 });
+
+test("a rate limit is one short pause, not a long wait for the same refusal", async () => {
+  // Measured on the live endpoint: getTokenLargestAccounts is throttled per
+  // method, so this path is taken often. The old backoff doubled to six
+  // seconds several times over, which is where twenty-six seconds of a
+  // fifteen-second section went.
+  let attempts = 0;
+  const rpc = new SolanaRpc({
+    urls: ["https://a.invalid", "https://b.invalid"],
+    minSpacingMs: 0,
+    fetchImpl: (async () => {
+      attempts++;
+      return new Response("{}", { status: 429 });
+    }) as unknown as typeof fetch,
+  });
+
+  const started = Date.now();
+  await assert.rejects(() => rpc.largestAccounts("mint"), /429|rate limited/i);
+  const elapsed = Date.now() - started;
+  assert.ok(attempts <= 3, `a throttled method should not be hammered; got ${attempts} attempts`);
+  assert.ok(elapsed < 3_000, `backing off for ${elapsed}ms inside an eight-second section is how the section is lost`);
+});
