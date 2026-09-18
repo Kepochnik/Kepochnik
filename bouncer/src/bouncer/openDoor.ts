@@ -101,6 +101,7 @@ export interface TransferProbe {
 export interface Pool {
   dex: string;
   address: string;
+  /** Swap fee in basis points: a 1% pool is 100, a 0.3% pool is 30. Divide by 100 to print a percentage. */
   feeBps: number;
   /** Reserves read as balances of the pool, in the token and in the wrapped native coin. */
   tokenReserve: bigint;

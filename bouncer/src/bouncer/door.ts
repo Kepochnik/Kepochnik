@@ -373,7 +373,7 @@ function openDoorFactNotes(slip: DoorSlip, o: OpenDoor): DoorNote[] {
   if (o.pools) {
     const live = o.pools.filter((p) => p.quoteReserve > 0n);
     const q = slip.chain.native;
-    if (live.length) notes.push({ level: "info", code: "pools", text: `Trades in ${live.length} ${live[0].dex} pool${live.length === 1 ? "" : "s"} against W${q.symbol}: the deepest (${live[0].feeBps.toFixed(2)}% fee) holds ${formatUnits(live[0].quoteReserve, q.decimals, 3)} W${q.symbol}. Whether that liquidity is locked is not read here.` });
+    if (live.length) notes.push({ level: "info", code: "pools", text: `Trades in ${live.length} ${live[0].dex} pool${live.length === 1 ? "" : "s"} against W${q.symbol}: the deepest (${(live[0].feeBps / 100).toFixed(2)}% fee) holds ${formatUnits(live[0].quoteReserve, q.decimals, 3)} W${q.symbol}. Whether that liquidity is locked is not read here.` });
     else if (o.pools.length) notes.push({ level: "watch", code: "pools-empty", text: `A ${o.pools[0].dex} pool exists but holds no W${q.symbol}: nothing to sell into there.` });
     else notes.push({ level: "info", code: "no-pool", text: `No ${slip.chain.native.symbol} pool on the chain's known DEX factories; it may trade elsewhere (another DEX, another pair) or not at all.` });
   }
@@ -491,7 +491,7 @@ export function doorReceipt(slip: DoorSlip): Receipt {
       sections.push({
         title: "Where it trades",
         rows: [
-          ...(o.pools ? (o.pools.length ? o.pools.map((p) => ({ label: `${p.dex} ${p.feeBps.toFixed(2)}%`, value: `${formatUnits(p.quoteReserve, q.decimals, 3)} W${q.symbol} · ${formatUnits(p.tokenReserve, slip.id.meta?.decimals ?? 18, 0)} tokens`, note: p.address })) : [{ label: "pools", value: `none against W${q.symbol} on the chain's known DEX factories` }]) : []),
+          ...(o.pools ? (o.pools.length ? o.pools.map((p) => ({ label: `${p.dex} ${(p.feeBps / 100).toFixed(2)}%`, value: `${formatUnits(p.quoteReserve, q.decimals, 3)} W${q.symbol} · ${formatUnits(p.tokenReserve, slip.id.meta?.decimals ?? 18, 0)} tokens`, note: p.address })) : [{ label: "pools", value: `none against W${q.symbol} on the chain's known DEX factories` }]) : []),
           ...(o.explorer?.priceUsd !== null && o.explorer?.priceUsd !== undefined ? [{ label: "explorer price", value: `$${o.explorer.priceUsd}`, note: [o.explorer.volume24hUsd !== null ? `${usd(o.explorer.volume24hUsd)} 24 h volume` : "", o.explorer.marketCapUsd !== null ? `${usd(o.explorer.marketCapUsd)} market cap` : ""].filter(Boolean).join(" · ") || undefined }] : []),
           ...(o.explorer?.isScam ? [{ label: "explorer flag", value: "scam" }] : []),
         ],
