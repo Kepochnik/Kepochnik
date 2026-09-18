@@ -15,7 +15,7 @@ A `STOP` note is written for every code finding on an address the factory does n
 
 ## Cover charge
 
-The factory holds two anti-snipe terms that every new launch snapshots at creation: `snipeTaxStartBps` (default 9 900 = 99%) charged on a buy's quote leg in the launch second, and `snipeTaxSeconds` (default 15, max 60), the window across which the curve decays it to zero. The deployer and their creator fee recipient are exempted by the factory; wallets the creator declared at launch are exempted too. Everyone else buying inside the window pays it, to the creator.
+The factory holds two anti-snipe terms that every new launch snapshots at creation: `snipeTaxStartBps` (9 900 = 99% as deployed) charged on a buy's quote leg in the launch second, and `snipeTaxSeconds` (15 as deployed, max 60; read as 3 s on 2026-09-18, so the owner does retune it), the window across which the curve decays it to zero. BOUNCER always reads the live values. The deployer and their creator fee recipient are exempted by the factory; wallets the creator declared at launch are exempted too. Everyone else buying inside the window pays it, to the creator.
 
 | Fact | Read | Rule |
 | --- | --- | --- |

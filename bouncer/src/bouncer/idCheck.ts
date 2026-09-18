@@ -110,6 +110,7 @@ async function tokenOfCurve(rpc: RpcClient, curve: string, block: number): Promi
 }
 
 async function readMetaSafely(rpc: RpcClient, token: string, block: number): Promise<TokenMeta | null> {
+  const one = async (fn: (typeof ERC20_FUNCTIONS)[keyof typeof ERC20_FUNCTIONS]) => (await rpc.callBatch([{ to: token, data: encodeCall(fn, []) }], block))[0];
   try {
     const results = await rpc.callBatch(
       [
@@ -126,7 +127,16 @@ async function readMetaSafely(rpc: RpcClient, token: string, block: number): Pro
     const [totalSupply] = decodeOutputs(ERC20_FUNCTIONS.totalSupply, results[3]) as [bigint];
     return { name, symbol, decimals: Number(decimals), totalSupply };
   } catch {
-    return null;
+    // A batch can be refused by an endpoint that accepts single calls; one more try, one call at a time.
+    try {
+      const [name] = decodeOutputs(ERC20_FUNCTIONS.name, await one(ERC20_FUNCTIONS.name)) as [string];
+      const [symbol] = decodeOutputs(ERC20_FUNCTIONS.symbol, await one(ERC20_FUNCTIONS.symbol)) as [string];
+      const [decimals] = decodeOutputs(ERC20_FUNCTIONS.decimals, await one(ERC20_FUNCTIONS.decimals)) as [bigint];
+      const [totalSupply] = decodeOutputs(ERC20_FUNCTIONS.totalSupply, await one(ERC20_FUNCTIONS.totalSupply)) as [bigint];
+      return { name, symbol, decimals: Number(decimals), totalSupply };
+    } catch {
+      return null;
+    }
   }
 }
 
