@@ -583,7 +583,10 @@ async function watchMarketToken(
   const pools = chain.dex ? await readPools(rpc, token.toLowerCase(), chain.dex, head, decimals) : [];
   const watch = (flagString(args.flags, "wallet") ?? "").split(",").map((w) => w.trim()).filter(Boolean);
   const minShareBps = Math.round(flagNumber(args.flags, "min", 0.25) * 100);
-  const backfill = flagNumber(args.flags, "backfill", Math.round(3600 * chain.blocksPerSecond));
+  // Ten minutes, not an hour: this tape is every transfer of the token, so on
+  // a busy one an hour of backfill is a wall of history before the first live
+  // line. --backfill takes it wider when that is what you want.
+  const backfill = flagNumber(args.flags, "backfill", Math.round(600 * chain.blocksPerSecond));
   write(
     `watching ${token.toLowerCase()}${meta ? ` (${meta.symbol})` : ""} on ${chain.name} from block ${Math.max(0, head - backfill)}\n` +
       `${pools.length ? `${pools.length} pool${pools.length > 1 ? "s" : ""}: ${pools.map((p) => `${p.dex} ${p.kind} ${shortAddress(p.address)}`).join(", ")}` : "no pool found, so every line below is a move between wallets"}\n` +
