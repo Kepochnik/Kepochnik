@@ -437,6 +437,15 @@ function summarySentence(slip: DoorSlip): string {
   return parts.map((x) => x.charAt(0).toUpperCase() + x.slice(1)).join(". ") + ".";
 }
 
+/**
+ * One collapsible section of a slip. Shared by every renderer: it used to be a
+ * local inside renderSlip, which meant the Solana slip referred to a name that
+ * did not exist there and threw for every visitor.
+ */
+function section(id: string, title: string, what: string, body: string, open: boolean): string {
+  return `<details class="sec" id="${id}"${open ? " open" : ""}><summary><h2>${title}</h2><span class="what">${what}</span><span class="chev">▶</span></summary><div class="body">${body}</div></details>`;
+}
+
 async function runSolanaDoor(address: string): Promise<void> {
   if (!isSolanaAddress(address)) return bad("Paste a Solana mint address: 32 bytes written in base58, which looks like EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v.");
   busy("reading the mint account…");
@@ -664,8 +673,6 @@ function renderSlip(slip: DoorSlip): void {
     if (!f.length && !x.code.empty) f.push(`<span class="flag ok">fixed code · no proxy · cannot self-destruct</span>`);
     return f.join("");
   };
-  const section = (id: string, title: string, what: string, body: string, open: boolean) =>
-    `<details class="sec" id="${id}"${open ? " open" : ""}><summary><h2>${title}</h2><span class="what">${what}</span><span class="chev">▶</span></summary><div class="body">${body}</div></details>`;
 
   const idBody = `<dl class="kv">
     <dt>chain</dt><dd>${esc(slip.chain.name)}${slip.chain.launchpad ? ` · ${esc(slip.chain.launchpad)}` : ""}</dd>
