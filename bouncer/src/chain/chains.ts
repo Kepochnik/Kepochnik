@@ -193,13 +193,16 @@ export const CHAINS: Record<string, ChainConfig> = {
     name: "Solana",
     family: "solana",
     chainId: 0,
-    // Ordered by what answers the heavy reads, not by what is quickest on a
-    // getSlot. The holder list and the pool search need getTokenLargestAccounts
-    // and getTokenAccountsByOwner, and the endpoints that are fastest on the
-    // light methods turned out not to serve those at all — putting them first
-    // cost both sections outright. The failover that makes this list worth
-    // having is in the client's request timeout, not in the order.
-    rpc: ["https://api.mainnet-beta.solana.com", "https://solana-rpc.publicnode.com", "https://solana.drpc.org"],
+    // Measured, not assumed. A probe asked eight public endpoints for the
+    // three methods this reader depends on:
+    //   api.mainnet-beta      getTokenAccountsByOwner 96ms, getMultipleAccounts
+    //                         58ms, getTokenLargestAccounts throttled (429)
+    //   solana-rpc.publicnode getMultipleAccounts 75ms, the other two blocked
+    // Everything else — drpc, ankr, public-rpc, omniatech, onfinality,
+    // blockeden — refused all three: paid plan, no key, or down. drpc was in
+    // this list and served nothing, so it was three wasted failover attempts
+    // on every call.
+    rpc: ["https://api.mainnet-beta.solana.com", "https://solana-rpc.publicnode.com"],
     blockscout: null,
     explorerUrl: "https://solscan.io",
     factory: null,
