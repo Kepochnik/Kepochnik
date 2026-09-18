@@ -17,11 +17,11 @@ import { doorCard } from "../../src/bouncer/card.js";
 import { coverChargeLine } from "../../src/bouncer/coverCharge.js";
 import { DEMO, DEMO_BLOCKSCOUT, DEMO_IMPOSTOR, DEMO_PLAIN, DEMO_V1, demoBlockscoutFetch, demoRpc } from "../../src/bouncer/demo.js";
 import { devReportLine, readDevReport, type DevReport } from "../../src/bouncer/devReport.js";
-import { findLaunchBlock, readDoor, slipJson, type DoorSlip } from "../../src/bouncer/door.js";
+import { findLaunchBlock, impostorOf, readDoor, slipJson, type DoorSlip } from "../../src/bouncer/door.js";
 import { lookalikeLine, registeredLookalikes } from "../../src/bouncer/lookalike.js";
 import { MASCOT_SVG_INNER } from "../../src/bouncer/mascot.js";
 import { oneCrewLine } from "../../src/bouncer/oneCrew.js";
-import { POWER_MEANING, powerKinds } from "../../src/bouncer/openDoor.js";
+import { moveProbes, POWER_MEANING, powerKinds, sellProbes } from "../../src/bouncer/openDoor.js";
 import { readLaunchPlan, type LaunchPlan } from "../../src/bouncer/planner.js";
 import { readPosition, type Position } from "../../src/bouncer/position.js";
 import { roomLine } from "../../src/bouncer/room.js";
@@ -424,30 +424,49 @@ function summarySentence(slip: DoorSlip): string {
 function openDoorSentence(slip: DoorSlip): string {
   const t = slip.id.token;
   if (t.code.empty) return `There is no contract at this address on ${slip.chain.name}.`;
+  if (t.code.delegatedTo) return `This is a wallet, not a token: its code is an EIP-7702 delegation its owner signed.`;
   const parts: string[] = [];
-  const real = slip.lookalikes ? registeredLookalikes(slip.lookalikes) : [];
-  if (real.length) parts.push(`a real ${slip.chain.launchpad} launch is called ${slip.lookalikes!.query} and this is not it`);
+  const impostor = impostorOf(slip);
+  if (impostor) parts.push(`an older ${slip.chain.launchpad} launch is called ${slip.lookalikes!.query} and this is not it`);
   if (slip.known) parts.push(`this is ${slip.known.replace(/\.$/, "")}`);
   else parts.push(`not a ${slip.chain.launchpad} launch, checked as an ordinary token`);
   if (t.proxyImplementation || t.code.minimalProxyTarget) parts.push("its code can be replaced (proxy)");
   if (t.code.opcodes.selfdestruct) parts.push("it can self-destruct");
   const o = slip.open;
   if (o) {
-    const kinds = powerKinds(o).filter((k) => k !== "exempt" && k !== "sweep");
-    if (o.paused) parts.push("transfers are paused right now");
-    if (o.tradingOpen && !o.tradingOpen.open) parts.push("trading is switched off");
-    if (kinds.length && o.owner && !o.owner.renounced) parts.push(`the owner can still ${kinds.join(", ")}`);
-    else if (kinds.length && o.owner?.renounced) parts.push(`ownership renounced, so its ${kinds.join(", ")} functions have no owner left`);
-    else if (o.owner?.renounced) parts.push("ownership renounced, no special powers seen");
-    else if (kinds.length) parts.push(`the code can ${kinds.join(", ")} and has no owner() to tell who may`);
-    else if (o.owner) parts.push("has an owner but no mint, pause, blacklist or fee switch was seen");
-    if (o.probes.length) {
-      const failed = o.probes.filter((p) => !p.ok).length;
-      parts.push(failed === o.probes.length ? "the largest wallets cannot transfer right now" : failed ? `${failed} of the ${o.probes.length} largest wallets cannot transfer` : "transfers work");
+    if (o.surfaceFrom === "implementation-unreadable") {
+      parts.push("the code it actually runs could not be read, so what it can do is unknown");
+      return sentence(parts);
     }
-    if (o.holders) parts.push(`the 10 largest wallets hold ${(o.holders.top10WalletsBps / 100).toFixed(0)}%`);
+    const kinds = powerKinds(o).filter((k) => k !== "exempt" && k !== "sweep");
+    if (o.paused === true) parts.push("paused() is true");
+    if (o.tradingOpen && !o.tradingOpen.open) parts.push("its trading switch is off");
+    if (kinds.length) parts.push(`the code carries ${kinds.join(", ")}${o.owner && !o.owner.renounced ? " and ownership is not renounced" : o.owner?.renounced ? " but ownership is renounced" : ""}`);
+    else if (o.owner?.renounced) parts.push("ownership renounced, no special powers seen");
+    else if (o.owner) parts.push("has an owner but no mint, pause, blacklist or fee switch was seen");
+    const sell = sellProbes(o);
+    const move = moveProbes(o);
+    const verdict = (ps: typeof sell, yes: string, no: string, some: string) => {
+      const reverted = ps.filter((p) => p.status === "reverts").length;
+      const ok = ps.filter((p) => p.status === "ok").length;
+      if (!ok && !reverted) return null;
+      if (reverted && !ok) return no;
+      if (reverted) return some;
+      return yes;
+    };
+    const sellSays = verdict(sell, "a 1-unit sale into the pool goes through", "a 1-unit sale into the pool reverts", "some wallets cannot send into the pool");
+    if (sellSays) parts.push(sellSays);
+    else {
+      const moveSays = verdict(move, "a 1-unit transfer to a fresh wallet goes through", "a 1-unit transfer reverts", "some wallets cannot transfer");
+      if (moveSays) parts.push(moveSays);
+    }
+    if (o.holders?.top10WalletsBps != null) parts.push(`the 10 largest wallets hold ${(o.holders.top10WalletsBps / 100).toFixed(0)}%`);
     if (o.deployer?.createdAt) parts.push(`deployed ${formatDuration(Math.max(0, slip.at.timestamp - o.deployer.createdAt))} ago`);
   }
+  return sentence(parts);
+}
+
+function sentence(parts: string[]): string {
   return parts.map((x) => x.charAt(0).toUpperCase() + x.slice(1)).join(". ") + ".";
 }
 
@@ -458,6 +477,7 @@ function renderSlip(slip: DoorSlip): void {
   const sym = meta ? esc(meta.symbol) : shortAddress(slip.subject);
   const name = meta ? esc(meta.name) : slip.known ? "known contract, not a launch" : slip.id.token.code.empty ? "no contract at this address" : "contract without a name";
   const o = slip.open;
+  const tradesText = o ? tradesBody(slip) : "";
   const qd = slip.rules?.quote ?? slip.chain.native;
   const amt = (v: bigint) => `${formatUnits(v, qd.decimals)} ${esc(qd.symbol)}`;
   const c = slip.cover;
@@ -581,7 +601,7 @@ function renderSlip(slip: DoorSlip): void {
     <div class="stack">
       ${section("s-id", "Is it real?", "Did the launchpad's factory deploy this token, and can its code change later?", idBody, !o)}
       ${o ? section("s-control", "Who controls it", "Which switches the code has (mint, pause, blacklist, fees), who holds the keys, and whether holders can move tokens right now.", controlBody(slip), true) : ""}
-      ${o && (o.pools || o.explorer) ? section("s-trades", "Where it trades", "Pools on the chain's DEX factories and what they hold, plus the explorer's price feed.", tradesBody(slip), true) : ""}
+      ${o && tradesText ? section("s-trades", "Where it trades", "Pools on the chain's DEX factories and what they hold, plus the explorer's price feed.", tradesText, true) : ""}
       ${o && (o.holders || o.deployer || o.activity) ? section("s-holders", "Who holds it", "The largest wallets, the deployer's share, what sits in pools and contracts, and when it last moved.", holdersBody(slip), true) : ""}
       ${registered && !v1 ? section("s-cover", "Door tax", `The anti-snipe tax in the first ${c?.terms.seconds ?? 15} seconds, and who paid it.`, coverBody, c?.status === "open") : ""}
       ${r ? section("s-rules", "Fees and rules", "What every trade costs, where the creator's cut goes, what buyback really does.", rulesBody, false) : ""}
@@ -645,40 +665,92 @@ function renderSlip(slip: DoorSlip): void {
   }
 }
 
+/**
+ * Strips control characters and clips a string that came from somewhere else.
+ * A revert reason is written by the contract's author, and an explorer label by
+ * whoever the explorer copied it from; neither gets to move the cursor around
+ * the page or run on for a kilobyte. Escaping still happens separately.
+ */
+function clean(text: string, max = 160): string {
+  const flat = text.replace(/[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u2028\u2029\u202a-\u202e\u2066-\u2069]/g, " ").replace(/\s+/g, " ").trim();
+  return flat.length > max ? `${flat.slice(0, max - 1)}…` : flat;
+}
+
+function pctText(bps: number | null): string {
+  return bps === null ? "unknown" : `${(bps / 100).toFixed(1)}%`;
+}
+
+function money(value: number): string {
+  if (!Number.isFinite(value)) return "unreadable";
+  if (value === 0) return "$0";
+  if (value >= 1) return `$${value.toFixed(2)}`;
+  const digits = Math.min(18, Math.max(2, 2 - Math.floor(Math.log10(Math.abs(value)))));
+  return `$${value.toFixed(digits)}`;
+}
+
+function usdShort(v: number): string {
+  return v >= 1e9 ? `$${(v / 1e9).toFixed(2)}B` : v >= 1e6 ? `$${(v / 1e6).toFixed(1)}M` : v >= 1e3 ? `$${(v / 1e3).toFixed(0)}K` : `$${v.toFixed(0)}`;
+}
+
+/** Turns one set of simulations into a tile value: YES, NO, a ratio, or an honest dash. */
+function probeVerdict(probes: { status: "ok" | "reverts" | "unread" }[]): { value: string; bad: boolean; note: string } {
+  if (!probes.length) return { value: "—", bad: false, note: "not simulated" };
+  const ok = probes.filter((p) => p.status === "ok").length;
+  const reverted = probes.filter((p) => p.status === "reverts").length;
+  if (!ok && !reverted) return { value: "—", bad: false, note: "the node would not run the simulation" };
+  if (reverted && !ok) return { value: "NO", bad: true, note: `reverts from ${reverted === 1 ? "the wallet tried" : `all ${reverted} wallets tried`}` };
+  if (reverted) return { value: `${ok}/${ok + reverted}`, bad: true, note: "some wallets can, some cannot" };
+  return { value: "YES", bad: false, note: `goes through from ${ok === 1 ? "the wallet tried" : `all ${ok} wallets tried`}` };
+}
+
 function openDoorTiles(slip: DoorSlip): string {
   const o = slip.open!;
   const kinds = powerKinds(o).filter((k) => k !== "exempt" && k !== "sweep");
-  const failed = o.probes.filter((p) => !p.ok).length;
-  const ownerV = o.owner === null ? "NONE" : o.owner.renounced ? "GONE" : "KEYS";
-  const ownerS = o.owner === null ? "no owner() function" : o.owner.renounced ? "ownership renounced" : `owner ${shortAddress(o.owner.address)}${o.owner.isContract ? " (contract)" : ""}`;
-  const moveV = o.paused ? "PAUSED" : o.tradingOpen && !o.tradingOpen.open ? "CLOSED" : o.probes.length ? (failed === o.probes.length ? "NO" : failed ? `${o.probes.length - failed}/${o.probes.length}` : "YES") : "—";
-  const moveS = o.paused ? "paused() is true" : o.tradingOpen && !o.tradingOpen.open ? `${o.tradingOpen.view} is false` : o.probes.length ? `of the ${o.probes.length} largest wallets can transfer now` : "no holder to simulate from";
-  const moveBad = o.paused || (o.tradingOpen && !o.tradingOpen.open) || (o.probes.length > 0 && failed === o.probes.length);
+  const unreadable = o.surfaceFrom === "implementation-unreadable";
+  const ownerV = unreadable ? "?" : o.ownerUnread ? "?" : o.owner === null ? "NONE" : o.owner.renounced ? "GONE" : "KEYS";
+  const ownerS = unreadable
+    ? "the code it runs could not be read"
+    : o.ownerUnread
+      ? "owner() did not answer"
+      : o.owner === null
+        ? "no owner() function"
+        : o.owner.renounced
+          ? "ownership renounced"
+          : `owner ${shortAddress(o.owner.address)}${o.owner.isContract ? " (contract)" : ""}`;
+  const sell = probeVerdict(sellProbes(o));
   const h = o.holders;
   return `<div class="tiles">
-    <div class="tile"><div class="l">Owner</div><div class="v ${o.owner && !o.owner.renounced && kinds.length ? "bad" : ""}">${ownerV}</div><div class="s">${esc(ownerS)}</div></div>
-    <div class="tile"><div class="l">Can still</div><div class="v ${kinds.length ? "bad" : ""}">${kinds.length ? kinds.length : "0"}</div><div class="s">${kinds.length ? esc(kinds.join(", ")) : "no mint, pause, blacklist, fee or trading switch seen"}</div></div>
-    <div class="tile"><div class="l">Can holders sell?</div><div class="v ${moveBad ? "bad" : ""}">${moveV}</div><div class="s">${esc(moveS)}</div></div>
-    <div class="tile"><div class="l">Top 10 wallets</div><div class="v ${h && h.top10WalletsBps >= 5_000 ? "bad" : ""}">${h ? `${(h.top10WalletsBps / 100).toFixed(0)}%` : "—"}</div><div class="s">${h ? `of supply · ${h.count ?? "?"} holders` : "explorer not reachable"}</div></div>
+    <div class="tile"><div class="l">Owner</div><div class="v ${!unreadable && o.owner && !o.owner.renounced && kinds.length ? "bad" : ""}">${ownerV}</div><div class="s">${esc(ownerS)}</div></div>
+    <div class="tile"><div class="l">Code can</div><div class="v ${kinds.length ? "bad" : ""}">${unreadable ? "?" : kinds.length || "0"}</div><div class="s">${unreadable ? "the implementation could not be read" : kinds.length ? esc(kinds.join(", ")) : "no mint, pause, blacklist, fee or trading switch seen"}</div></div>
+    <div class="tile"><div class="l">Sale into the pool</div><div class="v ${sell.bad ? "bad" : ""}">${sell.value}</div><div class="s">${esc(sell.note)}</div></div>
+    <div class="tile"><div class="l">Top 10 wallets</div><div class="v ${h && h.top10WalletsBps !== null && h.top10WalletsBps >= 5_000 ? "bad" : ""}">${h && h.top10WalletsBps !== null ? `${(h.top10WalletsBps / 100).toFixed(0)}%` : "—"}</div><div class="s">${h ? (h.top10WalletsBps === null ? "supply not readable" : `of supply · ${h.count ?? "?"} holders`) : "explorer not reachable"}</div></div>
   </div>`;
 }
 
 function controlBody(slip: DoorSlip): string {
   const o = slip.open!;
-  const pct = (b: number) => `${(b / 100).toFixed(1)}%`;
   const powers = o.powers.length
-    ? `<div class="tbl"><table class="buys"><thead><tr><th>function in the code</th><th>lets its caller</th></tr></thead><tbody>${o.powers.map((p) => `<tr><td><span class="mono">${esc(p.signature)}</span></td><td>${esc(POWER_MEANING[p.kind])}</td></tr>`).join("")}</tbody></table></div>`
-    : `<p style="color:var(--muted);font-size:13px;margin:8px 0 0">No mint, pause, blacklist, fee, limit, trading or upgrade function was seen among the ${o.selectors} functions in the code.</p>`;
-  const probes = o.probes.length
-    ? `<div class="tbl"><table class="buys"><thead><tr><th>transfer from</th><th>result</th></tr></thead><tbody>${o.probes.map((p) => `<tr><td><span class="mono">${shortAddress(p.from)}</span></td><td>${p.ok ? '<span class="flag ok">works</span>' : `<span class="flag bad">reverts</span> ${p.reason ? esc(p.reason) : ""}`}</td></tr>`).join("")}</tbody></table></div><p style="color:var(--dim);font-size:12px;margin:6px 0 0">Simulated on the chain with eth_call from the largest plain wallets holding it; nothing was sent.</p>`
-    : "";
+    ? `<div class="tbl"><table class="buys"><thead><tr><th>function in the code</th><th>lets whoever may call it</th></tr></thead><tbody>${o.powers.map((p) => `<tr><td><span class="mono">${esc(p.signature)}</span></td><td>${esc(POWER_MEANING[p.kind])}</td></tr>`).join("")}</tbody></table></div><p style="color:var(--dim);font-size:12px;margin:6px 0 0">A name in the dispatcher is not a permission. Whether each is guarded by the owner, by a role, or by nothing at all is not readable from bytecode.</p>`
+    : o.surfaceFrom === "implementation-unreadable"
+      ? `<p style="color:var(--muted);font-size:13px;margin:8px 0 0">The code this proxy points at could not be read, so no function list is shown. Its switches are unknown, not absent.</p>`
+      : `<p style="color:var(--muted);font-size:13px;margin:8px 0 0">No mint, pause, blacklist, fee, limit, trading or upgrade function was seen among the ${o.selectors} four-byte selectors in the code.</p>`;
+  const probeRows = o.probes.length
+    ? `<div class="tbl"><table class="buys"><thead><tr><th>simulated</th><th>from</th><th>result</th></tr></thead><tbody>${o.probes
+        .map(
+          (p) =>
+            `<tr><td>${p.target === "pool" ? "sale into the pool" : "transfer to a fresh wallet"}</td><td><span class="mono">${shortAddress(p.from)}</span>${p.source === "deployer" ? ' <span class="flag">deployer</span>' : ""}</td><td>${p.status === "ok" ? '<span class="flag ok">goes through</span>' : p.status === "reverts" ? `<span class="flag bad">reverts</span> ${esc(clean(p.reason ?? ""))}` : `<span class="flag">not run</span> ${esc(clean(p.reason ?? ""))}`}</td></tr>`,
+        )
+        .join("")}</tbody></table></div><p style="color:var(--dim);font-size:12px;margin:6px 0 0">Run with eth_call from wallets that hold the token; nothing was signed or sent. One unit, at this block: a fee on transfer, a cap on size, or a rule the owner flips tomorrow would not show up here.</p>`
+    : o.probesSkipped
+      ? `<p style="color:var(--muted);font-size:13px;margin:8px 0 0">No transfer was simulated: ${esc(o.probesSkipped)}.</p>`
+      : "";
   return `<dl class="kv">
-    <dt>owner</dt><dd>${o.owner === null ? "no owner() function in the code" : o.owner.renounced ? '<span class="flag ok">renounced</span> nobody can call owner-only functions' : `<span class="mono">${esc(o.owner.address)}</span>${o.owner.isContract ? " (a contract)" : ""}${o.ownerBalance ? ` · holds ${pct(o.ownerBalance.bps)}` : ""}${o.ownable ? "" : " · no renounceOwnership()"}`}</dd>
+    <dt>owner</dt><dd>${o.ownerUnread ? "owner() is in the code but the chain would not answer it" : o.owner === null ? "no owner() function in the code" : o.owner.renounced ? '<span class="flag ok">renounced</span> nobody can call owner-only functions' : `<span class="mono">${esc(o.owner.address)}</span>${o.owner.isContract ? " (a contract)" : ""}${o.ownerBalance?.bps != null ? ` · holds ${pctText(o.ownerBalance.bps)}` : ""}${o.ownable ? "" : " · no renounceOwnership()"}`}</dd>
     ${o.paused !== null ? `<dt>paused</dt><dd>${o.paused ? '<span class="flag bad">yes</span>' : '<span class="flag ok">no</span>'}</dd>` : ""}
     ${o.tradingOpen ? `<dt>${esc(o.tradingOpen.view)}</dt><dd>${o.tradingOpen.open ? '<span class="flag ok">true</span> trading is open' : '<span class="flag bad">false</span> trading is switched off'}</dd>` : ""}
     <dt>source</dt><dd>${o.verified === null ? "explorer not reachable" : o.verified ? '<span class="flag ok">verified</span> the code can be read on the explorer' : '<span class="flag bad">not verified</span> only the bytes can be read'}</dd>
-    <dt>read from</dt><dd>${o.surfaceFrom === "implementation" ? "the proxy's current implementation" : "the token's own bytecode"} · ${o.selectors} functions</dd>
-  </dl>${powers}${probes}`;
+    <dt>read from</dt><dd>${o.surfaceFrom === "implementation" ? "the proxy's current implementation" : o.surfaceFrom === "implementation-unreadable" ? '<span class="flag bad">unreadable</span> this is a proxy and its implementation code did not load' : "the token's own bytecode"} · ${o.selectors} four-byte selectors${o.constants > o.selectors ? `, ${o.constants - o.selectors} shorter constants ignored` : ""}</dd>
+  </dl>${powers}${probeRows}`;
 }
 
 function tradesBody(slip: DoorSlip): string {
@@ -686,32 +758,45 @@ function tradesBody(slip: DoorSlip): string {
   const q = slip.chain.native;
   const dec = slip.id.meta?.decimals ?? 18;
   const explorer = chain().blockscout;
-  const usd = (v: number) => (v >= 1e9 ? `$${(v / 1e9).toFixed(2)}B` : v >= 1e6 ? `$${(v / 1e6).toFixed(1)}M` : v >= 1e3 ? `$${(v / 1e3).toFixed(0)}K` : `$${v.toFixed(0)}`);
+  const amount = (v: bigint | null, decimals: number, fraction: number) => (v === null ? "unread" : formatUnits(v, decimals, fraction));
   const pools = o.pools
     ? o.pools.length
-      ? `<div class="tbl"><table class="buys"><thead><tr><th>pool</th><th>fee</th><th>W${esc(q.symbol)} inside</th><th>tokens inside</th></tr></thead><tbody>${o.pools.map((p) => `<tr><td>${explorer && mode !== "demo" ? `<a href="${explorer}/address/${p.address}" target="_blank" rel="noopener">${esc(p.dex)} · ${shortAddress(p.address)}</a>` : `${esc(p.dex)} · ${shortAddress(p.address)}`}</td><td>${(p.feeBps / 100).toFixed(2)}%</td><td>${formatUnits(p.quoteReserve, q.decimals, 3)}</td><td>${formatUnits(p.tokenReserve, dec, 0)}</td></tr>`).join("")}</tbody></table></div><p style="color:var(--dim);font-size:12px;margin:6px 0 0">Reserves are the pool's balances at this block. Whether the liquidity is locked is not read here.</p>`
-      : `<p style="color:var(--muted);font-size:13px;margin:0">No W${esc(q.symbol)} pool on the chain's known DEX factories. It may trade on another DEX, against another pair, or not at all.</p>`
+      ? `<div class="tbl"><table class="buys"><thead><tr><th>pool</th><th>fee</th><th>W${esc(q.symbol)} inside</th><th>tokens inside</th></tr></thead><tbody>${o.pools.map((p) => `<tr><td>${explorer && mode !== "demo" ? `<a href="${esc(explorer)}/address/${esc(p.address)}" target="_blank" rel="noopener">${esc(p.dex)} · ${shortAddress(p.address)}</a>` : `${esc(p.dex)} · ${shortAddress(p.address)}`}</td><td>${(p.feeBps / 100).toFixed(2)}%</td><td>${amount(p.quoteReserve, q.decimals, 3)}</td><td>${amount(p.tokenReserve, dec, 0)}</td></tr>`).join("")}</tbody></table></div><p style="color:var(--dim);font-size:12px;margin:6px 0 0">Reserves are the pool's balances at this block. Whether the liquidity is locked is not read here, and pools on other venues or against other pairs are not counted.</p>`
+      : `<p style="color:var(--muted);font-size:13px;margin:0">No W${esc(q.symbol)} pool on the chain's known DEX factories. It may trade on another DEX, in a Uniswap V4 pool, against another pair, or not at all.</p>`
     : "";
-  const feed = o.explorer && o.explorer.priceUsd !== null
-    ? `<dl class="kv"><dt>explorer price</dt><dd>$${o.explorer.priceUsd < 0.01 ? o.explorer.priceUsd.toPrecision(3) : o.explorer.priceUsd.toFixed(o.explorer.priceUsd < 1 ? 4 : 2)}${o.explorer.volume24hUsd !== null ? ` · ${usd(o.explorer.volume24hUsd)} in 24 h` : ""}${o.explorer.marketCapUsd !== null ? ` · ${usd(o.explorer.marketCapUsd)} market cap` : ""} <small style="color:var(--dim)">the explorer's feed, not the chain's</small></dd></dl>`
-    : "";
+  const feed =
+    o.explorer && o.explorer.priceUsd != null
+      ? `<dl class="kv"><dt>explorer price</dt><dd>${money(o.explorer.priceUsd)}${o.explorer.volume24hUsd !== null ? ` · ${usdShort(o.explorer.volume24hUsd)} in 24 h` : ""}${o.explorer.marketCapUsd !== null ? ` · ${usdShort(o.explorer.marketCapUsd)} market cap` : ""} <small style="color:var(--dim)">the explorer's feed, not the chain's</small></dd></dl>`
+      : "";
   return `${feed}${pools}`;
 }
 
 function holdersBody(slip: DoorSlip): string {
   const o = slip.open!;
   const h = o.holders;
-  const pct = (b: number) => `${(b / 100).toFixed(1)}%`;
-  const role = (x: NonNullable<typeof h>["top"][number]) => (x.role === "deployer" ? '<span class="flag">deployer</span>' : x.role === "owner" ? '<span class="flag">owner</span>' : x.role === "burn" ? '<span class="flag ok">burn</span>' : x.role === "token" ? '<span class="flag">the token</span>' : x.isContract ? `<span class="flag">${esc(x.name ?? "contract")}</span>` : "");
+  const role = (x: NonNullable<typeof h>["top"][number]) =>
+    x.role === "deployer"
+      ? '<span class="flag">deployer</span>'
+      : x.role === "owner"
+        ? '<span class="flag">owner</span>'
+        : x.role === "burn"
+          ? '<span class="flag ok">burn</span>'
+          : x.role === "token"
+            ? '<span class="flag">the token</span>'
+            : x.delegated
+              ? '<span class="flag">wallet · 7702</span>'
+              : x.isContract
+                ? `<span class="flag">${esc(x.name ?? "contract")}</span>`
+                : "";
   const explorer = chain().blockscout;
   return `<dl class="kv">
-    ${o.deployer ? `<dt>deployer</dt><dd><span class="mono">${esc(o.deployer.address)}</span> · holds ${pct(o.deployer.bps)}${o.deployer.createdAt ? ` · deployed ${isoUtc(o.deployer.createdAt)} (${formatDuration(Math.max(0, slip.at.timestamp - o.deployer.createdAt))} ago)` : ""}</dd>` : ""}
+    ${o.deployer ? `<dt>deployer</dt><dd><span class="mono">${esc(o.deployer.address)}</span> · holds ${pctText(o.deployer.bps)}${o.deployer.createdAt ? ` · deployed ${isoUtc(o.deployer.createdAt)} (${formatDuration(Math.max(0, slip.at.timestamp - o.deployer.createdAt))} ago)` : ""}</dd>` : ""}
     ${h ? `<dt>holders</dt><dd>${h.count ?? "unknown"}${h.transfers !== null ? ` · ${h.transfers} transfers indexed` : ""}</dd>
-    <dt>top 10 wallets</dt><dd>${pct(h.top10WalletsBps)} of supply (contracts and burn addresses not counted)</dd>
-    <dt>in contracts</dt><dd>${pct(h.contractsBps)} (pools, lockers, vaults, the token itself)${h.burnedBps ? ` · burned ${pct(h.burnedBps)}` : ""}</dd>` : ""}
+    <dt>top 10 wallets</dt><dd>${pctText(h.top10WalletsBps)} of supply, over the ${h.rows} rows the explorer returned. Contracts and burn addresses are not counted; wallets that delegated under EIP-7702 are.</dd>
+    <dt>in contracts</dt><dd>${pctText(h.contractsBps)} (pools, lockers, vaults, the token itself)${h.burnedBps ? ` · burned ${pctText(h.burnedBps)}` : ""}</dd>` : ""}
     ${o.activity ? `<dt>last transfer</dt><dd>${o.activity.lastTransferAt ? `${formatDuration(Math.max(0, slip.at.timestamp - o.activity.lastTransferAt))} ago · ${o.activity.recentWallets} wallets in the last ${o.activity.recent} transfers` : "none indexed by the explorer"}</dd>` : ""}
   </dl>
-  ${h && h.top.length ? `<div class="tbl"><table class="buys"><thead><tr><th>#</th><th>holder</th><th>share</th></tr></thead><tbody>${h.top.slice(0, 15).map((x, i) => `<tr><td>${i + 1}</td><td>${explorer && mode !== "demo" ? `<a href="${explorer}/address/${x.address}" target="_blank" rel="noopener"><span class="mono">${shortAddress(x.address)}</span></a>` : `<span class="mono">${shortAddress(x.address)}</span>`} ${role(x)}</td><td>${pct(x.bps)}</td></tr>`).join("")}</tbody></table></div>` : ""}`;
+  ${h && h.top.length ? `<div class="tbl"><table class="buys"><thead><tr><th>#</th><th>holder</th><th>share</th></tr></thead><tbody>${h.top.slice(0, 15).map((x, i) => `<tr><td>${i + 1}</td><td>${explorer && mode !== "demo" ? `<a href="${esc(explorer)}/address/${esc(x.address)}" target="_blank" rel="noopener"><span class="mono">${shortAddress(x.address)}</span></a>` : `<span class="mono">${shortAddress(x.address)}</span>`} ${role(x)}</td><td>${pctText(x.bps)}</td></tr>`).join("")}</tbody></table></div>` : ""}`;
 }
 
 function devSection(d: DevReport, subject: string | null, standalone: boolean, bodyOnly = false): string {

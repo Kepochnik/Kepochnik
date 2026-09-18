@@ -47,9 +47,32 @@ const READ_ONLY_METHODS = new Set([
 ]);
 
 export class RpcError extends Error {
-  constructor(message: string, readonly code?: number, readonly data?: unknown) {
+  constructor(
+    message: string,
+    readonly code?: number,
+    readonly data?: unknown,
+    /** "application" when the node answered with a JSON-RPC error, "transport" when the request itself failed. */
+    readonly kind: "transport" | "application" = "transport",
+  ) {
     super(message);
     this.name = "RpcError";
+  }
+
+  /**
+   * True when the node ran the call and the EVM reverted. That is a fact about
+   * the contract; every other error is a fact about the network, and the two
+   * must never be confused: a rate-limited probe is not a trapping token.
+   */
+  get isRevert(): boolean {
+    if (this.kind !== "application") return false;
+    if (typeof this.data === "string" && this.data.startsWith("0x")) return true;
+    if (this.code === 3) return true;
+    return /execution reverted|execution error|invalid opcode|out of gas/i.test(this.message);
+  }
+
+  /** True when the endpoint is asking us to slow down, whether it said so in HTTP or in JSON-RPC. */
+  get isRateLimit(): boolean {
+    return this.code === 429 || this.code === -32005 || /rate limited|rate limit|too many requests/i.test(this.message);
   }
 }
 
@@ -208,16 +231,19 @@ export class RpcClient {
         return payload.map((request) => {
           const item = byId.get(request.id);
           if (!item) throw new RpcError(`missing response for ${request.method}`);
-          if (item.error) throw new RpcError(item.error.message, item.error.code, item.error.data);
+          if (item.error) throw new RpcError(item.error.message, item.error.code, item.error.data, "application");
           return item.result;
         });
       } catch (error) {
         lastError = error;
-        const rateLimited = error instanceof RpcError && (error.code === 429 || /rate|limit|too many/i.test(error.message));
-        if (rateLimited) {
+        if (error instanceof RpcError && error.isRateLimit) {
           await new Promise((resolve) => setTimeout(resolve, 300 * 2 ** Math.min(attempt, 4)));
           continue;
         }
+        // A revert is the node's answer, not a failure to reach it: deterministic,
+        // so retrying it on another endpoint only spends round trips to get the
+        // same reply, and rotating the endpoint would blame the network for it.
+        if (error instanceof RpcError && error.isRevert) throw error;
         this.activeIndex = (this.activeIndex + 1) % this.urls.length;
         this.verifiedChain = false;
       }

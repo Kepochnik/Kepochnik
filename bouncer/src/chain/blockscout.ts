@@ -30,6 +30,13 @@ export interface TokenHolder {
   address: string;
   value: bigint;
   isContract: boolean;
+  /**
+   * True when the address has code only because its owner signed an EIP-7702
+   * delegation. The explorer reports those as contracts; they are wallets, and
+   * on a chain where many people use smart accounts, counting them as contracts
+   * understates how concentrated a token is among actual holders.
+   */
+  delegated: boolean;
   /** The explorer's label for the holder (a verified contract's name, a tag), when it has one. */
   name: string | null;
 }
@@ -83,7 +90,11 @@ export class BlockscoutClient {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.timeoutMs);
     try {
-      const response = await this.fetchImpl(`${this.baseUrl}${path}`, { method: "GET", headers: { accept: "application/json", "user-agent": BlockscoutClient.USER_AGENT }, signal: controller.signal });
+      const headers: Record<string, string> = { accept: "application/json" };
+      // Browsers drop a user-agent set on fetch, so setting it there is at best
+      // noise and at worst a preflight this endpoint has no reason to answer.
+      if (typeof globalThis.window === "undefined") headers["user-agent"] = BlockscoutClient.USER_AGENT;
+      const response = await this.fetchImpl(`${this.baseUrl}${path}`, { method: "GET", headers, signal: controller.signal });
       if (!response.ok) throw new Error(`blockscout ${response.status} for ${path}`);
       return (await response.json()) as T;
     } finally {
@@ -131,6 +142,7 @@ export class BlockscoutClient {
       address: (h.address?.hash ?? "").toLowerCase(),
       value: BigInt(h.value ?? "0"),
       isContract: Boolean(h.address?.is_contract),
+      delegated: (h.address?.proxy_type ?? "").toLowerCase() === "eip7702",
       name: h.address?.name ?? h.address?.metadata?.tags?.[0]?.name ?? null,
     }));
   }
@@ -181,7 +193,10 @@ export class BlockscoutClient {
     try {
       const body = await this.get<{ is_verified?: boolean; is_fully_verified?: boolean }>(`/api/v2/smart-contracts/${address}`);
       return Boolean(body.is_verified ?? body.is_fully_verified);
-    } catch {
+    } catch (error) {
+      // 404 is the explorer answering "no verified source here"; anything else
+      // means it did not answer, and the two must not read the same.
+      if (error instanceof Error && /\b404\b/.test(error.message)) return false;
       return null;
     }
   }
@@ -194,7 +209,7 @@ function numberOrNull(value: string | number | undefined): number | null {
 }
 
 interface BlockscoutHolder {
-  address?: { hash: string; is_contract?: boolean; name?: string | null; metadata?: { tags?: { name?: string }[] } | null };
+  address?: { hash: string; is_contract?: boolean; proxy_type?: string | null; name?: string | null; metadata?: { tags?: { name?: string }[] } | null };
   value?: string;
 }
 

@@ -1,18 +1,22 @@
 /**
- * OPEN DOOR: the check for a token the launchpad did not make. A Pons
- * launch comes with rules the factory enforces; an ordinary ERC-20 comes
- * with whatever its author wrote. So the questions change: who can still
- * change the rules (owner, mint, pause, blacklist, fees, upgrade), can a
- * plain holder move their tokens right now, who holds the supply, who
- * deployed it and when it last traded. Function names are read off the
- * bytecode's dispatcher; every balance is re-read from the chain; the
- * explorer supplies what the chain cannot list (holders, creator, recent
- * transfers). Nothing here is a score. Each line is a fact with a source.
+ * OPEN DOOR: the check for a token the launchpad did not make. A Pons launch
+ * comes with rules the factory enforces; an ordinary ERC-20 comes with
+ * whatever its author wrote. So the questions change: who can still change
+ * the rules (owner, mint, pause, blacklist, fees, upgrade), can a plain
+ * holder move their tokens right now, can they move them INTO THE POOL,
+ * which is the only transfer that is a sale, who holds the supply, where it
+ * trades, who deployed it and when it last moved.
+ *
+ * Two rules run through the whole file. First, a fact the chain refused to
+ * give is never printed as a fact: every read that can fail has a third
+ * state, and a rate-limited probe is never reported as a reverting token.
+ * Second, a share of supply is only a number when the supply is known;
+ * otherwise it is null and the slip says so rather than printing 0.0%.
  */
 import { decodeOutputs, encodeCall, selector, type FunctionAbi, type Hex } from "../chain/abi.js";
 import type { BlockscoutClient, TokenHolder, TokenTransfer } from "../chain/blockscout.js";
 import type { ChainConfig } from "../chain/chains.js";
-import { pushedSelectors } from "../chain/code.js";
+import { readSelectors } from "../chain/code.js";
 import { ERC20_FUNCTIONS, ZERO_ADDRESS } from "../chain/pons.js";
 import type { TokenMeta } from "../chain/reader.js";
 import { RpcError, type RpcClient } from "../chain/rpc.js";
@@ -26,7 +30,7 @@ export interface Power {
   signature: string;
 }
 
-/** What each power lets its holder do, in plain words. */
+/** What each power lets whoever may call it do, in plain words. */
 export const POWER_MEANING: Record<PowerKind, string> = {
   mint: "create new tokens out of thin air, diluting every holder",
   pause: "freeze every transfer",
@@ -43,6 +47,9 @@ export const POWER_MEANING: Record<PowerKind, string> = {
 /**
  * Signatures worth knowing about. The list is deliberately broad on the
  * names token generators use; a miss means "not seen", never "not there".
+ * burnFrom(address,uint256) is deliberately absent: it is the standard
+ * ERC20Burnable function that spends an allowance the holder granted, so
+ * calling it a power to destroy other people's tokens would be false.
  */
 export const POWER_SIGNATURES: Record<PowerKind, string[]> = {
   mint: ["mint(address,uint256)", "mint(uint256)", "mint(address)", "mintTo(address,uint256)", "issue(uint256)", "issue(address,uint256)"],
@@ -58,15 +65,10 @@ export const POWER_SIGNATURES: Record<PowerKind, string[]> = {
   ],
   trading: ["enableTrading()", "openTrading()", "startTrading()", "setTradingEnabled(bool)", "setTrading(bool)", "setTradingOpen(bool)", "enableTrading(bool)", "tradingStatus(bool)", "setTradingStatus(bool)", "toggleTrading()", "activateTrading()", "setTradingActive(bool)", "setLaunched(bool)"],
   upgrade: ["upgradeTo(address)", "upgradeToAndCall(address,bytes)", "setImplementation(address)", "changeImplementation(address)"],
-  "burn-others": ["burn(address,uint256)", "burnFrom(address,uint256)", "burnTokens(address,uint256)"],
+  "burn-others": ["burn(address,uint256)", "burnTokens(address,uint256)"],
   exempt: ["excludeFromFees(address,bool)", "excludeFromFee(address)", "excludeFromFee(address,bool)", "setExcludedFromFees(address,bool)", "excludeFromLimits(address,bool)", "setExcludedFromMaxTransaction(address,bool)", "excludeMultipleAccountsFromFees(address[],bool)", "setFeeExempt(address,bool)", "setIsExcludedFromFee(address,bool)", "excludeFromMaxTransaction(address,bool)", "setExcludeFromMaxWallet(address,bool)"],
   sweep: ["manualSwap()", "manualswap()", "manualSend()", "manualsend()", "clearStuckBalance()", "clearStuckBalance(uint256)", "withdrawStuckETH()", "withdrawStuckEth()", "withdrawStuckTokens(address)", "withdrawStuckTokens(address,uint256)", "rescueTokens(address)", "rescueTokens(address,uint256)", "rescueETH()", "rescueETH(uint256)", "claimStuckTokens(address)", "sweep(address)", "recoverERC20(address,uint256)"],
 };
-
-const V3_FACTORY_FUNCTIONS = {
-  getPool: { name: "getPool", inputs: ["address", "address", "uint24"], outputs: ["address"] },
-} as const satisfies Record<string, FunctionAbi>;
-const V3_FEE_TIERS = [100n, 500n, 3_000n, 10_000n];
 
 const OWNER_FUNCTIONS = {
   owner: { name: "owner", inputs: [], outputs: ["address"] },
@@ -75,27 +77,46 @@ const OWNER_FUNCTIONS = {
   transfer: { name: "transfer", inputs: ["address", "uint256"], outputs: ["bool"] },
 } as const satisfies Record<string, FunctionAbi>;
 
+const V3_FACTORY_FUNCTIONS = {
+  getPool: { name: "getPool", inputs: ["address", "address", "uint24"], outputs: ["address"] },
+} as const satisfies Record<string, FunctionAbi>;
+const V3_FEE_TIERS = [100n, 500n, 3_000n, 10_000n];
+
 /** Boolean views token generators use for "is trading open"; the first one the code carries is read. */
 const TRADING_VIEWS = ["tradingOpen()", "tradingEnabled()", "tradingActive()", "isTradingEnabled()", "tradingIsEnabled()", "launched()", "tradingLive()", "tradingStarted()"];
 const RENOUNCE_SIGNATURES = ["renounceOwnership()", "transferOwnership(address)"];
+const TRANSFER_SIGNATURE = "transfer(address,uint256)";
 
-/** Recipient used in the transfer simulation: a fixed, otherwise unused address. */
+/** Recipient used in the fresh-wallet simulation: a fixed, otherwise unused address. */
 export const PROBE_RECIPIENT = "0x000000000000000000000000000000000000b0ce";
 
 export interface HolderShare {
   address: string;
   value: bigint;
-  bps: number;
+  /** Share of total supply in basis points, or null when the supply could not be read. */
+  bps: number | null;
   isContract: boolean;
+  /** True when the address has code only because its owner signed an EIP-7702 delegation: a wallet, not a contract. */
+  delegated: boolean;
+  /** The explorer's label for the holder (a verified contract's name, a tag), when it has one. */
   name: string | null;
   role: "deployer" | "owner" | "token" | "burn" | null;
 }
 
+/**
+ * One simulated transfer. `status` has three values on purpose: a call the
+ * node refused to run is "unread", never "reverts". `target` says what was
+ * proven: moving tokens to a fresh wallet is not the same as selling.
+ */
 export interface TransferProbe {
   from: string;
-  ok: boolean;
-  /** The revert reason when it failed, if the node gave one. */
+  to: string;
+  target: "fresh-wallet" | "pool";
+  status: "ok" | "reverts" | "unread";
+  /** The revert reason when the EVM reverted, or the transport error when the call could not be run. */
   reason: string | null;
+  /** Where the sending wallet came from, so the notes can say so. */
+  source: "holder" | "deployer";
 }
 
 export interface Pool {
@@ -103,41 +124,51 @@ export interface Pool {
   address: string;
   /** Swap fee in basis points: a 1% pool is 100, a 0.3% pool is 30. Divide by 100 to print a percentage. */
   feeBps: number;
-  /** Reserves read as balances of the pool, in the token and in the wrapped native coin. */
-  tokenReserve: bigint;
-  quoteReserve: bigint;
+  /** Reserves read as balances of the pool, in the token and in the wrapped native coin; null when the balance call failed. */
+  tokenReserve: bigint | null;
+  quoteReserve: bigint | null;
 }
 
 export interface OpenDoor {
-  /** How many distinct four-byte constants the dispatcher carries. */
+  /** Full four-byte constants the code pushes: the size of its dispatcher, and the closest readable thing to a function count. */
   selectors: number;
-  /** Which bytecode the surface was read from: the token's own, or its proxy implementation's. */
-  surfaceFrom: "token" | "implementation";
+  /** Every PUSH1–PUSH4 constant, which is what signatures are matched against. Padded jump destinations live here too. */
+  constants: number;
+  /** Which bytecode the surface was read from. "implementation-unreadable" means the code that actually runs could not be fetched. */
+  surfaceFrom: "token" | "implementation" | "implementation-unreadable";
   powers: Power[];
   /** Whether renounceOwnership / transferOwnership exist, i.e. the standard Ownable shape. */
   ownable: boolean;
-  /** owner() as the chain returns it, when the function exists; renounced when it is the zero address. */
+  /** owner() as the chain returns it; null when the code has no such view OR the read failed, which `ownerUnread` tells apart. */
   owner: { address: string; renounced: boolean; isContract: boolean } | null;
+  /** True when the code has an owner view but the chain would not answer it. */
+  ownerUnread: boolean;
   paused: boolean | null;
   /** The value of the first trading-switch view the code has, when any. */
   tradingOpen: { view: string; open: boolean } | null;
-  /** Transfer simulations from the largest plain-wallet holders (eth_call, nothing is sent). */
+  /** Transfer simulations (eth_call, nothing is sent). Empty when the token has no transfer function. */
   probes: TransferProbe[];
+  /** Why no transfer was simulated, when none was. */
+  probesSkipped: string | null;
   verified: boolean | null;
-  deployer: { address: string; creationTx: string | null; createdAtBlock: number | null; createdAt: number | null; balance: bigint; bps: number } | null;
-  ownerBalance: { balance: bigint; bps: number } | null;
-  /** Explorer flags and price feed, when the explorer has them. */
-  explorer: { isScam: boolean; priceUsd: number | null; volume24hUsd: number | null; marketCapUsd: number | null } | null;
+  deployer: { address: string; creationTx: string | null; createdAtBlock: number | null; createdAt: number | null; balance: bigint; bps: number | null } | null;
+  ownerBalance: { balance: bigint; bps: number | null } | null;
+  /** Explorer flags and price feed. isScam is null when the flag could not be read, never a cheerful false. */
+  explorer: { isScam: boolean | null; priceUsd: number | null; volume24hUsd: number | null; marketCapUsd: number | null; tokenType: string | null } | null;
+  /** Why the explorer could not be read, when it could not. */
+  explorerError: string | null;
   /** Pools on the chain's known V3-style DEX factories, paired with the wrapped native coin; null when the chain lists none. */
   pools: Pool[] | null;
   holders: {
     count: number | null;
     transfers: number | null;
     top: HolderShare[];
-    /** Shares of total supply held by the top 10 wallets excluding contracts and burn addresses, and by contracts. */
-    top10WalletsBps: number;
-    contractsBps: number;
-    burnedBps: number;
+    /** How many rows the explorer returned, so the caller can say the shares are computed over one page. */
+    rows: number;
+    /** Shares in basis points, or null when the supply is unknown or no row of that kind was returned. */
+    top10WalletsBps: number | null;
+    contractsBps: number | null;
+    burnedBps: number | null;
   } | null;
   activity: { lastTransferAt: number | null; lastTransferBlock: number | null; recent: number; recentWallets: number } | null;
 }
@@ -146,7 +177,7 @@ export interface OpenDoorOptions {
   blockscout?: BlockscoutClient | null;
   /** The chain's DEX table; pools are skipped when absent. */
   dex?: ChainConfig["dex"];
-  /** How many plain-wallet holders to simulate a transfer from (default 3). */
+  /** How many holders to simulate a transfer from (default 3). */
   probeHolders?: number;
 }
 
@@ -154,11 +185,13 @@ const BURN_ADDRESSES = new Set([ZERO_ADDRESS, "0x0000000000000000000000000000000
 
 export async function readOpenDoor(rpc: RpcClient, token: ContractId, meta: TokenMeta | null, block: number, options: OpenDoorOptions = {}): Promise<OpenDoor> {
   const address = token.address.toLowerCase();
+
   // ---- the function surface, from the code that actually runs
   let surfaceFrom: OpenDoor["surfaceFrom"] = "token";
   let code = await rpc.getCode(address, block);
-  const implementation = token.proxyImplementation ?? token.code.minimalProxyTarget;
+  const implementation = token.proxyImplementation ?? token.proxyBeacon ?? token.code.minimalProxyTarget;
   if (implementation) {
+    surfaceFrom = "implementation-unreadable";
     try {
       const implCode = await rpc.getCode(implementation, block);
       if (implCode.length > 2) {
@@ -166,10 +199,10 @@ export async function readOpenDoor(rpc: RpcClient, token: ContractId, meta: Toke
         surfaceFrom = "implementation";
       }
     } catch {
-      // fall back to the proxy's own bytes
+      // stays unreadable: the caller must not read an empty surface as "no powers"
     }
   }
-  const present = pushedSelectors(code);
+  const { all: present, push4 } = readSelectors(code);
   const has = (signature: string) => present.has(selector(signature));
   const powers: Power[] = [];
   for (const kind of Object.keys(POWER_SIGNATURES) as PowerKind[]) {
@@ -177,9 +210,13 @@ export async function readOpenDoor(rpc: RpcClient, token: ContractId, meta: Toke
   }
   const ownable = RENOUNCE_SIGNATURES.some(has);
 
-  // ---- who is in charge, and is the door open
-  const owner = await readOwner(rpc, address, block, has);
-  const paused = has("paused()") ? await readBool(rpc, address, OWNER_FUNCTIONS.paused, block) : null;
+  // ---- who is in charge, and is the door open. The owner views are one call
+  // each and cost nothing to try, so they are asked whether or not the
+  // bytecode heuristic saw them: a dispatcher shape it does not recognise
+  // must not turn into "this token has no owner".
+  const ownerRead = await readOwner(rpc, address, block);
+  const owner = ownerRead.owner;
+  const paused = await readBool(rpc, address, OWNER_FUNCTIONS.paused, block);
   let tradingOpen: OpenDoor["tradingOpen"] = null;
   for (const view of TRADING_VIEWS) {
     if (!has(view)) continue;
@@ -188,76 +225,11 @@ export async function readOpenDoor(rpc: RpcClient, token: ContractId, meta: Toke
     break;
   }
 
-  // ---- the explorer's part: holders, creator, recent transfers, source
-  const supply = meta?.totalSupply ?? 0n;
-  const bps = (v: bigint) => (supply > 0n ? Number((v * 10_000n) / supply) : 0);
-  let holders: OpenDoor["holders"] = null;
-  let deployer: OpenDoor["deployer"] = null;
-  let activity: OpenDoor["activity"] = null;
-  let verified: boolean | null = null;
-  let explorer: OpenDoor["explorer"] = null;
-  let topHolders: TokenHolder[] = [];
-  const bs = options.blockscout;
-  if (bs) {
-    verified = await bs.isVerified(address);
-    try {
-      const info = await bs.addressInfo(address);
-      explorer = { isScam: info.isScam, priceUsd: null, volume24hUsd: null, marketCapUsd: null };
-      if (info.creator) {
-        let createdAtBlock: number | null = null;
-        let createdAt: number | null = null;
-        if (info.creationTx) {
-          try {
-            const receipt = (await rpc.send("eth_getTransactionReceipt", [info.creationTx])) as { blockNumber: string } | null;
-            if (receipt?.blockNumber) {
-              createdAtBlock = Number(BigInt(receipt.blockNumber));
-              createdAt = (await rpc.getBlock(createdAtBlock)).timestamp;
-            }
-          } catch {
-            // the creation block is a nicety
-          }
-        }
-        const balance = await readBalance(rpc, address, info.creator, block);
-        deployer = { address: info.creator, creationTx: info.creationTx, createdAtBlock, createdAt, balance, bps: bps(balance) };
-      }
-    } catch {
-      deployer = null;
-    }
-    try {
-      const [list, info] = await Promise.all([bs.tokenHolders(address, 50), bs.tokenInfo(address).catch(() => ({ holders: null, transfers: null, type: null, priceUsd: null, volume24hUsd: null, marketCapUsd: null }))]);
-      topHolders = list;
-      explorer = { isScam: explorer?.isScam ?? false, priceUsd: info.priceUsd, volume24hUsd: info.volume24hUsd, marketCapUsd: info.marketCapUsd };
-      const top: HolderShare[] = list.map((h) => ({
-        address: h.address,
-        value: h.value,
-        bps: bps(h.value),
-        isContract: h.isContract,
-        name: h.name,
-        role: h.address === deployer?.address ? "deployer" : owner && h.address === owner.address ? "owner" : h.address === address ? "token" : BURN_ADDRESSES.has(h.address) ? "burn" : null,
-      }));
-      const wallets = top.filter((h) => !h.isContract && h.role !== "burn" && h.role !== "token");
-      holders = {
-        count: info.holders,
-        transfers: info.transfers,
-        top,
-        top10WalletsBps: wallets.slice(0, 10).reduce((a, h) => a + h.bps, 0),
-        contractsBps: top.filter((h) => h.isContract || h.role === "token").reduce((a, h) => a + h.bps, 0),
-        burnedBps: top.filter((h) => h.role === "burn").reduce((a, h) => a + h.bps, 0),
-      };
-    } catch {
-      holders = null;
-    }
-    try {
-      const transfers = await bs.tokenTransfers(address);
-      activity = summariseActivity(transfers);
-    } catch {
-      activity = null;
-    }
-  }
+  // ---- shares of supply are only numbers when the supply is a number
+  const supply = meta?.totalSupply ?? null;
+  const bps = (v: bigint): number | null => (supply !== null && supply > 0n ? Number((v * 10_000n) / supply) : null);
 
-  const ownerBalance = owner && !owner.renounced ? await readBalance(rpc, address, owner.address, block).then((balance) => ({ balance, bps: bps(balance) })).catch(() => null) : null;
-
-  // ---- where it trades: pools on the chain's known DEX factories
+  // ---- where it trades, read before the probes so a sale can be simulated into the pool
   let pools: Pool[] | null = null;
   if (options.dex) {
     try {
@@ -267,61 +239,218 @@ export async function readOpenDoor(rpc: RpcClient, token: ContractId, meta: Toke
     }
   }
 
-  // ---- can a plain holder move tokens right now
-  const probes: TransferProbe[] = [];
-  const candidates = topHolders.filter((h) => !h.isContract && !BURN_ADDRESSES.has(h.address) && h.address !== address && h.value > 0n).map((h) => h.address);
-  if (!candidates.length && deployer && deployer.balance > 0n) candidates.push(deployer.address);
-  for (const from of candidates.slice(0, options.probeHolders ?? 3)) probes.push(await probeTransfer(rpc, address, from, block));
+  // ---- the explorer's part: holders, creator, recent transfers, source
+  let holders: OpenDoor["holders"] = null;
+  let deployer: OpenDoor["deployer"] = null;
+  let activity: OpenDoor["activity"] = null;
+  let verified: boolean | null = null;
+  let explorer: OpenDoor["explorer"] = null;
+  let explorerError: string | null = null;
+  let topHolders: TokenHolder[] = [];
+  const note = (error: unknown) => {
+    const text = error instanceof Error ? error.message : String(error);
+    explorerError = explorerError ? `${explorerError}; ${text}` : text;
+  };
+  const bs = options.blockscout;
+  if (bs) {
+    let info: { isScam: boolean; isVerified: boolean; creator: string | null; creationTx: string | null } | null = null;
+    try {
+      const read = await bs.addressInfo(address);
+      info = read;
+      verified = read.isVerified;
+      if (read.creator) {
+        let createdAtBlock: number | null = null;
+        let createdAt: number | null = null;
+        if (read.creationTx) {
+          try {
+            const receipt = (await rpc.send("eth_getTransactionReceipt", [read.creationTx])) as { blockNumber: string } | null;
+            if (receipt?.blockNumber) {
+              createdAtBlock = Number(BigInt(receipt.blockNumber));
+              createdAt = (await rpc.getBlock(createdAtBlock)).timestamp;
+            }
+          } catch {
+            // the creation block is a nicety
+          }
+        }
+        const balance = await readBalance(rpc, address, read.creator, block).catch(() => null);
+        deployer = { address: read.creator, creationTx: read.creationTx, createdAtBlock, createdAt, balance: balance ?? 0n, bps: balance === null ? null : bps(balance) };
+      }
+    } catch (error) {
+      note(error);
+    }
+    try {
+      const [list, tokenInfo] = await Promise.all([
+        bs.tokenHolders(address, 50),
+        bs.tokenInfo(address).catch(() => ({ holders: null, transfers: null, type: null, priceUsd: null, volume24hUsd: null, marketCapUsd: null })),
+      ]);
+      topHolders = list;
+      explorer = {
+        isScam: info ? info.isScam : null,
+        priceUsd: tokenInfo.priceUsd,
+        volume24hUsd: tokenInfo.volume24hUsd,
+        marketCapUsd: tokenInfo.marketCapUsd,
+        tokenType: tokenInfo.type,
+      };
+      const top: HolderShare[] = list.map((h) => ({
+        address: h.address,
+        value: h.value,
+        bps: bps(h.value),
+        isContract: h.isContract && !h.delegated,
+        delegated: h.delegated,
+        name: h.name,
+        role: h.address === deployer?.address ? "deployer" : owner && h.address === owner.address ? "owner" : h.address === address ? "token" : BURN_ADDRESSES.has(h.address) ? "burn" : null,
+      }));
+      const wallets = top.filter((h) => !h.isContract && h.role !== "burn" && h.role !== "token");
+      const share = (rows: HolderShare[]) => {
+        if (supply === null || supply <= 0n || !rows.length) return null;
+        return rows.reduce((a, h) => a + (h.bps ?? 0), 0);
+      };
+      holders = {
+        count: tokenInfo.holders,
+        transfers: tokenInfo.transfers,
+        top,
+        rows: top.length,
+        top10WalletsBps: share(wallets.slice(0, 10)),
+        contractsBps: share(top.filter((h) => h.isContract || h.role === "token")),
+        burnedBps: share(top.filter((h) => h.role === "burn")),
+      };
+    } catch (error) {
+      note(error);
+      holders = null;
+    }
+    if (explorer === null && info) explorer = { isScam: info.isScam, priceUsd: null, volume24hUsd: null, marketCapUsd: null, tokenType: null };
+    try {
+      activity = summariseActivity(await bs.tokenTransfers(address));
+    } catch (error) {
+      note(error);
+      activity = null;
+    }
+  }
 
-  return { selectors: present.size, surfaceFrom, powers, ownable, owner, paused, tradingOpen, probes, verified, deployer, ownerBalance, explorer, pools, holders, activity };
+  const ownerBalance =
+    owner && !owner.renounced
+      ? await readBalance(rpc, address, owner.address, block)
+          .then((balance) => ({ balance, bps: bps(balance) }))
+          .catch(() => null)
+      : null;
+
+  // ---- can a holder move it, and can they move it into the pool
+  const probes: TransferProbe[] = [];
+  let probesSkipped: string | null = null;
+  if (!has(TRANSFER_SIGNATURE)) {
+    probesSkipped =
+      surfaceFrom === "implementation-unreadable"
+        ? "the code that actually runs could not be read, so no transfer was simulated"
+        : "this contract has no transfer(address,uint256) function, so it is not an ERC-20 and no transfer was simulated";
+  } else {
+    const candidates = await probeCandidates(rpc, address, block, topHolders, deployer?.address ?? null, owner?.address ?? null, options.probeHolders ?? 3);
+    if (!candidates.length) {
+      probesSkipped = "no wallet with a readable balance to simulate from";
+    } else {
+      const deepest = (pools ?? []).filter((p) => (p.quoteReserve ?? 0n) > 0n)[0] ?? null;
+      for (const c of candidates) {
+        probes.push(await probeTransfer(rpc, address, c.address, PROBE_RECIPIENT, "fresh-wallet", c.source, block));
+        if (deepest) probes.push(await probeTransfer(rpc, address, c.address, deepest.address, "pool", c.source, block));
+      }
+    }
+  }
+
+  return {
+    selectors: push4.size,
+    constants: present.size,
+    surfaceFrom,
+    powers,
+    ownable,
+    owner,
+    ownerUnread: ownerRead.unread,
+    paused,
+    tradingOpen,
+    probes,
+    probesSkipped,
+    verified,
+    deployer,
+    ownerBalance,
+    explorer,
+    explorerError,
+    pools,
+    holders,
+    activity,
+  };
 }
 
 /**
- * Asks each listed V3-style factory for a token/WETH pool at every fee
- * tier, then reads the reserves as the pool's two balances. One batch for
- * the lookups, one for the balances. A pool with nothing in it is listed
- * with zero reserves so the caller can say "exists, empty".
+ * Picks the wallets to simulate from, and re-reads their balances on chain:
+ * the explorer's numbers are an index, and an index can be stale. The owner
+ * and the deployer are excluded, because they are exactly the addresses a
+ * honeypot exempts, so proving THEY can transfer proves nothing about anyone
+ * else. Only when no other wallet is available does the deployer stand in,
+ * and the probe records that it did.
  */
-export async function readPools(rpc: RpcClient, token: string, dex: NonNullable<ChainConfig["dex"]>, block: number): Promise<Pool[]> {
-  const asks: { dex: string; fee: bigint }[] = [];
-  const calls: { to: string; data: Hex }[] = [];
-  for (const f of dex.v3Factories) {
-    for (const fee of V3_FEE_TIERS) {
-      asks.push({ dex: f.name, fee });
-      calls.push({ to: f.address, data: encodeCall(V3_FACTORY_FUNCTIONS.getPool, [token, dex.weth, fee]) });
+async function probeCandidates(
+  rpc: RpcClient,
+  token: string,
+  block: number,
+  holders: TokenHolder[],
+  deployer: string | null,
+  owner: string | null,
+  want: number,
+): Promise<{ address: string; source: TransferProbe["source"] }[]> {
+  const excluded = new Set([token, deployer, owner].filter((x): x is string => Boolean(x)).map((x) => x.toLowerCase()));
+  const shortlist = holders
+    .filter((h) => (!h.isContract || h.delegated) && !BURN_ADDRESSES.has(h.address) && !excluded.has(h.address) && h.value > 0n)
+    .slice(0, Math.max(want * 3, 9))
+    .map((h) => h.address);
+  const out: { address: string; source: TransferProbe["source"] }[] = [];
+  if (shortlist.length) {
+    try {
+      const balances = await rpc.callBatch(
+        shortlist.map((who) => ({ to: token, data: encodeCall(ERC20_FUNCTIONS.balanceOf, [who]) })),
+        block,
+      );
+      shortlist.forEach((who, i) => {
+        try {
+          const [balance] = decodeOutputs(ERC20_FUNCTIONS.balanceOf, balances[i]) as [bigint];
+          if (balance > 0n) out.push({ address: who, source: "holder" });
+        } catch {
+          // a balance that will not decode is not a candidate
+        }
+      });
+    } catch {
+      // the batch failed; fall through to the explorer's own ordering
+      for (const who of shortlist) out.push({ address: who, source: "holder" });
     }
   }
-  const raws = await rpc.callBatch(calls, block);
-  const found: Pool[] = [];
-  raws.forEach((raw, i) => {
-    try {
-      const [pool] = decodeOutputs(V3_FACTORY_FUNCTIONS.getPool, raw) as [string];
-      if (pool && pool !== ZERO_ADDRESS) found.push({ dex: asks[i].dex, address: pool, feeBps: Number(asks[i].fee) / 100, tokenReserve: 0n, quoteReserve: 0n });
-    } catch {
-      // a factory that is not a V3 factory answers garbage; skip it
-    }
-  });
-  if (!found.length) return found;
-  const balances = await rpc.callBatch(found.flatMap((p) => [{ to: token, data: encodeCall(ERC20_FUNCTIONS.balanceOf, [p.address]) }, { to: dex.weth, data: encodeCall(ERC20_FUNCTIONS.balanceOf, [p.address]) }]), block);
-  found.forEach((p, i) => {
-    p.tokenReserve = decodeOutputs(ERC20_FUNCTIONS.balanceOf, balances[i * 2])[0] as bigint;
-    p.quoteReserve = decodeOutputs(ERC20_FUNCTIONS.balanceOf, balances[i * 2 + 1])[0] as bigint;
-  });
-  return found.sort((a, b) => (b.quoteReserve > a.quoteReserve ? 1 : b.quoteReserve < a.quoteReserve ? -1 : 0));
+  if (!out.length && deployer) {
+    const balance = await readBalance(rpc, token, deployer, block).catch(() => 0n);
+    if (balance > 0n) out.push({ address: deployer, source: "deployer" });
+  }
+  return out.slice(0, want);
 }
 
-async function readOwner(rpc: RpcClient, token: string, block: number, has: (s: string) => boolean): Promise<OpenDoor["owner"]> {
-  const fn = has("owner()") ? OWNER_FUNCTIONS.owner : has("getOwner()") ? OWNER_FUNCTIONS.getOwner : null;
-  if (!fn) return null;
-  try {
-    const [raw] = await rpc.callBatch([{ to: token, data: encodeCall(fn, []) }], block);
-    const [address] = decodeOutputs(fn, raw) as [string];
+async function readOwner(rpc: RpcClient, token: string, block: number): Promise<{ owner: OpenDoor["owner"]; unread: boolean }> {
+  for (const fn of [OWNER_FUNCTIONS.owner, OWNER_FUNCTIONS.getOwner]) {
+    let address: string;
+    try {
+      const [raw] = await rpc.callBatch([{ to: token, data: encodeCall(fn, []) }], block);
+      [address] = decodeOutputs(fn, raw) as [string];
+    } catch (error) {
+      // A revert means this token has no such view; anything else means the
+      // chain would not answer, which is not the same thing at all.
+      if (error instanceof RpcError && error.isRevert) continue;
+      return { owner: null, unread: true };
+    }
     const renounced = address === ZERO_ADDRESS || BURN_ADDRESSES.has(address);
-    const isContract = renounced ? false : (await rpc.getCode(address, block)).length > 2;
-    return { address, renounced, isContract };
-  } catch {
-    return null;
+    let isContract = false;
+    if (!renounced) {
+      try {
+        isContract = (await rpc.getCode(address, block)).length > 2;
+      } catch {
+        // an unread code size does not make the owner disappear
+      }
+    }
+    return { owner: { address, renounced, isContract }, unread: false };
   }
+  return { owner: null, unread: false };
 }
 
 async function readBool(rpc: RpcClient, token: string, fn: FunctionAbi, block: number): Promise<boolean | null> {
@@ -341,20 +470,36 @@ async function readBalance(rpc: RpcClient, token: string, who: string, block: nu
 }
 
 /**
- * eth_call of transfer(PROBE_RECIPIENT, 1) with `from` set to a real holder.
- * The node runs the token's code against the current state and reports
- * whether it would revert; nothing is signed or sent. A revert from a
- * plain wallet that holds tokens is what a paused, closed or blacklisting
- * token looks like from the outside.
+ * eth_call of transfer(to, 1) with `from` set to a real holder. The node runs
+ * the token's code against the current state and reports whether it would
+ * revert; nothing is signed or sent. Aimed at a fresh wallet it answers "can
+ * tokens move at all"; aimed at the pool it answers the question people
+ * actually have, because a sale is a transfer into the pool and the common
+ * honeypot is a contract that allows the first and refuses the second.
  */
-export async function probeTransfer(rpc: RpcClient, token: string, from: string, block: number): Promise<TransferProbe> {
-  const data = encodeCall(OWNER_FUNCTIONS.transfer, [PROBE_RECIPIENT, 1n]);
+export async function probeTransfer(
+  rpc: RpcClient,
+  token: string,
+  from: string,
+  to: string,
+  target: TransferProbe["target"],
+  source: TransferProbe["source"],
+  block: number,
+): Promise<TransferProbe> {
+  const data = encodeCall(OWNER_FUNCTIONS.transfer, [to, 1n]);
   try {
     const raw = (await rpc.send("eth_call", [{ from, to: token, data }, toTag(block)])) as Hex;
-    const ok = raw === "0x" || raw.length < 66 || BigInt(raw.slice(0, 66)) !== 0n;
-    return { from, ok, reason: ok ? null : "transfer returned false" };
+    // A standard ERC-20 returns a bool. Returning nothing is the old
+    // non-standard shape (USDT and friends) and counts as success; anything
+    // shorter than a word that is not empty is not an answer we can read.
+    if (raw === "0x") return { from, to, target, status: "ok", reason: null, source };
+    if (raw.length < 66) return { from, to, target, status: "unread", reason: "the call returned data too short to read", source };
+    return BigInt(raw.slice(0, 66)) !== 0n
+      ? { from, to, target, status: "ok", reason: null, source }
+      : { from, to, target, status: "reverts", reason: "transfer returned false", source };
   } catch (error) {
-    return { from, ok: false, reason: revertReason(error) };
+    if (error instanceof RpcError && error.isRevert) return { from, to, target, status: "reverts", reason: revertReason(error), source };
+    return { from, to, target, status: "unread", reason: error instanceof Error ? error.message : String(error), source };
   }
 }
 
@@ -362,21 +507,79 @@ function toTag(block: number): string {
   return `0x${block.toString(16)}`;
 }
 
-function revertReason(error: unknown): string | null {
-  if (error instanceof RpcError) {
-    const data = typeof error.data === "string" ? error.data : "";
-    // Error(string) is 0x08c379a0 + abi-encoded string.
-    if (data.startsWith("0x08c379a0") && data.length >= 10 + 128) {
-      try {
-        const [text] = decodeOutputs({ name: "Error", inputs: [], outputs: ["string"] }, `0x${data.slice(10)}`) as [string];
-        if (text) return text;
-      } catch {
-        // fall through to the message
-      }
+/** The reason a revert carried, decoded when it is one of the two standard shapes. */
+function revertReason(error: RpcError): string | null {
+  const data = typeof error.data === "string" ? error.data : "";
+  if (data.startsWith("0x08c379a0") && data.length >= 10 + 128) {
+    try {
+      const [text] = decodeOutputs({ name: "Error", inputs: [], outputs: ["string"] }, `0x${data.slice(10)}`) as [string];
+      if (text) return text;
+    } catch {
+      // fall through to the message
     }
-    return error.message || null;
   }
-  return error instanceof Error ? error.message : null;
+  if (data.startsWith("0x4e487b71") && data.length >= 10 + 64) {
+    return `panic 0x${BigInt(`0x${data.slice(10, 74)}`).toString(16)}`;
+  }
+  if (data.length > 10) return `custom error ${data.slice(0, 10)}`;
+  const message = error.message.replace(/^execution reverted:?\s*/i, "").trim();
+  return message || null;
+}
+
+/**
+ * Asks each listed V3-style factory for a token/WETH pool at every fee tier,
+ * then reads the reserves as the pool's two balances. A balance that will not
+ * read leaves that pool's reserve null rather than discarding every pool the
+ * lookups just proved exists.
+ */
+export async function readPools(rpc: RpcClient, token: string, dex: NonNullable<ChainConfig["dex"]>, block: number): Promise<Pool[]> {
+  const asks: { dex: string; fee: bigint }[] = [];
+  const calls: { to: string; data: Hex }[] = [];
+  for (const f of dex.v3Factories) {
+    for (const fee of V3_FEE_TIERS) {
+      asks.push({ dex: f.name, fee });
+      calls.push({ to: f.address, data: encodeCall(V3_FACTORY_FUNCTIONS.getPool, [token, dex.weth, fee]) });
+    }
+  }
+  const raws = await rpc.callBatch(calls, block);
+  const found: Pool[] = [];
+  raws.forEach((raw, i) => {
+    try {
+      const [pool] = decodeOutputs(V3_FACTORY_FUNCTIONS.getPool, raw) as [string];
+      if (pool && pool !== ZERO_ADDRESS) found.push({ dex: asks[i].dex, address: pool, feeBps: Number(asks[i].fee) / 100, tokenReserve: null, quoteReserve: null });
+    } catch {
+      // a factory that is not a V3 factory answers garbage; skip it
+    }
+  });
+  if (!found.length) return found;
+  try {
+    const balances = await rpc.callBatch(
+      found.flatMap((p) => [
+        { to: token, data: encodeCall(ERC20_FUNCTIONS.balanceOf, [p.address]) },
+        { to: dex.weth, data: encodeCall(ERC20_FUNCTIONS.balanceOf, [p.address]) },
+      ]),
+      block,
+    );
+    found.forEach((p, i) => {
+      try {
+        p.tokenReserve = decodeOutputs(ERC20_FUNCTIONS.balanceOf, balances[i * 2])[0] as bigint;
+      } catch {
+        p.tokenReserve = null;
+      }
+      try {
+        p.quoteReserve = decodeOutputs(ERC20_FUNCTIONS.balanceOf, balances[i * 2 + 1])[0] as bigint;
+      } catch {
+        p.quoteReserve = null;
+      }
+    });
+  } catch {
+    // the pools exist; their depth is simply unread
+  }
+  return found.sort((a, b) => {
+    const x = a.quoteReserve ?? -1n;
+    const y = b.quoteReserve ?? -1n;
+    return y > x ? 1 : y < x ? -1 : 0;
+  });
 }
 
 function summariseActivity(transfers: TokenTransfer[]): OpenDoor["activity"] {
@@ -397,11 +600,22 @@ export function powerKinds(o: OpenDoor): PowerKind[] {
   return order.filter((k) => have.has(k));
 }
 
-/** One line for the receipt and the summary: who can still change the rules. */
+/** The probes that aimed at the pool, i.e. the ones that simulated a sale. */
+export function sellProbes(o: OpenDoor): TransferProbe[] {
+  return o.probes.filter((p) => p.target === "pool");
+}
+
+/** The probes that aimed at a fresh wallet, i.e. the ones that only proved tokens can move. */
+export function moveProbes(o: OpenDoor): TransferProbe[] {
+  return o.probes.filter((p) => p.target === "fresh-wallet");
+}
+
+/** One line for the receipt and the summary: what the code can still do, and who holds the keys. */
 export function controlLine(o: OpenDoor): string {
-  const kinds = powerKinds(o);
-  const named = kinds.filter((k) => k !== "exempt" && k !== "sweep");
-  const what = named.length ? named.join(", ") : "no mint, pause, blacklist, fee or trading switch seen";
+  const kinds = powerKinds(o).filter((k) => k !== "exempt" && k !== "sweep");
+  const what = kinds.length ? kinds.join(", ") : "no mint, pause, blacklist, fee or trading switch seen";
+  if (o.surfaceFrom === "implementation-unreadable") return "the code that actually runs could not be read";
+  if (o.ownerUnread) return `${what} · owner() did not answer`;
   if (o.owner === null) return `${what} · no owner() function`;
   if (o.owner.renounced) return `${what} · ownership renounced`;
   return `${what} · owner ${o.owner.address}${o.owner.isContract ? " (a contract)" : ""}`;

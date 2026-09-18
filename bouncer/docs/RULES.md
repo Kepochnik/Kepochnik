@@ -21,10 +21,15 @@ Run for every contract the V2 factory did not make: ordinary tokens and V1 token
 
 | Fact | Read | Rule |
 | --- | --- | --- |
-| function surface | four-byte constants pushed by the runtime code (`PUSH1..PUSH4` immediates, metadata trailer skipped); for an EIP-1967 or EIP-1167 proxy, the implementation's code | Solidity and Vyper dispatchers compare the calldata selector against pushed constants, so the set is the contract's function surface. Matched against a catalogue of signatures token generators use: mint, pause, blacklist, fee, limit, trading switch, upgrade, burn-others, exempt, sweep. A match is a fact about a name in the code; who may call it is not readable from bytes. A miss means "not seen", never "not there". |
+| function surface | four-byte constants pushed by the runtime code (`PUSH1..PUSH4` immediates, metadata trailer skipped); for an EIP-1967, beacon or EIP-1167 proxy, the implementation's code | Solidity and Vyper dispatchers compare the calldata selector against pushed constants, so the set is the contract's function surface. Matching uses every constant left-padded to four bytes, which is exact: a padded jump destination only equals a selector that literally begins with the same zero bytes. Counting uses full-width `PUSH4` pushes only, because the padded ones are mostly jump destinations and memory offsets, and calling their total "functions" would report a fifteen-function token as having four hundred. Matched against a catalogue of signatures token generators use: mint, pause, blacklist, fee, limit, trading switch, upgrade, burn-others, exempt, sweep. A match is a fact about a name in the code; **who may call it is not readable from bytes**, so the slip says the code carries a switch, never that the owner can pull it. A miss means "not seen", never "not there". |
+| unreadable implementation | the address is a proxy and the code it points at does not load | Reported as unknown, never as an empty surface. "No switches seen" and "the code that runs could not be read" are opposite findings. |
+| metadata trailer | two-byte length, map byte `0xa1..0xa3`, then a CBOR text key (`ipfs`, `solc`, `bzzr1`, `vyper`, `experimental`) | The key is required. A map byte alone is two bytes of luck, and a false positive cuts most of a trailerless contract out of the opcode scan. |
+| EIP-7702 wallet | the code is exactly `0xef0100` followed by 20 bytes | An account that signed a delegation. It has code and the explorer calls it a contract; it is a wallet, and the slip says so instead of running token checks against a person. |
 | owner | `owner()` (or `getOwner()`) when the surface has it; `eth_getCode` on the result | Zero or a burn address means renounced. A contract owner is named as such (multisig, timelock, or anything else). |
 | switches | `paused()`; the first of `tradingOpen()`, `tradingEnabled()`, `tradingActive()`, … the surface has | Read as booleans; `paused == true` or trading `false` is a `STOP` note. |
-| transfer simulation | `eth_call` of `transfer(0x…b0ce, 1)` with `from` set to each of the three largest plain-wallet holders (from the explorer), or the deployer when no holder list is available | Nothing is signed or sent. All revert: `STOP`. Some revert: `WATCH` (a blacklist looks like this; the revert reason is quoted). None revert: `INFO`. |
+| transfer simulation | `eth_call` of `transfer(to, 1)` with `from` set to each sampled holder, run twice: `to` = a fresh wallet, and `to` = the deepest pool | Nothing is signed or sent. The pool-directed run is the sale: a honeypot that allows wallet-to-wallet transfers and blocks the pool shows up only there. Each probe is `ok`, `reverts` or `unread`, and the third is never merged into the second: a call the node refused to run says nothing about the token. All revert: `STOP`. Some revert: `WATCH` (a blacklist looks like this; the reason is quoted). None revert: `INFO`, worded as one unit at one block. |
+| who is sampled | the explorer's holder list, filtered to wallets, with each balance re-read from the chain | The owner, the deployer, the token itself and burn addresses are excluded: they are the addresses a honeypot exempts, so proving they can transfer proves nothing. Only when no other wallet is available does the deployer stand in, and the probe records that it did. Wallets that delegated under EIP-7702 count as wallets. |
+| no transfer function | the dispatcher has no `transfer(address,uint256)` | No simulation is run and the slip says why. A router, a multisig or an ERC-721 is not an ERC-20, and answering the ERC-20 question anyway would stamp all three as traps. |
 | deployer, age | explorer `creator_address_hash` and creation tx, then `eth_getTransactionReceipt` for the block; `balanceOf(deployer)` | The deployer's share is re-read from the chain. |
 | holders | explorer top-50 holders; `holders_count`, `transfers_count` | Top-10-wallets share excludes contracts, burn addresses and the token itself; contracts' share and burned share are listed separately. ≥ 50% in ten wallets is a `WATCH` note. |
 | pools | `getPool(token, WETH, fee)` on each factory in the chain's DEX table at 0.01 / 0.05 / 0.3 / 1%; then `balanceOf(pool)` on the token and on WETH | Reserves are the pool's balances at the block. Whether liquidity is locked is not read. |
@@ -115,22 +120,28 @@ Factory `TokenLaunched`, `LaunchSwept`, `PoolGraduated` over the window (adaptiv
 | --- | --- | --- |
 | STOP | not-registered | no contract at the address |
 | INFO | not-registered | not a launch; checked as an ordinary token (the note says so) |
-| STOP | lookalike-impostor | a registered launch carries this ticker and this address is not it |
+| STOP | lookalike-impostor | a registered launch carries this ticker AND is older than this contract |
+| WATCH | lookalike-shared-ticker | a registered launch carries this ticker but which came first could not be established |
 | WATCH | claimed-factory | the token names a launch factory the chain table does not list |
 | INFO | known-address | a well-known non-launch contract from the chain table ($PONS, the factories) |
 | STOP | code | SELFDESTRUCT / CALLCODE on an unregistered address |
 | WATCH | code | proxy / DELEGATECALL on an unregistered address; any finding on a registered launch |
 | STOP | paused | `paused()` is true |
 | STOP | trading-closed | the trading switch is off |
-| WATCH | owner-powers | owner not renounced and the code has mint / pause / blacklist / fee / limit / trading / upgrade functions |
-| INFO | renounced-with-powers | such functions exist but ownership is renounced |
-| WATCH | powers-no-owner | such functions exist and there is no `owner()` to say who may call them |
-| INFO | owner-plain / renounced | an owner with no such functions / renounced with none |
+| WATCH | powers | the code has mint / pause / blacklist / fee / limit / trading / upgrade functions; the note says what is readable about who may call them |
+| INFO | powers | the same, when ownership is renounced |
+| INFO | no-powers | none of them seen, and the surface was readable |
 | WATCH | unverified | no verified source on the explorer |
 | STOP | explorer-scam | the explorer flags the address as a scam |
-| STOP | transfer-reverts | every simulated transfer from the largest wallets reverts |
-| WATCH | transfer-some-revert | some of them revert |
-| INFO | transfer-ok | none revert |
+| STOP | move-reverts / sell-reverts | every simulated transfer, or every simulated sale into the pool, reverts |
+| WATCH | move-some-revert / sell-some-revert | some of them revert |
+| INFO | move-ok / sell-ok | none revert |
+| INFO | move-unread / sell-unread | the node would not run the simulation; nothing is claimed either way |
+| INFO | no-probe | no transfer function, or no wallet to simulate from |
+| WATCH | surface-unreadable | a proxy whose implementation code did not load |
+| INFO | shares-unknown | `totalSupply()` could not be read, so no share of supply is printed |
+| INFO | delegated-wallet | the address is an EIP-7702 wallet, not a token |
+| INFO | explorer-unread | the explorer could not be read; holders, deployer and recent trades are missing |
 | WATCH | concentrated | top 10 wallets hold ≥ 50% |
 | INFO | spread / in-contracts / burned | holder facts |
 | WATCH | deployer-holds / owner-holds | the deployer or owner holds ≥ 20% |
@@ -166,4 +177,4 @@ Factory `TokenLaunched`, `LaunchSwept`, `PoolGraduated` over the window (adaptiv
 | INFO | exit-thin | selling 1% of supply realises < 50% of spot |
 | INFO | skipped | a section could not be read; the reason is in the note |
 
-The stamp is `ON THE LIST` when a known factory's record exists, `NOT A LAUNCH` for any other contract (checked as an ordinary token), and `NOT ON THE LIST` when there is no contract at the address or a registered launch carries the same ticker. It is not a score. A launch with five WATCH notes is still on the list; the notes are what to read before paying the cover.
+The stamp is `ON THE LIST` when a known factory's record exists, `NOT A LAUNCH` for any other contract (checked as an ordinary token), and `NOT ON THE LIST` when there is no contract at the address or an **older** registered launch carries the same ticker. Sharing a ticker is not impersonation: the real USDC shares its ticker with every scam launch that copies it, and the scam is the newer one. The stamp is decided once, after both reads, so it does not change according to whether the explorer happened to answer. It is not a score. A launch with five WATCH notes is still on the list; the notes are what to read before paying the cover.

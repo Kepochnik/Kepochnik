@@ -47,6 +47,8 @@ export interface IdCheckOptions {
   factoryV1?: string;
   olderFactoriesV1?: string[];
   native?: { symbol: string; decimals: number };
+  /** Set on a chain whose launchpad factory address is not published: the launch lookup is not asked at all. */
+  skipLaunchLookup?: boolean;
 }
 
 const LAUNCH_FACTORY_VIEW: FunctionAbi = { name: "launchFactory", inputs: [], outputs: ["address"] };
@@ -59,12 +61,13 @@ export async function readIdCheck(rpc: RpcClient, input: string, block: number, 
   let launch: LaunchedToken | null = null;
   let resolvedAs: IdCheck["resolvedAs"] = "unknown";
   try {
+    if (options.skipLaunchLookup) throw new NotAPonsLaunch(address);
     launch = await reader.launchedToken(address, block);
     resolvedAs = "token";
   } catch (error) {
     if (!(error instanceof NotAPonsLaunch)) throw error;
     // Maybe the caller pasted the curve. A Pons curve knows its token.
-    const viaCurve = await tokenOfCurve(rpc, address, block);
+    const viaCurve = options.skipLaunchLookup ? null : await tokenOfCurve(rpc, address, block);
     if (viaCurve) {
       try {
         const record = await reader.launchedToken(viaCurve, block);
