@@ -264,6 +264,9 @@ export class RpcClient {
       } catch (error) {
         lastError = error;
         if (error instanceof RpcError && error.isRateLimit) {
+          // Back off, and move on: an endpoint that is rate-limiting this caller
+          // will still be rate-limiting it in a second, while a sibling is idle.
+          if (this.urls.length > 1) this.activeIndex = (this.activeIndex + 1) % this.urls.length;
           await new Promise((resolve) => setTimeout(resolve, 300 * 2 ** Math.min(attempt, 4)));
           continue;
         }

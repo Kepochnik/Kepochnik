@@ -20,6 +20,7 @@ import { readMarket, readPools } from "./chain/market.js";
 import { ERC20_FUNCTIONS, GraduationPhase, PHASE_LABEL, type LaunchedToken } from "./chain/pons.js";
 import { NotAPonsLaunch, PonsReader, readTokenMeta } from "./chain/reader.js";
 import { RpcClient } from "./chain/rpc.js";
+import { SolanaRpc } from "./chain/solana.js";
 import { findBlockByTimestamp } from "./chain/tape.js";
 import { flagNumber, flagString, parseArgs, type ParsedArgs } from "./cli/args.js";
 import { doctorReceipt, runDoctor } from "./cli/doctor.js";
@@ -33,6 +34,7 @@ import { MASCOT_SVG_INNER } from "./bouncer/mascot.js";
 import { readLaunchPlan } from "./bouncer/planner.js";
 import { readPosition } from "./bouncer/position.js";
 import { readTradeReceipt } from "./bouncer/txReceipt.js";
+import { readSplDoor, splReceipt } from "./bouncer/spl.js";
 import { readBoard } from "./bouncer/leaderboard.js";
 import { readOneCrew } from "./bouncer/oneCrew.js";
 import { readRoom } from "./bouncer/room.js";
@@ -41,7 +43,7 @@ import { formatBps, formatDuration, formatUnits, isoUtc, shortAddress } from "./
 
 export const REPO = "github.com/Kepochnik/bouncer";
 export const MARK = "$BOUNCER";
-const HELP = `bouncer — read-only door check for Pons V2 launches on Robinhood Chain and Arc
+const HELP = `bouncer — read-only door check for any token: Robinhood Chain, Base, BNB Chain, Solana, Arc
 
   bouncer doctor                        rpc, chain id, factory bytecode, anti-snipe terms
   bouncer door <token|curve>            the slip: ID check, cover charge, house rules, the room, exit door, one crew, lookalikes, dev report card
@@ -91,6 +93,11 @@ export async function main(argv: string[], write: (text: string) => void = (t) =
       return 0;
     }
     const chain = demo ? CHAINS.robinhood : chainByKey(flagString(args.flags, "chain"));
+
+    // Solana is read through a different client against different account
+    // layouts, so it forks here rather than pretending to be an EVM chain.
+    if (chain.family === "solana") return await runSolana(command, args, chain, format, emit, write);
+
     const factory = (flagString(args.flags, "factory") ?? chain.factory ?? "").toLowerCase();
     const rpc = demo ? demoRpc() : liveRpc(chain, flagString(args.flags, "rpc"));
     const chunk = demo ? 100_000 : flagNumber(args.flags, "chunk", 0) || undefined;
@@ -105,7 +112,9 @@ export async function main(argv: string[], write: (text: string) => void = (t) =
     };
     const doorOptions = (): DoorOptions => ({
       chain,
-      factory: requireFactory(),
+      // Not requireFactory(): a chain with no launchpad still has tokens on it,
+      // and the door answers every question that needs no factory.
+      factory: factory || undefined,
       blockscout,
       devHours: hours,
       chunkSize: chunk,
@@ -119,8 +128,8 @@ export async function main(argv: string[], write: (text: string) => void = (t) =
 
     switch (command) {
       case "doctor": {
-        const report = await runDoctor(rpc, undefined, factory || undefined);
-        emit(renderReceipt(doctorReceipt(report, "bouncer", chain.name, factory || undefined), asReceiptFormat(format)));
+        const report = await runDoctor(rpc, undefined, factory || null);
+        emit(renderReceipt(doctorReceipt(report, "bouncer", chain.name, factory || null), asReceiptFormat(format)));
         return report.ok ? 0 : 2;
       }
 
@@ -540,6 +549,68 @@ async function readSupply(rpc: RpcClient, token: string, block: number): Promise
 async function readBalanceOf(rpc: RpcClient, token: string, who: string, block: number): Promise<bigint> {
   const [raw] = await rpc.callBatch([{ to: token, data: encodeCall(ERC20_FUNCTIONS.balanceOf, [who]) }], block);
   return decodeOutputs(ERC20_FUNCTIONS.balanceOf, raw)[0] as bigint;
+}
+
+/**
+ * The Solana half of the CLI. Only the commands that mean something there are
+ * offered: there is no launchpad to board or plan against, and pools are not
+ * read yet, so a command that cannot be answered says so instead of pretending.
+ */
+async function runSolana(
+  command: string,
+  args: ParsedArgs,
+  chain: ChainConfig,
+  format: string,
+  emit: (text: string) => void,
+  write: (text: string) => void,
+): Promise<number> {
+  const urls = [flagString(args.flags, "rpc") ?? process.env.SOLANA_RPC_URL ?? chain.rpc[0], ...chain.rpc.slice(1)];
+  const rpc = new SolanaRpc({ urls });
+
+  if (command === "doctor") {
+    const slot = await rpc.slot();
+    const timestamp = await rpc.blockTime(slot);
+    emit(
+      renderReceipt(
+        {
+          title: "BOUNCER · doctor",
+          subtitle: `${chain.name} · ${rpc.activeUrl}`,
+          sections: [
+            {
+              title: chain.name.toUpperCase(),
+              rows: [
+                { label: "rpc", value: rpc.activeUrl },
+                { label: "slot", value: slot },
+                { label: "slot time", value: timestamp ? isoUtc(timestamp) : "unknown" },
+                { label: "token programs", value: "SPL Token and Token-2022" },
+              ],
+            },
+            { title: "BOUNDARIES", rows: [{ label: "keys", value: "none" }, { label: "signing", value: "none" }, { label: "transactions", value: "none" }] },
+          ],
+          footnotes: ["Every value above was read from the chain at the moment shown; nothing is cached or inferred."],
+          meta: { slot },
+        },
+        asReceiptFormat(format),
+      ),
+    );
+    return 0;
+  }
+
+  if (command === "door") {
+    const mint = args.positionals[0];
+    if (!mint) throw new Error("usage: bouncer door <mint> --chain solana");
+    const slip = await readSplDoor(rpc, mint, chain);
+    if (format === "json") return emit(slipJson(slip)), 0;
+    emit(renderReceipt(splReceipt(slip), asReceiptFormat(format)));
+    return 0;
+  }
+
+  write(
+    `bouncer: "${command}" is not available on ${chain.name}. ` +
+      `There is no launchpad registry here, and pools are not read yet, so the commands that depend on either are not offered rather than answered badly. ` +
+      `Try: bouncer door <mint> --chain ${chain.key}\n`,
+  );
+  return 1;
 }
 
 function liveRpc(chain: ChainConfig, override?: string): RpcClient {
