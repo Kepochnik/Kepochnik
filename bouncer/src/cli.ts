@@ -39,6 +39,7 @@ import { readBoard } from "./bouncer/leaderboard.js";
 import { readOneCrew } from "./bouncer/oneCrew.js";
 import { readRoom } from "./bouncer/room.js";
 import { watchToken } from "./bouncer/tokenWatch.js";
+import { readSolanaMarket } from "./chain/solanaPools.js";
 import { watchLaunch } from "./bouncer/watch.js";
 import { formatBps, formatDuration, formatUnits, isoUtc, shortAddress } from "./format.js";
 
@@ -675,10 +676,57 @@ async function runSolana(
     return 0;
   }
 
+  if (command === "exit") {
+    const mint = args.positionals[0];
+    if (!mint) throw new Error("usage: bouncer exit <mint> --chain solana [--amount tokens]");
+    const supply = await rpc.tokenSupply(mint);
+    if (!supply) throw new Error(`${mint} does not answer as a token mint on ${chain.name}`);
+    const amountFlag = flagString(args.flags, "amount");
+    const position = amountFlag ? BigInt(Math.round(Number(amountFlag) * 10 ** supply.decimals)) : supply.amount / 100n;
+    const market = await readSolanaMarket(rpc, mint, position, supply.decimals);
+    if (format === "json") return emit(slipJson({ mint, position: position.toString(), market })), 0;
+    const dec = market.quoteSymbol === "SOL" ? 9 : 6;
+    const amount = (v: bigint, d: number, frac = 6) => (Number(v) / 10 ** d).toLocaleString("en-US", { maximumFractionDigits: frac });
+    emit(
+      renderReceipt(
+        {
+          title: "BOUNCER · exit door",
+          subtitle: `${mint} · ${market.best ? market.best.name : "no venue found"} · slot ${await rpc.slot()}`,
+          sections: [
+            {
+              title: "walk out now",
+              rows: [
+                { label: "position", value: `${amount(position, supply.decimals, 0)} tokens`, note: amountFlag ? "as asked" : "1% of supply unless you pass --amount" },
+                { label: "spot", value: market.spot === null ? "unknown" : `${market.spot.toPrecision(6)} ${market.quoteSymbol} per token` },
+                ...market.quotes.map((q) => ({
+                  label: `sell ${q.shareBps / 100}%`,
+                  value: `${amount(q.out, dec)} ${market.quoteSymbol}`,
+                  note: `${(q.realisedBps / 100).toFixed(1)}% of the marginal price`,
+                })),
+              ],
+            },
+            {
+              title: "venues",
+              rows: [
+                ...(market.curve ? [{ label: "bonding curve", value: market.curve.complete ? "graduated" : `${amount(market.curve.realSol, 9, 3)} SOL in`, note: market.curve.address }] : []),
+                ...market.pools.map((p) => ({ label: `${p.name}${p.concentrated ? " (ranged)" : ""}`, value: `${amount(p.quoteReserve, p.quoteDecimals, 3)} ${p.quoteSymbol}`, note: p.address })),
+                ...(market.pools.length || market.curve ? [] : [{ label: "none", value: "no venue found among the largest accounts holding this mint" }]),
+              ],
+            },
+          ],
+          footnotes: [market.note],
+          meta: { venue: market.best?.name ?? null },
+        },
+        asReceiptFormat(format),
+      ),
+    );
+    return 0;
+  }
+
   write(
     `bouncer: "${command}" is not available on ${chain.name}. ` +
-      `There is no launchpad registry here, and pools are not read yet, so the commands that depend on either are not offered rather than answered badly. ` +
-      `Try: bouncer door <mint> --chain ${chain.key}\n`,
+      `There is no launchpad registry here, so the commands that read one are not offered rather than answered badly. ` +
+      `Try: bouncer door <mint> --chain ${chain.key}, or bouncer exit <mint> --chain ${chain.key} for what a sale would pay.\n`,
   );
   return 1;
 }

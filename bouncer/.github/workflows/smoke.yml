@@ -60,7 +60,24 @@ jobs:
             run "door (token-2022)" $B door "9BB6NFEcjBCtnNLFko2FqVQBq8HHM13kCyYcdQbgpump" --chain "$CHAIN"
             # A wallet, not a mint: the slip must name it rather than check it as a token.
             run "door (a wallet, not a mint)" $B door "11111111111111111111111111111111" --chain "$CHAIN"
+            run "exit (the sale, priced)" $B exit "$MINT" --chain "$CHAIN"
             run "unsupported command is refused politely" bash -c "$B board --chain $CHAIN || true"
+
+            # The market read has to produce numbers, not just avoid throwing.
+            # USDC trades in enormous pools; finding none would mean the vault
+            # walk is broken, and a green run would hide it.
+            echo "::group::solana market"
+            $B door "$MINT" --chain "$CHAIN" --format json > /tmp/m.json 2>/dev/null || true
+            node -e '
+              const j = JSON.parse(require("fs").readFileSync("/tmp/m.json","utf8"));
+              const m = j.market;
+              if (!m) { console.error("::error::no market section on the slip at all"); process.exit(1); }
+              console.log("venue:", m.best ? m.best.name : "none", "| pools:", m.pools.length, "| curve:", m.curve ? "yes" : "no");
+              for (const p of m.pools) console.log("  ", p.name, p.concentrated ? "(ranged)" : "", p.quoteReserve, p.quoteSymbol);
+              console.log("note:", m.note);
+              if (!m.pools.length && !m.curve) { console.error("::error::no venue found for a mint that certainly has one"); process.exit(1); }
+            ' || fail=1
+            echo "::endgroup::"
             exit $fail
           fi
 
@@ -129,6 +146,26 @@ jobs:
           # The input a user is most likely to paste by mistake: an address with
           # no contract behind it.
           run "door (an empty address)" $B door 0x000000000000000000000000000000000000dEaD --chain "$CHAIN"
+
+          # Who holds the liquidity has to come back with numbers on a chain
+          # whose pools are real. A section that quietly reads zero everywhere
+          # would pass every other check in this file.
+          echo "::group::liquidity"
+          $B door "$TOKEN" --chain "$CHAIN" --format json > /tmp/l.json 2>/dev/null || true
+          node -e '
+            const j = JSON.parse(require("fs").readFileSync("/tmp/l.json","utf8"));
+            const l = j.open && j.open.liquidity;
+            const pools = (j.open && j.open.pools) || [];
+            if (!pools.length) { console.log("no pool on this chain for this token; liquidity not applicable"); process.exit(0); }
+            if (!l) { console.error("::error::pools were found but the liquidity read produced nothing"); process.exit(1); }
+            console.log(`${l.dex} ${l.kind}: ${l.burnedBps/100}% burned, ${l.lockedBps/100}% locked, ${l.freeBps/100}% withdrawable`);
+            for (const h of l.holders) console.log("  ", h.kind, h.name || "", h.address, (h.shareBps/100)+"%");
+            if (l.unread) console.log("unread:", l.unread);
+            const total = l.burnedBps + l.lockedBps + l.freeBps;
+            if (Math.abs(total - 10000) > 1 && l.holders.length) { console.error("::error::the shares do not add up: "+total); process.exit(1); }
+            if (!l.holders.length && !l.unread) { console.error("::error::no holders and no reason given"); process.exit(1); }
+          ' || fail=1
+          echo "::endgroup::"
 
           # The tape. On a V2 launch this is the curve's own events; on anything
           # else — a Pons V1 launch like $PONS, an ordinary ERC-20 on Base or
