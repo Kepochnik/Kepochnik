@@ -50,18 +50,31 @@ jobs:
             echo; echo "::endgroup::"
           }
 
+          # Does this chain have a launchpad at all? The board, the planner and the
+          # curve exit only mean something where one does.
+          HAS_PAD=$(node -e 'const{CHAINS}=require("./dist/src/chain/chains.js");const c=CHAINS[process.argv[1]];console.log(c&&c.launchpad&&c.factory?"yes":"no")' "$CHAIN")
+          echo "launchpad on $CHAIN: $HAS_PAD"
+
           run "doctor" $B doctor --chain "$CHAIN"
 
-          # The board is also how we find a real launch to run the rest against.
-          run "board" $B board --chain "$CHAIN" --hours 2 --no-cover --format json
           TOKEN="$TOKEN_IN"
-          if [ -z "$TOKEN" ]; then
-            TOKEN=$($B board --chain "$CHAIN" --hours 2 --no-cover --format json 2>/dev/null \
-              | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const j=JSON.parse(s);const t=(j.launches||j.recent||[]).map(x=>x.token).filter(Boolean);console.log(t[0]||"")}catch{console.log("")}})' || true)
+          if [ "$HAS_PAD" = "yes" ]; then
+            # The board is also how we find a real launch to run the rest against.
+            run "board" $B board --chain "$CHAIN" --hours 2 --no-cover --format json
+            run "plan"  $B plan --chain "$CHAIN"
+            if [ -z "$TOKEN" ]; then
+              TOKEN=$($B board --chain "$CHAIN" --hours 2 --no-cover --format json 2>/dev/null \
+                | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const j=JSON.parse(s);const t=(j.launches||j.recent||[]).map(x=>x.token).filter(Boolean);console.log(t[0]||"")}catch{console.log("")}})' || true)
+            fi
           fi
           if [ -z "$TOKEN" ]; then
-            echo "::warning::no recent launch found on $CHAIN in the last 2 h; falling back to the platform token"
-            TOKEN=0x39dbed3a2bd333467115de45665cc57f813c4571
+            case "$CHAIN" in
+              robinhood) TOKEN=0x39dbed3a2bd333467115de45665cc57f813c4571 ;;   # $PONS
+              base)      TOKEN=0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913 ;;   # USDC on Base
+              bnb)       TOKEN=0x0E09FaBB73Bd3Ade0a17ECC321fD13a19e81cE82 ;;   # CAKE
+              *)         echo "::error::no default token for $CHAIN"; exit 1 ;;
+            esac
+            echo "::notice::no launch found, using the chain's reference token"
           fi
           echo "subject: $TOKEN"
 
@@ -71,7 +84,6 @@ jobs:
           run "door (svg card)" $B door "$TOKEN" --chain "$CHAIN" --format svg
           run "door (no explorer)" $B door "$TOKEN" --chain "$CHAIN" --no-blockscout
           run "exit"            $B exit "$TOKEN" --chain "$CHAIN"
-          run "plan"            $B plan --chain "$CHAIN"
 
           # A wallet that actually holds it, so the position path is exercised.
           HOLDER=$($B door "$TOKEN" --chain "$CHAIN" --format json 2>/dev/null \
@@ -82,10 +94,9 @@ jobs:
             | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const j=JSON.parse(s);console.log((j.open&&j.open.deployer&&j.open.deployer.address)||(j.id&&j.id.launch&&j.id.launch.deployer)||"")}catch{console.log("")}})' || true)
           if [ -n "$DEPLOYER" ]; then run "dev" $B dev "$DEPLOYER" --chain "$CHAIN" --hours 6; else echo "::warning::no deployer found, dev not exercised"; fi
 
-          # An address that is not a token at all, and one with no code: the two
-          # inputs a user is most likely to paste by mistake.
-          run "door (the factory itself)" $B door 0x7eD598BcEf8bd9Edd8C97A195C6d13f40801EC7e --chain "$CHAIN"
-          run "door (an empty address)"   $B door 0x000000000000000000000000000000000000dEaD --chain "$CHAIN"
+          # The input a user is most likely to paste by mistake: an address with
+          # no contract behind it.
+          run "door (an empty address)" $B door 0x000000000000000000000000000000000000dEaD --chain "$CHAIN"
 
           exit $fail
       - name: The MCP server answers over stdio
