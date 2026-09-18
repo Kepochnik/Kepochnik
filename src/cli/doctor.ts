@@ -45,19 +45,22 @@ export async function runDoctor(rpc: RpcClient, now: () => number = () => Date.n
     const block = await rpc.getBlock("latest");
     report.latestBlock = block.number;
     report.blockTimestamp = block.timestamp;
-    if (!factory) return report; // no launchpad on this chain: nothing to check for one
-    const code = (await rpc.send("eth_getCode", [factory, "latest"])) as string;
-    report.factoryHasCode = typeof code === "string" && code.length > 2;
-    if (!report.factoryHasCode) report.errors.push(`no bytecode at the launchpad factory ${factory}`);
-    const [startRaw, secondsRaw] = await rpc.callBatch(
-      [
-        { to: factory, data: encodeCall(FACTORY_FUNCTIONS.snipeTaxStartBps, []) },
-        { to: factory, data: encodeCall(FACTORY_FUNCTIONS.snipeTaxSeconds, []) },
-      ],
-      block.number,
-    );
-    report.snipeTaxStartBps = decodeOutputs(FACTORY_FUNCTIONS.snipeTaxStartBps, startRaw)[0] as bigint;
-    report.snipeTaxSeconds = decodeOutputs(FACTORY_FUNCTIONS.snipeTaxSeconds, secondsRaw)[0] as bigint;
+    // A chain with no launchpad has nothing to check for one, and that is not a
+    // problem with the read path: skipping it must not leave the report unfinished.
+    if (factory) {
+      const code = (await rpc.send("eth_getCode", [factory, "latest"])) as string;
+      report.factoryHasCode = typeof code === "string" && code.length > 2;
+      if (!report.factoryHasCode) report.errors.push(`no bytecode at the launchpad factory ${factory}`);
+      const [startRaw, secondsRaw] = await rpc.callBatch(
+        [
+          { to: factory, data: encodeCall(FACTORY_FUNCTIONS.snipeTaxStartBps, []) },
+          { to: factory, data: encodeCall(FACTORY_FUNCTIONS.snipeTaxSeconds, []) },
+        ],
+        block.number,
+      );
+      report.snipeTaxStartBps = decodeOutputs(FACTORY_FUNCTIONS.snipeTaxStartBps, startRaw)[0] as bigint;
+      report.snipeTaxSeconds = decodeOutputs(FACTORY_FUNCTIONS.snipeTaxSeconds, secondsRaw)[0] as bigint;
+    }
   } catch (error) {
     report.errors.push(error instanceof Error ? error.message : String(error));
   }

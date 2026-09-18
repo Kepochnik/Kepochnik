@@ -1617,9 +1617,9 @@
       slip.notes = [{ level: "stop", code: "not-a-mint", text: `This address is not a token: it is ${slip.whatItIs}. Paste the mint address, which is what a token is on Solana.` }];
       return slip;
     }
-    const attempt = async (section2, run) => {
+    const attempt = async (section2, run, deadlineMs) => {
       try {
-        await run();
+        await (deadlineMs ? withDeadline(run(), deadlineMs, section2) : run());
       } catch (error) {
         slip.skipped.push({ section: section2, reason: error instanceof Error ? error.message : String(error) });
       }
@@ -1628,15 +1628,18 @@
     if (inline && inline.kind === "token-metadata") {
       slip.metadataInline = true;
       slip.metadata = { updateAuthority: inline.updateAuthority ?? "", mint: input, name: inline.name, symbol: inline.symbol, uri: inline.uri, sellerFeeBasisPoints: 0, primarySaleHappened: false, isMutable: inline.updateAuthority !== null };
-    } else {
-      await attempt("metadata", async () => {
+    }
+    const readName = slip.metadata ? Promise.resolve() : attempt(
+      "metadata",
+      async () => {
         const pda = metadataAddress(input);
         if (!pda) return;
         const metaAccount = await rpc.accountInfo(pda);
         if (metaAccount && metaAccount.owner === METADATA_PROGRAM) slip.metadata = parseMetadata(metaAccount);
-      });
-    }
-    await attempt("holders", async () => {
+      },
+      options.deadlineMs ?? 8e3
+    );
+    const readHolders = attempt("holders", async () => {
       const largest = (await rpc.largestAccounts(input)).slice(0, options.topHolders ?? 20);
       if (!largest.length) {
         slip.holders = { top: [], top10Bps: null, distinctOwners: null };
@@ -1666,9 +1669,23 @@
         top10Bps: supply > 0n ? ranked.slice(0, 10).reduce((a, b) => a + b, 0) : null,
         distinctOwners: byOwner.size
       };
-    });
+    }, options.deadlineMs ?? 8e3);
+    await Promise.all([readName, readHolders]);
     slip.notes = splNotes(slip);
     return slip;
+  }
+  async function withDeadline(work, ms, section2) {
+    let timer;
+    try {
+      return await Promise.race([
+        work,
+        new Promise((_, reject) => {
+          timer = setTimeout(() => reject(new Error(`the endpoint did not answer within ${ms / 1e3}s`)), ms);
+        })
+      ]);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
   }
   function describeAccount(owner, executable, size) {
     if (executable) return "an executable program";
@@ -2107,7 +2124,7 @@
   <rect x="40" y="40" width="1120" height="550" rx="18" fill="${c.panel}" stroke="${c.line}"/>
   <rect x="40" y="40" width="1120" height="6" fill="${c.rope}"/>
   <text x="60" y="96" font-size="22" font-weight="700" letter-spacing="6" fill="${c.brass}">BOUNCER</text>
-  <text x="60" y="122" font-size="15" fill="${c.muted}">read-only door check \xB7 Pons V2 \xB7 Robinhood Chain 4663 \xB7 block ${slip.at.block} \xB7 ${isoUtc(slip.at.timestamp)}</text>
+  <text x="60" y="122" font-size="15" fill="${c.muted}">read-only check \xB7 ${esc(slip.chain.launchpad ? `${slip.chain.launchpad} \xB7 ` : "")}${esc(slip.chain.name)}${slip.chain.chainId ? ` ${slip.chain.chainId}` : ""} \xB7 block ${slip.at.block} \xB7 ${isoUtc(slip.at.timestamp)}</text>
   <text x="60" y="176" font-size="44" font-weight="700" fill="${c.text}">${title}</text>
   <text x="${60 + Math.min(title.length, 14) * 27 + 24}" y="176" font-size="20" fill="${c.muted}">${sub}</text>
   ${factRows}
@@ -2517,7 +2534,7 @@
             const from = Number(BigInt(f.fromBlock));
             const to = Number(BigInt(f.toBlock));
             const address = f.address ? String(f.address).toLowerCase() : void 0;
-            const all = !address ? [...factoryLogs(from, to), ...Object.values(DEMO.tokens).flatMap((t) => [...curveLogs(t, from, to), ...tokenLogs(t, from, to)])] : address === PONS_V2_FACTORY ? factoryLogs(from, to) : byCurve.has(address) ? curveLogs(byCurve.get(address), from, to) : byToken.has(address) ? tokenLogs(byToken.get(address), from, to) : [];
+            const all = !address ? [...factoryLogs(from, to), ...plainTokenLogs(from, to), ...Object.values(DEMO.tokens).flatMap((t) => [...curveLogs(t, from, to), ...tokenLogs(t, from, to)])] : address === PONS_V2_FACTORY ? factoryLogs(from, to) : address === DEMO_PLAIN.token ? plainTokenLogs(from, to) : byCurve.has(address) ? curveLogs(byCurve.get(address), from, to) : byToken.has(address) ? tokenLogs(byToken.get(address), from, to) : [];
             return ok(all.filter((log) => matchesTopics(log.topics, f.topics)));
           }
           case "eth_getCode": {
@@ -2744,6 +2761,23 @@
       }
       return new Response("not found", { status: 404 });
     });
+  }
+  function plainTokenLogs(from, to) {
+    const logs = [];
+    const recipients = DEMO_PLAIN.holders.filter(([, , isContract]) => !isContract).map(([hash]) => hash);
+    recipients.forEach((who, i) => {
+      const b = DEMO.head - 40 + i;
+      if (b < from || b > to) return;
+      logs.push({
+        address: DEMO_PLAIN.token,
+        topics: [eventTopic(ERC20_EVENTS.Transfer), addressTopic(DEMO_PLAIN.pool), addressTopic(who)],
+        data: `0x${encodeWord("uint256", 10n ** 21n)}`,
+        blockNumber: `0x${b.toString(16)}`,
+        transactionHash: `0xdemoplainxfer${i}`,
+        logIndex: `0x${i.toString(16)}`
+      });
+    });
+    return logs;
   }
   function tokenLogs(t, from, to) {
     const logs = [];
@@ -3537,7 +3571,7 @@
     if (!has(TRANSFER_SIGNATURE)) {
       probesSkipped = surfaceFrom === "implementation-unreadable" ? "the code that actually runs could not be read, so no transfer was simulated" : "this contract has no transfer(address,uint256) function, so it is not an ERC-20 and no transfer was simulated";
     } else {
-      const candidates = await probeCandidates(rpc, address, block, topHolders, deployer?.address ?? null, owner?.address ?? null, options.probeHolders ?? 3);
+      const candidates = await probeCandidates(rpc, address, block, topHolders, deployer?.address ?? null, owner?.address ?? null, options.probeHolders ?? 3, options.recentBlocks);
       if (!candidates.length) {
         probesSkipped = "no wallet with a readable balance to simulate from";
       } else {
@@ -3571,9 +3605,10 @@
       activity
     };
   }
-  async function probeCandidates(rpc, token, block, holders, deployer, owner, want) {
+  async function probeCandidates(rpc, token, block, holders, deployer, owner, want, recentBlocks) {
     const excluded = new Set([token, deployer, owner].filter((x) => Boolean(x)).map((x) => x.toLowerCase()));
-    const shortlist = holders.filter((h) => (!h.isContract || h.delegated) && !BURN_ADDRESSES.has(h.address) && !excluded.has(h.address) && h.value > 0n).slice(0, Math.max(want * 3, 9)).map((h) => h.address);
+    let shortlist = holders.filter((h) => (!h.isContract || h.delegated) && !BURN_ADDRESSES.has(h.address) && !excluded.has(h.address) && h.value > 0n).slice(0, Math.max(want * 3, 9)).map((h) => h.address);
+    if (!shortlist.length) shortlist = await recentRecipients(rpc, token, block, excluded, Math.max(want * 4, 12), recentBlocks);
     const out2 = [];
     if (shortlist.length) {
       try {
@@ -3597,6 +3632,44 @@
       if (balance > 0n) out2.push({ address: deployer, source: "deployer" });
     }
     return out2.slice(0, want);
+  }
+  async function recentRecipients(rpc, token, block, excluded, want, recentBlocks = 1800) {
+    let logs;
+    try {
+      logs = await rpc.getLogs({ address: token, topics: [eventTopic(ERC20_EVENTS.Transfer)], fromBlock: Math.max(0, block - recentBlocks), toBlock: block });
+    } catch {
+      return [];
+    }
+    const seen = [];
+    for (let i = logs.length - 1; i >= 0 && seen.length < want * 3; i--) {
+      const topic = logs[i].topics[2];
+      if (!topic) continue;
+      const who = `0x${topic.slice(-40)}`.toLowerCase();
+      if (BURN_ADDRESSES.has(who) || excluded.has(who) || seen.includes(who)) continue;
+      seen.push(who);
+    }
+    if (!seen.length) return [];
+    const codes = await rpc.callBatchSettled(
+      seen.map((who) => ({ to: token, data: encodeCall(ERC20_FUNCTIONS.balanceOf, [who]) })),
+      block
+    );
+    const withBalance = [];
+    codes.forEach((raw, i) => {
+      if (raw instanceof Error) return;
+      try {
+        if (decodeOutputs(ERC20_FUNCTIONS.balanceOf, raw)[0] > 0n) withBalance.push(seen[i]);
+      } catch {
+      }
+    });
+    const out2 = [];
+    for (const who of withBalance) {
+      if (out2.length >= want) break;
+      try {
+        if ((await rpc.getCode(who, block)).length <= 2) out2.push(who);
+      } catch {
+      }
+    }
+    return out2;
   }
   async function readOwner(rpc, token, block) {
     for (const fn of [OWNER_FUNCTIONS.owner, OWNER_FUNCTIONS.getOwner]) {

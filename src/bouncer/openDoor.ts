@@ -18,7 +18,8 @@ import type { BlockscoutClient, TokenHolder, TokenTransfer } from "../chain/bloc
 import type { ChainConfig } from "../chain/chains.js";
 import { canPrice, readMarket, readPools, type Market, type MarketPool } from "../chain/market.js";
 import { readSelectors } from "../chain/code.js";
-import { ERC20_FUNCTIONS, ZERO_ADDRESS } from "../chain/pons.js";
+import { ERC20_EVENTS, ERC20_FUNCTIONS, ZERO_ADDRESS } from "../chain/pons.js";
+import { eventTopic } from "../chain/abi.js";
 import type { TokenMeta } from "../chain/reader.js";
 import { RpcError, type RpcClient } from "../chain/rpc.js";
 import type { ContractId } from "./idCheck.js";
@@ -169,6 +170,8 @@ export interface OpenDoorOptions {
   probeHolders?: number;
   /** Token amount the sale is priced for; default 1% of supply, matching the launchpad exit door. */
   position?: bigint;
+  /** How far back to look for holders in Transfer logs when there is no explorer; default about an hour. */
+  recentBlocks?: number;
 }
 
 const BURN_ADDRESSES = new Set([ZERO_ADDRESS, "0x000000000000000000000000000000000000dead", "0x0000000000000000000000000000000000000001"]);
@@ -336,7 +339,7 @@ export async function readOpenDoor(rpc: RpcClient, token: ContractId, meta: Toke
         ? "the code that actually runs could not be read, so no transfer was simulated"
         : "this contract has no transfer(address,uint256) function, so it is not an ERC-20 and no transfer was simulated";
   } else {
-    const candidates = await probeCandidates(rpc, address, block, topHolders, deployer?.address ?? null, owner?.address ?? null, options.probeHolders ?? 3);
+    const candidates = await probeCandidates(rpc, address, block, topHolders, deployer?.address ?? null, owner?.address ?? null, options.probeHolders ?? 3, options.recentBlocks);
     if (!candidates.length) {
       probesSkipped = "no wallet with a readable balance to simulate from";
     } else {
@@ -389,12 +392,17 @@ async function probeCandidates(
   deployer: string | null,
   owner: string | null,
   want: number,
+  recentBlocks?: number,
 ): Promise<{ address: string; source: TransferProbe["source"] }[]> {
   const excluded = new Set([token, deployer, owner].filter((x): x is string => Boolean(x)).map((x) => x.toLowerCase()));
-  const shortlist = holders
+  let shortlist = holders
     .filter((h) => (!h.isContract || h.delegated) && !BURN_ADDRESSES.has(h.address) && !excluded.has(h.address) && h.value > 0n)
     .slice(0, Math.max(want * 3, 9))
     .map((h) => h.address);
+  // No explorer, or one that would not answer: the chain still knows who was
+  // sent this token recently. Without this the sale simulation, which is the
+  // whole point of the check, would simply not run on a chain like BNB.
+  if (!shortlist.length) shortlist = await recentRecipients(rpc, token, block, excluded, Math.max(want * 4, 12), recentBlocks);
   const out: { address: string; source: TransferProbe["source"] }[] = [];
   if (shortlist.length) {
     try {
@@ -420,6 +428,52 @@ async function probeCandidates(
     if (balance > 0n) out.push({ address: deployer, source: "deployer" });
   }
   return out.slice(0, want);
+}
+
+/**
+ * Wallets the token was sent to recently, read from its own Transfer logs.
+ * Contracts are dropped: a pool receiving tokens is not a holder whose ability
+ * to sell says anything. Everything here is one getLogs and two batches.
+ */
+async function recentRecipients(rpc: RpcClient, token: string, block: number, excluded: Set<string>, want: number, recentBlocks = 1_800): Promise<string[]> {
+  let logs: { topics: string[] }[];
+  try {
+    logs = await rpc.getLogs({ address: token, topics: [eventTopic(ERC20_EVENTS.Transfer)], fromBlock: Math.max(0, block - recentBlocks), toBlock: block });
+  } catch {
+    return [];
+  }
+  const seen: string[] = [];
+  for (let i = logs.length - 1; i >= 0 && seen.length < want * 3; i--) {
+    const topic = logs[i].topics[2];
+    if (!topic) continue;
+    const who = `0x${topic.slice(-40)}`.toLowerCase();
+    if (BURN_ADDRESSES.has(who) || excluded.has(who) || seen.includes(who)) continue;
+    seen.push(who);
+  }
+  if (!seen.length) return [];
+  const codes = await rpc.callBatchSettled(
+    seen.map((who) => ({ to: token, data: encodeCall(ERC20_FUNCTIONS.balanceOf, [who]) })),
+    block,
+  );
+  const withBalance: string[] = [];
+  codes.forEach((raw, i) => {
+    if (raw instanceof Error) return;
+    try {
+      if ((decodeOutputs(ERC20_FUNCTIONS.balanceOf, raw)[0] as bigint) > 0n) withBalance.push(seen[i]);
+    } catch {
+      // not a readable balance, not a candidate
+    }
+  });
+  const out: string[] = [];
+  for (const who of withBalance) {
+    if (out.length >= want) break;
+    try {
+      if ((await rpc.getCode(who, block)).length <= 2) out.push(who);
+    } catch {
+      // an unread code size is not a reason to probe from an address
+    }
+  }
+  return out;
 }
 
 async function readOwner(rpc: RpcClient, token: string, block: number): Promise<{ owner: OpenDoor["owner"]; unread: boolean }> {

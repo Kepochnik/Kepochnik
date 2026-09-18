@@ -78,16 +78,22 @@ test("an ordinary token is NOT A LAUNCH and gets the open-door check", async () 
   assert.match(text, /Blacklisted/);
 });
 
-test("without an explorer the open door still reads code, owner and switches", async () => {
+test("without an explorer the sale is still simulated, from holders found in the chain's own logs", async () => {
+  // BNB Chain has no public Blockscout. Without this path the headline check
+  // would simply not run there, which is worse than running it on fewer wallets.
   const slip = await readDoor(demoRpc(), DEMO_PLAIN.token, { ...opts(), blockscout: null });
   assert.equal(slip.stamp, "NOT A LAUNCH");
   const o = slip.open!;
-  assert.equal(o.holders, null);
+  assert.equal(o.holders, null, "there is no holder list without an explorer");
   assert.equal(o.deployer, null);
-  assert.equal(o.probes.length, 0);
-  assert.match(o.probesSkipped ?? "", /no wallet with a readable balance/);
   assert.equal(o.owner?.address, DEMO_PLAIN.owner);
   assert.ok(slip.notes.some((n) => n.code === "powers"));
+  assert.ok(o.probes.length > 0, "the sale is still simulated");
+  assert.ok(o.probes.some((p) => p.target === "pool"), "and it is aimed at the pool");
+  assert.ok(o.probes.every((p) => p.from !== DEMO_PLAIN.owner), "the owner is still excluded");
+  assert.equal(o.probesSkipped, null);
+  // The blacklisted wallet was sent tokens too, so it should be caught here as well.
+  assert.ok(slip.notes.some((n) => n.code === "sell-some-revert" || n.code === "sell-ok"));
 });
 
 test("a token wearing a real launch's ticker is NOT ON THE LIST", async () => {
