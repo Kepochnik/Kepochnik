@@ -1,0 +1,41 @@
+name: probe
+
+# A read-only look at one address from a runner with internet access:
+# what Blockscout knows about it, and what the CLI says. Handy when the
+# machine driving the repo cannot reach the chain itself.
+on:
+  workflow_dispatch:
+    inputs:
+      address:
+        description: "Address to look at"
+        required: true
+      chain:
+        description: "Chain key"
+        required: false
+        default: "robinhood"
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci && npm run build
+      - name: Blockscout
+        env:
+          ADDR: ${{ inputs.address }}
+        run: |
+          B=https://robinhoodchain.blockscout.com
+          echo "=== address"; curl -sS "$B/api/v2/addresses/$ADDR" | head -c 1500; echo
+          echo "=== contract"; curl -sS "$B/api/v2/smart-contracts/$ADDR" | head -c 1500; echo
+          echo "=== tokens"; curl -sS "$B/api/v2/tokens/$ADDR" | head -c 800; echo
+          echo "=== creation tx"; curl -sS "$B/api/v2/addresses/$ADDR/transactions?filter=to" | head -c 400; echo
+      - name: bouncer door
+        env:
+          ADDR: ${{ inputs.address }}
+          CHAIN: ${{ inputs.chain }}
+        run: node bin/bouncer.mjs door "$ADDR" --chain "$CHAIN" --no-dev --no-crew --no-lookalikes --format json | head -c 6000 || true
+      - name: bouncer doctor
+        run: node bin/bouncer.mjs doctor --chain "${{ inputs.chain }}" || true
