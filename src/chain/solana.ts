@@ -70,7 +70,12 @@ export class SolanaRpc {
   constructor(options: SolanaRpcOptions) {
     if (!options.urls.length) throw new Error("at least one RPC url is required");
     this.urls = options.urls;
-    this.timeoutMs = options.timeoutMs ?? 20_000;
+    // Short on purpose. This client's whole failover strategy is to give up on
+    // a slow endpoint and ask the next one, and a twenty-second timeout made
+    // that impossible: one unlucky request ate a section's entire budget
+    // before a single rotation could happen, so a list of three endpoints
+    // behaved exactly like a list of one.
+    this.timeoutMs = options.timeoutMs ?? 7_000;
     this.fetchImpl = options.fetchImpl ?? ((input: RequestInfo | URL, init?: RequestInit) => fetch(input, init));
     this.minSpacingMs = options.minSpacingMs ?? (options.fetchImpl ? 0 : 120);
     this.retries = options.retries ?? 2;

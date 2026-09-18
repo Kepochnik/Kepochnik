@@ -14,6 +14,7 @@ import {
   parseExtensions,
   tokenAccountOwner,
   type AccountInfo,
+  SolanaRpc,
 } from "../src/chain/solana.js";
 import { readSplDoor, splNotes, splReceipt, type SplSlip } from "../src/bouncer/spl.js";
 import { CHAINS } from "../src/chain/chains.js";
@@ -237,3 +238,39 @@ function slipFor(mint: ReturnType<typeof parseMint>): SplSlip {
   slip.notes = splNotes(slip);
   return slip;
 }
+
+test("a slow endpoint is abandoned quickly enough for the next one to matter", async () => {
+  // The live failure this pins: the per-request timeout was longer than the
+  // budget of the section making the request, so a three-endpoint list behaved
+  // exactly like a one-endpoint list — the first slow answer used up the whole
+  // deadline and no rotation ever happened.
+  const tried: string[] = [];
+  const rpc = new SolanaRpc({
+    urls: ["https://slow.invalid", "https://good.invalid"],
+    timeoutMs: 60,
+    minSpacingMs: 0,
+    fetchImpl: (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      tried.push(url);
+      if (url.startsWith("https://slow")) {
+        // Never answers; only the timeout ends it.
+        return await new Promise((_, reject) => {
+          init?.signal?.addEventListener("abort", () => reject(new Error("aborted")));
+        });
+      }
+      return new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, result: 42 }), { status: 200, headers: { "content-type": "application/json" } });
+    }) as unknown as typeof fetch,
+  });
+
+  const started = Date.now();
+  assert.equal(await rpc.slot(), 42);
+  assert.ok(tried.includes("https://good.invalid"), "it must reach the second endpoint");
+  assert.ok(Date.now() - started < 2_000, "abandoning the first endpoint must be quick enough to be worth doing");
+});
+
+test("the default request timeout leaves room to rotate within a section's budget", () => {
+  // Not a style check: a section gets eight seconds, so a request that can hold
+  // the line for twenty makes the endpoint list decorative.
+  const rpc = new SolanaRpc({ urls: ["https://a.invalid", "https://b.invalid"] });
+  assert.ok((rpc as unknown as { timeoutMs: number }).timeoutMs <= 8_000);
+});
