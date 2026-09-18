@@ -2913,7 +2913,7 @@
     return `$${value.toFixed(0)}`;
   }
   function slipJson(value) {
-    return JSON.stringify(value, (_k, v) => typeof v === "bigint" ? v.toString() : v instanceof Set ? [...v] : v, 2);
+    return JSON.stringify(value, (_k, v) => typeof v === "bigint" ? v.toString() : v instanceof Set ? void 0 : v, 2);
   }
 
   // src/bouncer/mascot.ts

@@ -564,9 +564,9 @@ function codeNote(op: { selfdestruct: number; delegatecall: number; callcode: nu
   return flags.length ? flags.join(", ") : "no SELFDESTRUCT, no DELEGATECALL, no proxy";
 }
 
-/** JSON-safe copy of anything with bigints (decimal strings). */
+/** JSON-safe copy of anything with bigints (decimal strings); selector sets are left out, the open door reports their count. */
 export function slipJson(value: unknown): string {
-  return JSON.stringify(value, (_k, v: unknown) => (typeof v === "bigint" ? v.toString() : v instanceof Set ? [...v] : v), 2);
+  return JSON.stringify(value, (_k, v: unknown) => (typeof v === "bigint" ? v.toString() : v instanceof Set ? undefined : v), 2);
 }
 
 export type { LaunchedToken };
