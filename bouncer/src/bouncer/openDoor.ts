@@ -17,6 +17,7 @@ import { decodeOutputs, encodeCall, selector, type FunctionAbi, type Hex } from 
 import type { BlockscoutClient, TokenHolder, TokenTransfer } from "../chain/blockscout.js";
 import type { ChainConfig } from "../chain/chains.js";
 import { canPrice, readMarket, readPools, type Market, type MarketPool } from "../chain/market.js";
+import { readPoolLock, type PoolLock } from "../chain/liquidity.js";
 import { readSelectors } from "../chain/code.js";
 import { ERC20_EVENTS, ERC20_FUNCTIONS, ZERO_ADDRESS } from "../chain/pons.js";
 import { eventTopic } from "../chain/abi.js";
@@ -148,6 +149,11 @@ export interface OpenDoor {
   pools: MarketPool[] | null;
   /** What a sale of the reference position would pay, priced on the deepest pool that can be priced. */
   market: Market | null;
+  /**
+   * Who is holding the liquidity of the deepest pool, and whether they can walk
+   * off with it. Null when there is no pool, or when the caller did not ask.
+   */
+  liquidity: PoolLock | null;
   holders: {
     count: number | null;
     transfers: number | null;
@@ -172,6 +178,15 @@ export interface OpenDoorOptions {
   position?: bigint;
   /** How far back to look for holders in Transfer logs when there is no explorer; default about an hour. */
   recentBlocks?: number;
+  /** Contracts that hold liquidity with a timer; see LockerTable. */
+  lockers?: ChainConfig["lockers"];
+  /**
+   * Whether to read who holds the liquidity. It costs a log scan and a few
+   * calls, so the caller decides; default on when a DEX table exists.
+   */
+  liquidity?: boolean;
+  /** How far back to look for the mints that opened the V3 positions. */
+  liquidityFromBlock?: number;
 }
 
 const BURN_ADDRESSES = new Set([ZERO_ADDRESS, "0x000000000000000000000000000000000000dead", "0x0000000000000000000000000000000000000001"]);
@@ -225,6 +240,7 @@ export async function readOpenDoor(rpc: RpcClient, token: ContractId, meta: Toke
   // ---- where it trades, read before the probes so a sale can be simulated into the pool
   let pools: MarketPool[] | null = null;
   let market: Market | null = null;
+  let liquidity: PoolLock | null = null;
   if (options.dex) {
     try {
       pools = await readPools(rpc, address, options.dex, block, meta?.decimals ?? 18);
@@ -232,6 +248,19 @@ export async function readOpenDoor(rpc: RpcClient, token: ContractId, meta: Toke
       if (position > 0n) market = readMarket(pools, position, meta?.decimals ?? 18, options.dex.wethSymbol);
     } catch {
       pools = null;
+    }
+    // Who holds the deepest pool's liquidity. Only the deepest: it is the one a
+    // sale would go through, and reading every pool would multiply the cost for
+    // an answer nobody asked. A failure here costs this section, not the slip.
+    const deepest = pools?.[0] ?? null;
+    if (deepest && options.liquidity !== false) {
+      try {
+        liquidity = await readPoolLock(rpc, deepest, options.lockers, options.dex.v3PositionManager, block, {
+          fromBlock: Math.max(0, options.liquidityFromBlock ?? block - 500_000),
+        });
+      } catch {
+        liquidity = null;
+      }
     }
   }
 
@@ -371,6 +400,7 @@ export async function readOpenDoor(rpc: RpcClient, token: ContractId, meta: Toke
     explorerError,
     pools,
     market,
+    liquidity,
     holders,
     activity,
   };

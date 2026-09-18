@@ -129,6 +129,8 @@ export async function main(argv: string[], write: (text: string) => void = (t) =
       skipRoom: args.flags["no-room"] === true,
       skipCrew: args.flags["no-crew"] === true,
       skipLookalikes: args.flags["no-lookalikes"] === true,
+      skipLiquidity: args.flags["no-liquidity"] === true,
+      liquidityBlocks: flagNumber(args.flags, "liquidity-blocks", 0) || undefined,
       launchSearchBlocks: demo ? 400_000 : flagNumber(args.flags, "launch-blocks", 0) || undefined,
     });
     if (demo && command !== "demo") write("DEMO · synthetic chain, every address below is invented\n");

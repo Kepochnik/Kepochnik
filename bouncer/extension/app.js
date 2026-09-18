@@ -1,5 +1,373 @@
 "use strict";
 (() => {
+  var __defProp = Object.defineProperty;
+  var __getOwnPropNames = Object.getOwnPropertyNames;
+  var __esm = (fn, res) => function __init() {
+    return fn && (res = (0, fn[__getOwnPropNames(fn)[0]])(fn = 0)), res;
+  };
+  var __export = (target, all) => {
+    for (var name in all)
+      __defProp(target, name, { get: all[name], enumerable: true });
+  };
+
+  // src/chain/keccak.ts
+  function rotl64(value, shift) {
+    if (shift === 0) return value;
+    return (value << BigInt(shift) | value >> BigInt(64 - shift)) & MASK64;
+  }
+  function keccakF1600(state) {
+    const c = new Array(5);
+    const d = new Array(5);
+    const b = new Array(25);
+    for (let round = 0; round < 24; round++) {
+      for (let x = 0; x < 5; x++) {
+        c[x] = state[x] ^ state[x + 5] ^ state[x + 10] ^ state[x + 15] ^ state[x + 20];
+      }
+      for (let x = 0; x < 5; x++) {
+        d[x] = c[(x + 4) % 5] ^ rotl64(c[(x + 1) % 5], 1);
+      }
+      for (let i = 0; i < 25; i++) {
+        state[i] ^= d[i % 5];
+      }
+      for (let x = 0; x < 5; x++) {
+        for (let y = 0; y < 5; y++) {
+          const from = x + 5 * y;
+          const to = y + 5 * ((2 * x + 3 * y) % 5);
+          b[to] = rotl64(state[from], ROTATION[from]);
+        }
+      }
+      for (let y = 0; y < 5; y++) {
+        for (let x = 0; x < 5; x++) {
+          const i = x + 5 * y;
+          state[i] = b[i] ^ ~b[(x + 1) % 5 + 5 * y] & MASK64 & b[(x + 2) % 5 + 5 * y];
+        }
+      }
+      state[0] ^= ROUND_CONSTANTS[round];
+    }
+  }
+  function keccak256(input) {
+    const message = typeof input === "string" ? new TextEncoder().encode(input) : input;
+    const paddedLength = Math.ceil((message.length + 1) / RATE_BYTES) * RATE_BYTES;
+    const padded = new Uint8Array(paddedLength);
+    padded.set(message);
+    padded[message.length] ^= 1;
+    padded[paddedLength - 1] ^= 128;
+    const state = new Array(25).fill(0n);
+    for (let offset = 0; offset < paddedLength; offset += RATE_BYTES) {
+      for (let lane = 0; lane < RATE_BYTES / 8; lane++) {
+        let word = 0n;
+        for (let byte = 7; byte >= 0; byte--) {
+          word = word << 8n | BigInt(padded[offset + lane * 8 + byte]);
+        }
+        state[lane] ^= word;
+      }
+      keccakF1600(state);
+    }
+    const out2 = new Uint8Array(32);
+    for (let lane = 0; lane < 4; lane++) {
+      let word = state[lane];
+      for (let byte = 0; byte < 8; byte++) {
+        out2[lane * 8 + byte] = Number(word & 0xffn);
+        word >>= 8n;
+      }
+    }
+    return out2;
+  }
+  function keccak256Hex(input) {
+    return `0x${bytesToHex(keccak256(input))}`;
+  }
+  function bytesToHex(bytes) {
+    let hex = "";
+    for (const byte of bytes) hex += byte.toString(16).padStart(2, "0");
+    return hex;
+  }
+  function hexToBytes(hex) {
+    const clean2 = hex.startsWith("0x") ? hex.slice(2) : hex;
+    if (clean2.length % 2 !== 0) throw new Error(`odd-length hex: ${hex}`);
+    const out2 = new Uint8Array(clean2.length / 2);
+    for (let i = 0; i < out2.length; i++) {
+      out2[i] = Number.parseInt(clean2.slice(i * 2, i * 2 + 2), 16);
+    }
+    return out2;
+  }
+  var MASK64, ROUND_CONSTANTS, ROTATION, RATE_BYTES;
+  var init_keccak = __esm({
+    "src/chain/keccak.ts"() {
+      "use strict";
+      MASK64 = (1n << 64n) - 1n;
+      ROUND_CONSTANTS = [
+        0x0000000000000001n,
+        0x0000000000008082n,
+        0x800000000000808an,
+        0x8000000080008000n,
+        0x000000000000808bn,
+        0x0000000080000001n,
+        0x8000000080008081n,
+        0x8000000000008009n,
+        0x000000000000008an,
+        0x0000000000000088n,
+        0x0000000080008009n,
+        0x000000008000000an,
+        0x000000008000808bn,
+        0x800000000000008bn,
+        0x8000000000008089n,
+        0x8000000000008003n,
+        0x8000000000008002n,
+        0x8000000000000080n,
+        0x000000000000800an,
+        0x800000008000000an,
+        0x8000000080008081n,
+        0x8000000000008080n,
+        0x0000000080000001n,
+        0x8000000080008008n
+      ];
+      ROTATION = [
+        0,
+        1,
+        62,
+        28,
+        27,
+        36,
+        44,
+        6,
+        55,
+        20,
+        3,
+        10,
+        43,
+        25,
+        39,
+        41,
+        45,
+        15,
+        21,
+        8,
+        18,
+        2,
+        61,
+        56,
+        14
+      ];
+      RATE_BYTES = 136;
+    }
+  });
+
+  // src/chain/abi.ts
+  function selector(signature) {
+    return `0x${bytesToHex(keccak256(signature).slice(0, 4))}`;
+  }
+  function eventSignature(event) {
+    return `${event.name}(${event.inputs.map((input) => input.type).join(",")})`;
+  }
+  function eventTopic(event) {
+    return `0x${bytesToHex(keccak256(eventSignature(event)))}`;
+  }
+  function functionSignature(fn) {
+    return `${fn.name}(${fn.inputs.join(",")})`;
+  }
+  function encodeWord(type, value) {
+    if (type === "address") {
+      const address = normalizeAddress(String(value));
+      return address.slice(2).padStart(64, "0");
+    }
+    if (type === "bool") {
+      return (value ? 1n : 0n).toString(16).padStart(64, "0");
+    }
+    if (type === "bytes32") {
+      const hex = String(value).toLowerCase().replace(/^0x/, "");
+      if (hex.length !== 64) throw new Error(`bytes32 expects 32 bytes, got ${hex.length / 2}`);
+      return hex;
+    }
+    if (type.startsWith("uint")) {
+      const big = toBigInt(value);
+      if (big < 0n) throw new Error(`negative value for ${type}`);
+      return big.toString(16).padStart(64, "0");
+    }
+    if (type.startsWith("int")) {
+      const big = toBigInt(value);
+      const twos = big < 0n ? (1n << 256n) + big : big;
+      return twos.toString(16).padStart(64, "0");
+    }
+    throw new Error(`unsupported static type ${type}`);
+  }
+  function encodeCall(fn, args) {
+    if (args.length !== fn.inputs.length) {
+      throw new Error(`${fn.name} expects ${fn.inputs.length} args, got ${args.length}`);
+    }
+    const words = fn.inputs.map((type, index) => encodeWord(type, args[index]));
+    return `${selector(functionSignature(fn))}${words.join("")}`;
+  }
+  function decodeWord(type, word) {
+    if (word.length !== 64) throw new Error(`expected a 32-byte word, got ${word.length / 2} bytes`);
+    if (type === "address") return `0x${word.slice(24)}`.toLowerCase();
+    if (type === "bool") return BigInt(`0x${word}`) !== 0n;
+    if (type === "bytes32") return `0x${word}`;
+    if (type.startsWith("uint")) return BigInt(`0x${word}`);
+    if (type.startsWith("int")) {
+      const raw = BigInt(`0x${word}`);
+      return raw >= 1n << 255n ? raw - (1n << 256n) : raw;
+    }
+    throw new Error(`unsupported static type ${type}`);
+  }
+  function decodeOutputs(fn, data) {
+    const hex = data.slice(2);
+    if (hex.length === 0) throw new Error(`${fn.name}: empty return data`);
+    const words = hex.match(/.{64}/g) ?? [];
+    const values = [];
+    for (let i = 0; i < fn.outputs.length; i++) {
+      const type = fn.outputs[i];
+      const word = words[i];
+      if (word === void 0) throw new Error(`${fn.name}: return data too short`);
+      if (type === "string") {
+        const offset = Number(BigInt(`0x${word}`)) * 2;
+        const length = Number(BigInt(`0x${hex.slice(offset, offset + 64)}`));
+        const bytes = hexToBytes(hex.slice(offset + 64, offset + 64 + length * 2));
+        values.push(new TextDecoder().decode(bytes));
+      } else {
+        values.push(decodeWord(type, word));
+      }
+    }
+    return values;
+  }
+  function decodeLog(event, log) {
+    const expectedTopic = eventTopic(event);
+    if ((log.topics[0] ?? "").toLowerCase() !== expectedTopic) {
+      throw new Error(`log topic does not match ${event.name}`);
+    }
+    const args = {};
+    let topicIndex = 1;
+    const dataWords = log.data.slice(2).match(/.{64}/g) ?? [];
+    let dataIndex = 0;
+    for (const input of event.inputs) {
+      if (input.indexed) {
+        const topic = log.topics[topicIndex++];
+        if (!topic) throw new Error(`${event.name}: missing indexed topic ${input.name}`);
+        args[input.name] = decodeWord(input.type, topic.slice(2));
+      } else {
+        const word = dataWords[dataIndex++];
+        if (!word) throw new Error(`${event.name}: missing data word ${input.name}`);
+        args[input.name] = decodeWord(input.type, word);
+      }
+    }
+    return {
+      name: event.name,
+      address: log.address.toLowerCase(),
+      blockNumber: Number(BigInt(log.blockNumber)),
+      transactionHash: log.transactionHash,
+      logIndex: Number(BigInt(log.logIndex)),
+      args
+    };
+  }
+  function isAddress(value) {
+    return /^0x[0-9a-fA-F]{40}$/.test(value);
+  }
+  function normalizeAddress(value) {
+    if (!isAddress(value)) throw new Error(`not an EVM address: ${value}`);
+    return value.toLowerCase();
+  }
+  function toBigInt(value) {
+    if (typeof value === "bigint") return value;
+    if (typeof value === "number") {
+      if (!Number.isInteger(value)) throw new Error(`non-integer number ${value}`);
+      return BigInt(value);
+    }
+    if (typeof value === "string") return BigInt(value);
+    throw new Error(`cannot convert ${typeof value} to bigint`);
+  }
+  var init_abi = __esm({
+    "src/chain/abi.ts"() {
+      "use strict";
+      init_keccak();
+    }
+  });
+
+  // src/chain/tape.ts
+  var tape_exports = {};
+  __export(tape_exports, {
+    BLOCKS_PER_SECOND_ESTIMATE: () => BLOCKS_PER_SECOND_ESTIMATE,
+    addressTopic: () => addressTopic,
+    estimateBlocksAgo: () => estimateBlocksAgo,
+    findBlockByTimestamp: () => findBlockByTimestamp,
+    readTape: () => readTape,
+    readTapeAdaptive: () => readTapeAdaptive
+  });
+  async function readTape(rpc, request) {
+    const byTopic = /* @__PURE__ */ new Map();
+    for (const event of request.events) byTopic.set(eventTopic(event), event);
+    const topic0 = [...byTopic.keys()];
+    const chunkSize = request.chunkSize ?? 2e3;
+    const filterTopics = [topic0.length === 1 ? topic0[0] : topic0, ...request.topics ?? []];
+    const logs = [];
+    let chunks = 0;
+    for (let from = request.fromBlock; from <= request.toBlock; from += chunkSize) {
+      const to = Math.min(from + chunkSize - 1, request.toBlock);
+      const raw = await rpc.getLogs({ address: request.address, topics: filterTopics, fromBlock: from, toBlock: to });
+      chunks++;
+      for (const log of raw) logs.push(decodeRaw(byTopic, log));
+    }
+    logs.sort((a, b) => a.blockNumber - b.blockNumber || a.logIndex - b.logIndex);
+    return { logs, fromBlock: request.fromBlock, toBlock: request.toBlock, chunks };
+  }
+  function decodeRaw(byTopic, log) {
+    const event = byTopic.get((log.topics[0] ?? "").toLowerCase());
+    if (!event) throw new Error(`tape received a log with an unexpected topic ${log.topics[0]}`);
+    return decodeLog(event, log);
+  }
+  async function readTapeAdaptive(rpc, request, chunking = {}) {
+    const byTopic = /* @__PURE__ */ new Map();
+    for (const event of request.events) byTopic.set(eventTopic(event), event);
+    const topic0 = [...byTopic.keys()];
+    const filterTopics = [topic0.length === 1 ? topic0[0] : topic0, ...request.topics ?? []];
+    const minChunk = chunking.minChunk ?? 1e3;
+    const maxChunk = chunking.maxChunk ?? 2e5;
+    let chunk = Math.min(maxChunk, Math.max(minChunk, chunking.startChunk ?? 5e4));
+    const logs = [];
+    let chunks = 0;
+    let from = request.fromBlock;
+    while (from <= request.toBlock) {
+      const to = Math.min(from + chunk - 1, request.toBlock);
+      try {
+        const raw = await rpc.getLogs({ address: request.address, topics: filterTopics, fromBlock: from, toBlock: to });
+        chunks++;
+        for (const log of raw) logs.push(decodeRaw(byTopic, log));
+        from = to + 1;
+        chunk = Math.min(maxChunk, chunk * 2);
+      } catch (error) {
+        if (chunk <= minChunk) throw error;
+        chunk = Math.max(minChunk, Math.floor(chunk / 2));
+      }
+    }
+    logs.sort((a, b) => a.blockNumber - b.blockNumber || a.logIndex - b.logIndex);
+    return { logs, fromBlock: request.fromBlock, toBlock: request.toBlock, chunks };
+  }
+  function addressTopic(address) {
+    return `0x${address.toLowerCase().replace(/^0x/, "").padStart(64, "0")}`;
+  }
+  function estimateBlocksAgo(seconds) {
+    return Math.max(1, Math.round(seconds * BLOCKS_PER_SECOND_ESTIMATE));
+  }
+  async function findBlockByTimestamp(rpc, targetTimestamp, latest) {
+    let high = latest ?? await rpc.blockNumber();
+    let low = 0;
+    const latestHeader = await rpc.getBlock(high);
+    if (latestHeader.timestamp <= targetTimestamp) return high;
+    while (low < high) {
+      const mid = Math.floor((low + high) / 2);
+      const header = await rpc.getBlock(mid);
+      if (header.timestamp < targetTimestamp) low = mid + 1;
+      else high = mid;
+    }
+    return low;
+  }
+  var BLOCKS_PER_SECOND_ESTIMATE;
+  var init_tape = __esm({
+    "src/chain/tape.ts"() {
+      "use strict";
+      init_abi();
+      BLOCKS_PER_SECOND_ESTIMATE = 10;
+    }
+  });
+
   // src/chain/blockscout.ts
   var BlockscoutClient = class _BlockscoutClient {
     baseUrl;
@@ -142,7 +510,8 @@
       dex: {
         weth: "0x0Bd7D308f8E1639FAb988df18A8011f41EAcAD73".toLowerCase(),
         wethSymbol: "WETH",
-        v3Factories: [{ name: "Uniswap V3", address: "0x1f7d7550B1b028f7571E69A784071F0205FD2EfA".toLowerCase() }]
+        v3Factories: [{ name: "Uniswap V3", address: "0x1f7d7550B1b028f7571E69A784071F0205FD2EfA".toLowerCase() }],
+        v3PositionManager: "0x943e6b11d6a2a0dD87eC5E23Cf58A63A8D9Ec2B7".toLowerCase()
       }
     },
     base: {
@@ -162,7 +531,8 @@
         wethSymbol: "WETH",
         v3Factories: [{ name: "Uniswap V3", address: "0x33128a8fC17869897dcE68Ed026d694621f6FDfD".toLowerCase() }],
         v2Factories: [{ name: "Uniswap V2", address: "0x8909Dc15e40173Ff4699343b6eB8132c65e18eC6".toLowerCase() }],
-        solidlyFactories: [{ name: "Aerodrome", address: "0x420DD381b31aEf6683db6B902084cB0FFECe40Da".toLowerCase() }]
+        solidlyFactories: [{ name: "Aerodrome", address: "0x420DD381b31aEf6683db6B902084cB0FFECe40Da".toLowerCase() }],
+        v3PositionManager: "0x03a520b32C04BF3bEEf7BEb72E919cf822Ed34f1".toLowerCase()
       }
     },
     bnb: {
@@ -185,7 +555,8 @@
           { name: "PancakeSwap V3", address: "0x0BFbCF9fa4f9C56B0F40a671Ad40E0805A091865".toLowerCase(), feeTiers: [100, 500, 2500, 1e4] },
           { name: "Uniswap V3", address: "0xdB1d10011AD0Ff90774D0C6Bb92e5C5c8b4461F7".toLowerCase() }
         ],
-        v2Factories: [{ name: "PancakeSwap V2", address: "0xcA143Ce32Fe78f1f7019d7d551a6402fC5350c73".toLowerCase() }]
+        v2Factories: [{ name: "PancakeSwap V2", address: "0xcA143Ce32Fe78f1f7019d7d551a6402fC5350c73".toLowerCase() }],
+        v3PositionManager: "0x46A15B0b27311cedF172AB29E4f4766fbE7F4364".toLowerCase()
       }
     },
     solana: {
@@ -504,266 +875,8 @@
     return amountInWithFee * reserveOut / (reserveIn * 10000n + amountInWithFee);
   }
 
-  // src/chain/keccak.ts
-  var MASK64 = (1n << 64n) - 1n;
-  var ROUND_CONSTANTS = [
-    0x0000000000000001n,
-    0x0000000000008082n,
-    0x800000000000808an,
-    0x8000000080008000n,
-    0x000000000000808bn,
-    0x0000000080000001n,
-    0x8000000080008081n,
-    0x8000000000008009n,
-    0x000000000000008an,
-    0x0000000000000088n,
-    0x0000000080008009n,
-    0x000000008000000an,
-    0x000000008000808bn,
-    0x800000000000008bn,
-    0x8000000000008089n,
-    0x8000000000008003n,
-    0x8000000000008002n,
-    0x8000000000000080n,
-    0x000000000000800an,
-    0x800000008000000an,
-    0x8000000080008081n,
-    0x8000000000008080n,
-    0x0000000080000001n,
-    0x8000000080008008n
-  ];
-  var ROTATION = [
-    0,
-    1,
-    62,
-    28,
-    27,
-    36,
-    44,
-    6,
-    55,
-    20,
-    3,
-    10,
-    43,
-    25,
-    39,
-    41,
-    45,
-    15,
-    21,
-    8,
-    18,
-    2,
-    61,
-    56,
-    14
-  ];
-  var RATE_BYTES = 136;
-  function rotl64(value, shift) {
-    if (shift === 0) return value;
-    return (value << BigInt(shift) | value >> BigInt(64 - shift)) & MASK64;
-  }
-  function keccakF1600(state) {
-    const c = new Array(5);
-    const d = new Array(5);
-    const b = new Array(25);
-    for (let round = 0; round < 24; round++) {
-      for (let x = 0; x < 5; x++) {
-        c[x] = state[x] ^ state[x + 5] ^ state[x + 10] ^ state[x + 15] ^ state[x + 20];
-      }
-      for (let x = 0; x < 5; x++) {
-        d[x] = c[(x + 4) % 5] ^ rotl64(c[(x + 1) % 5], 1);
-      }
-      for (let i = 0; i < 25; i++) {
-        state[i] ^= d[i % 5];
-      }
-      for (let x = 0; x < 5; x++) {
-        for (let y = 0; y < 5; y++) {
-          const from = x + 5 * y;
-          const to = y + 5 * ((2 * x + 3 * y) % 5);
-          b[to] = rotl64(state[from], ROTATION[from]);
-        }
-      }
-      for (let y = 0; y < 5; y++) {
-        for (let x = 0; x < 5; x++) {
-          const i = x + 5 * y;
-          state[i] = b[i] ^ ~b[(x + 1) % 5 + 5 * y] & MASK64 & b[(x + 2) % 5 + 5 * y];
-        }
-      }
-      state[0] ^= ROUND_CONSTANTS[round];
-    }
-  }
-  function keccak256(input) {
-    const message = typeof input === "string" ? new TextEncoder().encode(input) : input;
-    const paddedLength = Math.ceil((message.length + 1) / RATE_BYTES) * RATE_BYTES;
-    const padded = new Uint8Array(paddedLength);
-    padded.set(message);
-    padded[message.length] ^= 1;
-    padded[paddedLength - 1] ^= 128;
-    const state = new Array(25).fill(0n);
-    for (let offset = 0; offset < paddedLength; offset += RATE_BYTES) {
-      for (let lane = 0; lane < RATE_BYTES / 8; lane++) {
-        let word = 0n;
-        for (let byte = 7; byte >= 0; byte--) {
-          word = word << 8n | BigInt(padded[offset + lane * 8 + byte]);
-        }
-        state[lane] ^= word;
-      }
-      keccakF1600(state);
-    }
-    const out2 = new Uint8Array(32);
-    for (let lane = 0; lane < 4; lane++) {
-      let word = state[lane];
-      for (let byte = 0; byte < 8; byte++) {
-        out2[lane * 8 + byte] = Number(word & 0xffn);
-        word >>= 8n;
-      }
-    }
-    return out2;
-  }
-  function keccak256Hex(input) {
-    return `0x${bytesToHex(keccak256(input))}`;
-  }
-  function bytesToHex(bytes) {
-    let hex = "";
-    for (const byte of bytes) hex += byte.toString(16).padStart(2, "0");
-    return hex;
-  }
-  function hexToBytes(hex) {
-    const clean2 = hex.startsWith("0x") ? hex.slice(2) : hex;
-    if (clean2.length % 2 !== 0) throw new Error(`odd-length hex: ${hex}`);
-    const out2 = new Uint8Array(clean2.length / 2);
-    for (let i = 0; i < out2.length; i++) {
-      out2[i] = Number.parseInt(clean2.slice(i * 2, i * 2 + 2), 16);
-    }
-    return out2;
-  }
-
-  // src/chain/abi.ts
-  function selector(signature) {
-    return `0x${bytesToHex(keccak256(signature).slice(0, 4))}`;
-  }
-  function eventSignature(event) {
-    return `${event.name}(${event.inputs.map((input) => input.type).join(",")})`;
-  }
-  function eventTopic(event) {
-    return `0x${bytesToHex(keccak256(eventSignature(event)))}`;
-  }
-  function functionSignature(fn) {
-    return `${fn.name}(${fn.inputs.join(",")})`;
-  }
-  function encodeWord(type, value) {
-    if (type === "address") {
-      const address = normalizeAddress(String(value));
-      return address.slice(2).padStart(64, "0");
-    }
-    if (type === "bool") {
-      return (value ? 1n : 0n).toString(16).padStart(64, "0");
-    }
-    if (type === "bytes32") {
-      const hex = String(value).toLowerCase().replace(/^0x/, "");
-      if (hex.length !== 64) throw new Error(`bytes32 expects 32 bytes, got ${hex.length / 2}`);
-      return hex;
-    }
-    if (type.startsWith("uint")) {
-      const big = toBigInt(value);
-      if (big < 0n) throw new Error(`negative value for ${type}`);
-      return big.toString(16).padStart(64, "0");
-    }
-    if (type.startsWith("int")) {
-      const big = toBigInt(value);
-      const twos = big < 0n ? (1n << 256n) + big : big;
-      return twos.toString(16).padStart(64, "0");
-    }
-    throw new Error(`unsupported static type ${type}`);
-  }
-  function encodeCall(fn, args) {
-    if (args.length !== fn.inputs.length) {
-      throw new Error(`${fn.name} expects ${fn.inputs.length} args, got ${args.length}`);
-    }
-    const words = fn.inputs.map((type, index) => encodeWord(type, args[index]));
-    return `${selector(functionSignature(fn))}${words.join("")}`;
-  }
-  function decodeWord(type, word) {
-    if (word.length !== 64) throw new Error(`expected a 32-byte word, got ${word.length / 2} bytes`);
-    if (type === "address") return `0x${word.slice(24)}`.toLowerCase();
-    if (type === "bool") return BigInt(`0x${word}`) !== 0n;
-    if (type === "bytes32") return `0x${word}`;
-    if (type.startsWith("uint")) return BigInt(`0x${word}`);
-    if (type.startsWith("int")) {
-      const raw = BigInt(`0x${word}`);
-      return raw >= 1n << 255n ? raw - (1n << 256n) : raw;
-    }
-    throw new Error(`unsupported static type ${type}`);
-  }
-  function decodeOutputs(fn, data) {
-    const hex = data.slice(2);
-    if (hex.length === 0) throw new Error(`${fn.name}: empty return data`);
-    const words = hex.match(/.{64}/g) ?? [];
-    const values = [];
-    for (let i = 0; i < fn.outputs.length; i++) {
-      const type = fn.outputs[i];
-      const word = words[i];
-      if (word === void 0) throw new Error(`${fn.name}: return data too short`);
-      if (type === "string") {
-        const offset = Number(BigInt(`0x${word}`)) * 2;
-        const length = Number(BigInt(`0x${hex.slice(offset, offset + 64)}`));
-        const bytes = hexToBytes(hex.slice(offset + 64, offset + 64 + length * 2));
-        values.push(new TextDecoder().decode(bytes));
-      } else {
-        values.push(decodeWord(type, word));
-      }
-    }
-    return values;
-  }
-  function decodeLog(event, log) {
-    const expectedTopic = eventTopic(event);
-    if ((log.topics[0] ?? "").toLowerCase() !== expectedTopic) {
-      throw new Error(`log topic does not match ${event.name}`);
-    }
-    const args = {};
-    let topicIndex = 1;
-    const dataWords = log.data.slice(2).match(/.{64}/g) ?? [];
-    let dataIndex = 0;
-    for (const input of event.inputs) {
-      if (input.indexed) {
-        const topic = log.topics[topicIndex++];
-        if (!topic) throw new Error(`${event.name}: missing indexed topic ${input.name}`);
-        args[input.name] = decodeWord(input.type, topic.slice(2));
-      } else {
-        const word = dataWords[dataIndex++];
-        if (!word) throw new Error(`${event.name}: missing data word ${input.name}`);
-        args[input.name] = decodeWord(input.type, word);
-      }
-    }
-    return {
-      name: event.name,
-      address: log.address.toLowerCase(),
-      blockNumber: Number(BigInt(log.blockNumber)),
-      transactionHash: log.transactionHash,
-      logIndex: Number(BigInt(log.logIndex)),
-      args
-    };
-  }
-  function isAddress(value) {
-    return /^0x[0-9a-fA-F]{40}$/.test(value);
-  }
-  function normalizeAddress(value) {
-    if (!isAddress(value)) throw new Error(`not an EVM address: ${value}`);
-    return value.toLowerCase();
-  }
-  function toBigInt(value) {
-    if (typeof value === "bigint") return value;
-    if (typeof value === "number") {
-      if (!Number.isInteger(value)) throw new Error(`non-integer number ${value}`);
-      return BigInt(value);
-    }
-    if (typeof value === "string") return BigInt(value);
-    throw new Error(`cannot convert ${typeof value} to bigint`);
-  }
-
   // src/chain/reader.ts
+  init_abi();
   var NotAPonsLaunch = class extends Error {
     constructor(address) {
       super(`${address} is not a Pons V2 launch on this factory`);
@@ -1696,8 +1809,8 @@
   function short(address) {
     return address.length > 12 ? `${address.slice(0, 4)}\u2026${address.slice(-4)}` : address;
   }
-  function pct(bps) {
-    return bps === null ? "an unknown share" : `${(bps / 100).toFixed(1)}%`;
+  function pct(bps2) {
+    return bps2 === null ? "an unknown share" : `${(bps2 / 100).toFixed(1)}%`;
   }
   function splNotes(slip) {
     const notes = [];
@@ -1803,72 +1916,8 @@
     return notes;
   }
 
-  // src/chain/tape.ts
-  async function readTape(rpc, request) {
-    const byTopic = /* @__PURE__ */ new Map();
-    for (const event of request.events) byTopic.set(eventTopic(event), event);
-    const topic0 = [...byTopic.keys()];
-    const chunkSize = request.chunkSize ?? 2e3;
-    const filterTopics = [topic0.length === 1 ? topic0[0] : topic0, ...request.topics ?? []];
-    const logs = [];
-    let chunks = 0;
-    for (let from = request.fromBlock; from <= request.toBlock; from += chunkSize) {
-      const to = Math.min(from + chunkSize - 1, request.toBlock);
-      const raw = await rpc.getLogs({ address: request.address, topics: filterTopics, fromBlock: from, toBlock: to });
-      chunks++;
-      for (const log of raw) logs.push(decodeRaw(byTopic, log));
-    }
-    logs.sort((a, b) => a.blockNumber - b.blockNumber || a.logIndex - b.logIndex);
-    return { logs, fromBlock: request.fromBlock, toBlock: request.toBlock, chunks };
-  }
-  function decodeRaw(byTopic, log) {
-    const event = byTopic.get((log.topics[0] ?? "").toLowerCase());
-    if (!event) throw new Error(`tape received a log with an unexpected topic ${log.topics[0]}`);
-    return decodeLog(event, log);
-  }
-  async function readTapeAdaptive(rpc, request, chunking = {}) {
-    const byTopic = /* @__PURE__ */ new Map();
-    for (const event of request.events) byTopic.set(eventTopic(event), event);
-    const topic0 = [...byTopic.keys()];
-    const filterTopics = [topic0.length === 1 ? topic0[0] : topic0, ...request.topics ?? []];
-    const minChunk = chunking.minChunk ?? 1e3;
-    const maxChunk = chunking.maxChunk ?? 2e5;
-    let chunk = Math.min(maxChunk, Math.max(minChunk, chunking.startChunk ?? 5e4));
-    const logs = [];
-    let chunks = 0;
-    let from = request.fromBlock;
-    while (from <= request.toBlock) {
-      const to = Math.min(from + chunk - 1, request.toBlock);
-      try {
-        const raw = await rpc.getLogs({ address: request.address, topics: filterTopics, fromBlock: from, toBlock: to });
-        chunks++;
-        for (const log of raw) logs.push(decodeRaw(byTopic, log));
-        from = to + 1;
-        chunk = Math.min(maxChunk, chunk * 2);
-      } catch (error) {
-        if (chunk <= minChunk) throw error;
-        chunk = Math.max(minChunk, Math.floor(chunk / 2));
-      }
-    }
-    logs.sort((a, b) => a.blockNumber - b.blockNumber || a.logIndex - b.logIndex);
-    return { logs, fromBlock: request.fromBlock, toBlock: request.toBlock, chunks };
-  }
-  function addressTopic(address) {
-    return `0x${address.toLowerCase().replace(/^0x/, "").padStart(64, "0")}`;
-  }
-  async function findBlockByTimestamp(rpc, targetTimestamp, latest) {
-    let high = latest ?? await rpc.blockNumber();
-    let low = 0;
-    const latestHeader = await rpc.getBlock(high);
-    if (latestHeader.timestamp <= targetTimestamp) return high;
-    while (low < high) {
-      const mid = Math.floor((low + high) / 2);
-      const header = await rpc.getBlock(mid);
-      if (header.timestamp < targetTimestamp) low = mid + 1;
-      else high = mid;
-    }
-    return low;
-  }
+  // site/src/app.ts
+  init_tape();
 
   // src/format.ts
   function formatUnits(value, decimals, maxFraction = 4) {
@@ -1882,9 +1931,9 @@
     const text = fractionText ? `${wholeText}.${fractionText}` : wholeText;
     return negative ? `-${text}` : text;
   }
-  function formatBps(bps) {
-    const whole = bps / 100n;
-    const fraction = bps % 100n;
+  function formatBps(bps2) {
+    const whole = bps2 / 100n;
+    const fraction = bps2 % 100n;
     return fraction === 0n ? `${whole}%` : `${whole}.${fraction.toString().padStart(2, "0").replace(/0$/, "")}%`;
   }
   function formatPercent(numerator, denominator, digits = 1) {
@@ -1918,6 +1967,8 @@
   }
 
   // src/bouncer/coverCharge.ts
+  init_abi();
+  init_tape();
   async function readCoverCharge(rpc, launch, options) {
     const factory = options.factory ?? PONS_V2_FACTORY;
     const head = options.head;
@@ -2002,6 +2053,8 @@
   }
 
   // src/bouncer/devReport.ts
+  init_abi();
+  init_tape();
   async function readDevReport(rpc, deployer, options) {
     const address = normalizeAddress(deployer);
     const factory = options.factory ?? PONS_V2_FACTORY;
@@ -2149,7 +2202,11 @@
     return text.length > max ? `${text.slice(0, max - 1)}\u2026` : text;
   }
 
+  // src/bouncer/demo.ts
+  init_abi();
+
   // src/chain/code.ts
+  init_keccak();
   var OP_SELFDESTRUCT = 255;
   var OP_DELEGATECALL = 244;
   var OP_CALLCODE = 242;
@@ -2243,7 +2300,12 @@
     return { all, push4 };
   }
 
+  // src/bouncer/demo.ts
+  init_keccak();
+
   // src/bouncer/exitDoor.ts
+  init_abi();
+  init_keccak();
   var POOLS_SLOT = 6n;
   var Q96 = 2n ** 96n;
   function poolIdFor(token, pairToken, fee, tickSpacing, hooks) {
@@ -2356,6 +2418,7 @@
   }
 
   // src/bouncer/demo.ts
+  init_tape();
   var ETH = 10n ** 18n;
   var HEAD = 31337500;
   var DEV_A = "0x0000000000000000000000000000000000d0e5e1";
@@ -2747,9 +2810,9 @@
       if (url.pathname === `/api/v2/tokens/${plain.token}/counters`) return json({ token_holders_count: "143", transfers_count: "2210" });
       if (url.pathname === `/api/v2/tokens/${plain.token}/holders`) {
         return json({
-          items: plain.holders.map(([hash, bps, is_contract, name, delegated]) => ({
+          items: plain.holders.map(([hash, bps2, is_contract, name, delegated]) => ({
             address: { hash, is_contract, name, proxy_type: delegated ? "eip7702" : null },
-            value: (plain.supply * BigInt(bps) / 10000n).toString()
+            value: (plain.supply * BigInt(bps2) / 10000n).toString()
           })),
           next_page_params: null
         });
@@ -2810,7 +2873,11 @@
     return new RpcClient({ urls: ["demo://robinhood-chain"], expectedChainId: ROBINHOOD_CHAIN_ID, fetchImpl: demoFetch(), minSpacingMs: 0 });
   }
 
+  // src/bouncer/door.ts
+  init_tape();
+
   // src/bouncer/houseRules.ts
+  init_tape();
   async function readHouseRules(rpc, launch, options) {
     const factory = options.factory ?? PONS_V2_FACTORY;
     const reader = new PonsReader(rpc, factory);
@@ -2877,7 +2944,11 @@
     return out2;
   }
 
+  // src/bouncer/idCheck.ts
+  init_abi();
+
   // src/bouncer/v1.ts
+  init_abi();
   async function readV1Launch(rpc, factory, token, block, native) {
     const [raw] = await rpc.callBatch([{ to: factory, data: encodeCall(V1_FACTORY_FUNCTIONS.getLaunchedToken, [token]) }], block);
     const record = decodeV1LaunchedToken(decodeOutputs(V1_FACTORY_FUNCTIONS.getLaunchedToken, raw));
@@ -3151,7 +3222,11 @@
     return `${c.checked} first buyers checked \xB7 ${top.wallets.length} share a funder (${(top.shareBps / 100).toFixed(0)}% of the curve)${c.fundedByCreator.length ? ` \xB7 ${c.fundedByCreator.length} funded by the creator` : ""}`;
   }
 
+  // src/bouncer/openDoor.ts
+  init_abi();
+
   // src/chain/market.ts
+  init_abi();
   var Q962 = 2n ** 96n;
   var FACTORY_FUNCTIONS2 = {
     getPool: { name: "getPool", inputs: ["address", "address", "uint24"], outputs: ["address"] },
@@ -3324,7 +3399,193 @@
     };
   }
 
+  // src/chain/liquidity.ts
+  init_abi();
+  var ZERO = "0x0000000000000000000000000000000000000000";
+  var DEAD = "0x000000000000000000000000000000000000dead";
+  var BURN_ADDRESSES = /* @__PURE__ */ new Set([ZERO, DEAD, "0x0000000000000000000000000000000000000001"]);
+  var LP_FUNCTIONS = {
+    ownerOf: { name: "ownerOf", inputs: ["uint256"], outputs: ["address"] }
+  };
+  var POOL_EVENTS = {
+    /** Uniswap V3 / PancakeSwap V3. `owner` is the position manager for an NFT position. */
+    Mint: {
+      name: "Mint",
+      inputs: [
+        { name: "sender", type: "address", indexed: false },
+        { name: "owner", type: "address", indexed: true },
+        { name: "tickLower", type: "int24", indexed: true },
+        { name: "tickUpper", type: "int24", indexed: true },
+        { name: "amount", type: "uint128", indexed: false },
+        { name: "amount0", type: "uint256", indexed: false },
+        { name: "amount1", type: "uint256", indexed: false }
+      ]
+    }
+  };
+  var MANAGER_EVENTS = {
+    /** Emitted by the NonfungiblePositionManager in the same transaction as the pool's Mint. */
+    IncreaseLiquidity: {
+      name: "IncreaseLiquidity",
+      inputs: [
+        { name: "tokenId", type: "uint256", indexed: true },
+        { name: "liquidity", type: "uint128", indexed: false },
+        { name: "amount0", type: "uint256", indexed: false },
+        { name: "amount1", type: "uint256", indexed: false }
+      ]
+    }
+  };
+  function classify(address, lockers, hasCode) {
+    const lower = address.toLowerCase();
+    if (BURN_ADDRESSES.has(lower)) return { kind: "burned" };
+    const known = lockers?.[lower];
+    if (known) return { kind: "locked", name: known };
+    return { kind: hasCode ? "contract" : "wallet" };
+  }
+  var bps = (part, whole) => whole > 0n ? Number(part * 10000n / whole) : 0;
+  async function readV2Lock(rpc, pool, lockers, block) {
+    const base = { pool: pool.address, dex: pool.dex, kind: pool.kind, burnedBps: 0, lockedBps: 0, freeBps: 0, holders: [], unread: "" };
+    const lockerAddresses = Object.keys(lockers ?? {});
+    const asked = [ZERO, DEAD, ...lockerAddresses];
+    const calls = [
+      { to: pool.address, data: encodeCall(ERC20_FUNCTIONS.totalSupply, []) },
+      ...asked.map((a) => ({ to: pool.address, data: encodeCall(ERC20_FUNCTIONS.balanceOf, [a]) }))
+    ];
+    let raws;
+    try {
+      raws = await rpc.callBatchSettled(calls, block);
+    } catch {
+      return { ...base, unread: "the LP token did not answer, so who holds the liquidity is not read" };
+    }
+    const supplyRaw = raws[0];
+    if (supplyRaw instanceof Error) return { ...base, unread: "the LP token's total supply did not answer, so the shares below cannot be worked out" };
+    let supply;
+    try {
+      supply = decodeOutputs(ERC20_FUNCTIONS.totalSupply, supplyRaw)[0];
+    } catch {
+      return { ...base, unread: "the LP token's total supply could not be read" };
+    }
+    if (supply === 0n) return { ...base, unread: "this pool has no LP tokens outstanding" };
+    let accounted = 0n;
+    const holders = [];
+    asked.forEach((address, i) => {
+      const raw = raws[i + 1];
+      if (raw instanceof Error) return;
+      let balance;
+      try {
+        balance = decodeOutputs(ERC20_FUNCTIONS.balanceOf, raw)[0];
+      } catch {
+        return;
+      }
+      if (balance === 0n) return;
+      accounted += balance;
+      const { kind, name } = classify(address, lockers, true);
+      holders.push({ address, kind, name, shareBps: bps(balance, supply) });
+    });
+    const burnedBps = holders.filter((h) => h.kind === "burned").reduce((a, h) => a + h.shareBps, 0);
+    const lockedBps = holders.filter((h) => h.kind === "locked").reduce((a, h) => a + h.shareBps, 0);
+    const freeBps = Math.max(0, 1e4 - burnedBps - lockedBps);
+    return {
+      ...base,
+      burnedBps,
+      lockedBps,
+      freeBps,
+      holders,
+      // The remainder is held by addresses this read did not enumerate. Naming
+      // them needs an explorer; not naming them does not make them safe.
+      unread: freeBps > 0 ? "the rest of the LP tokens sit in wallets this read does not enumerate; any of them can withdraw" : ""
+    };
+  }
+  async function readV3Lock(rpc, pool, lockers, positionManager, block, options) {
+    const base = { pool: pool.address, dex: pool.dex, kind: pool.kind, burnedBps: 0, lockedBps: 0, freeBps: 0, holders: [], unread: "" };
+    const maxPositions = options.maxPositions ?? 12;
+    let logs;
+    try {
+      const { readTapeAdaptive: readTapeAdaptive2 } = await Promise.resolve().then(() => (init_tape(), tape_exports));
+      logs = (await readTapeAdaptive2(
+        rpc,
+        { address: pool.address, events: [POOL_EVENTS.Mint], fromBlock: options.fromBlock, toBlock: block },
+        { minChunk: 1, startChunk: options.chunkSize ?? 5e3, maxChunk: 1e5 }
+      )).logs;
+    } catch {
+      return { ...base, unread: "the pool's mint history did not answer, so who holds the liquidity is not read" };
+    }
+    if (!logs.length) return { ...base, unread: `no position was opened in this pool within the window searched (from block ${options.fromBlock}); --liquidity-blocks looks further back` };
+    const byPosition = /* @__PURE__ */ new Map();
+    for (const log of logs) {
+      const owner = String(log.args.owner).toLowerCase();
+      const key = `${owner}:${log.args.tickLower}:${log.args.tickUpper}`;
+      const prev = byPosition.get(key);
+      byPosition.set(key, { owner, amount: (prev?.amount ?? 0n) + log.args.amount, tx: prev?.tx ?? log.transactionHash });
+    }
+    const positions = [...byPosition.values()].sort((a, b) => b.amount > a.amount ? 1 : b.amount < a.amount ? -1 : 0);
+    const partial = positions.length > maxPositions;
+    const considered = positions.slice(0, maxPositions);
+    const manager = positionManager?.toLowerCase();
+    const realOwners = /* @__PURE__ */ new Map();
+    const managed = considered.filter((p) => manager && p.owner === manager);
+    if (managed.length) {
+      const receipts = await rpc.sendBatchSettled(managed.map((p) => ({ method: "eth_getTransactionReceipt", params: [p.tx] })));
+      const idCalls = [];
+      const idFor = [];
+      receipts.forEach((receipt, i) => {
+        if (receipt instanceof Error || !receipt || typeof receipt !== "object") return;
+        const rawLogs = receipt.logs ?? [];
+        for (const raw of rawLogs) {
+          const entry = raw;
+          if ((entry.address ?? "").toLowerCase() !== manager) continue;
+          let decoded;
+          try {
+            decoded = decodeLog(MANAGER_EVENTS.IncreaseLiquidity, { address: entry.address ?? "", topics: entry.topics ?? [], data: entry.data ?? "0x", blockNumber: "0x0", transactionHash: "0x", logIndex: "0x0" });
+          } catch {
+            continue;
+          }
+          idCalls.push({ to: manager, data: encodeCall(LP_FUNCTIONS.ownerOf, [decoded.args.tokenId]) });
+          idFor.push({ key: `${managed[i].owner}:${managed[i].tx}` });
+          break;
+        }
+      });
+      if (idCalls.length) {
+        const owners = await rpc.callBatchSettled(idCalls, block);
+        owners.forEach((raw, i) => {
+          if (raw instanceof Error) return;
+          try {
+            realOwners.set(idFor[i].key, decodeOutputs(LP_FUNCTIONS.ownerOf, raw)[0].toLowerCase());
+          } catch {
+          }
+        });
+      }
+    }
+    const total = considered.reduce((a, p) => a + p.amount, 0n);
+    if (total === 0n) return { ...base, unread: "every position found has been withdrawn" };
+    const merged = /* @__PURE__ */ new Map();
+    for (const p of considered) {
+      const resolved = realOwners.get(`${p.owner}:${p.tx}`) ?? p.owner;
+      merged.set(resolved, (merged.get(resolved) ?? 0n) + p.amount);
+    }
+    const addresses = [...merged.keys()];
+    const codes = await rpc.sendBatchSettled(addresses.map((a) => ({ method: "eth_getCode", params: [a, `0x${block.toString(16)}`] })));
+    const holders = addresses.map((address, i) => {
+      const code = codes[i];
+      const hasCode = code instanceof Error ? null : typeof code === "string" && code.length > 2;
+      const { kind, name } = classify(address, lockers, hasCode);
+      return { address, kind, name, shareBps: bps(merged.get(address) ?? 0n, total) };
+    });
+    const burnedBps = holders.filter((h) => h.kind === "burned").reduce((a, h) => a + h.shareBps, 0);
+    const lockedBps = holders.filter((h) => h.kind === "locked").reduce((a, h) => a + h.shareBps, 0);
+    const freeBps = Math.max(0, 1e4 - burnedBps - lockedBps);
+    const notes = [];
+    if (partial) notes.push(`only the ${maxPositions} largest of ${positions.length} positions were resolved`);
+    if (!manager) notes.push("this DEX's position manager is not in BOUNCER's table, so an NFT position is reported under the manager rather than its holder");
+    const unresolved = holders.filter((h) => manager && h.address === manager);
+    if (unresolved.length) notes.push("some positions could not be traced to an NFT holder and are counted as withdrawable");
+    return { ...base, burnedBps, lockedBps, freeBps, holders: holders.sort((a, b) => b.shareBps - a.shareBps), unread: notes.join("; ") };
+  }
+  async function readPoolLock(rpc, pool, lockers, positionManager, block, options) {
+    return pool.kind === "v3" ? readV3Lock(rpc, pool, lockers, positionManager, block, options) : readV2Lock(rpc, pool, lockers, block);
+  }
+
   // src/bouncer/openDoor.ts
+  init_abi();
   var POWER_MEANING = {
     mint: "create new tokens out of thin air, diluting every holder",
     pause: "freeze every transfer",
@@ -3433,7 +3694,7 @@
   var RENOUNCE_SIGNATURES = ["renounceOwnership()", "transferOwnership(address)"];
   var TRANSFER_SIGNATURE = "transfer(address,uint256)";
   var PROBE_RECIPIENT = "0x000000000000000000000000000000000000b0ce";
-  var BURN_ADDRESSES = /* @__PURE__ */ new Set([ZERO_ADDRESS, "0x000000000000000000000000000000000000dead", "0x0000000000000000000000000000000000000001"]);
+  var BURN_ADDRESSES2 = /* @__PURE__ */ new Set([ZERO_ADDRESS, "0x000000000000000000000000000000000000dead", "0x0000000000000000000000000000000000000001"]);
   async function readOpenDoor(rpc, token, meta, block, options = {}) {
     const address = token.address.toLowerCase();
     let surfaceFrom = "token";
@@ -3468,9 +3729,10 @@
       break;
     }
     const supply = meta?.totalSupply ?? null;
-    const bps = (v) => supply !== null && supply > 0n ? Number(v * 10000n / supply) : null;
+    const bps2 = (v) => supply !== null && supply > 0n ? Number(v * 10000n / supply) : null;
     let pools = null;
     let market = null;
+    let liquidity = null;
     if (options.dex) {
       try {
         pools = await readPools(rpc, address, options.dex, block, meta?.decimals ?? 18);
@@ -3478,6 +3740,16 @@
         if (position > 0n) market = readMarket(pools, position, meta?.decimals ?? 18, options.dex.wethSymbol);
       } catch {
         pools = null;
+      }
+      const deepest = pools?.[0] ?? null;
+      if (deepest && options.liquidity !== false) {
+        try {
+          liquidity = await readPoolLock(rpc, deepest, options.lockers, options.dex.v3PositionManager, block, {
+            fromBlock: Math.max(0, options.liquidityFromBlock ?? block - 5e5)
+          });
+        } catch {
+          liquidity = null;
+        }
       }
     }
     let holders = null;
@@ -3512,7 +3784,7 @@
             }
           }
           const balance = await readBalance(rpc, address, read.creator, block).catch(() => null);
-          deployer = { address: read.creator, creationTx: read.creationTx, createdAtBlock, createdAt, balance: balance ?? 0n, bps: balance === null ? null : bps(balance) };
+          deployer = { address: read.creator, creationTx: read.creationTx, createdAtBlock, createdAt, balance: balance ?? 0n, bps: balance === null ? null : bps2(balance) };
         }
       } catch (error) {
         note(error);
@@ -3533,11 +3805,11 @@
         const top = list.map((h) => ({
           address: h.address,
           value: h.value,
-          bps: bps(h.value),
+          bps: bps2(h.value),
           isContract: h.isContract && !h.delegated,
           delegated: h.delegated,
           name: h.name,
-          role: h.address === deployer?.address ? "deployer" : owner && h.address === owner.address ? "owner" : h.address === address ? "token" : BURN_ADDRESSES.has(h.address) ? "burn" : null
+          role: h.address === deployer?.address ? "deployer" : owner && h.address === owner.address ? "owner" : h.address === address ? "token" : BURN_ADDRESSES2.has(h.address) ? "burn" : null
         }));
         const wallets = top.filter((h) => !h.isContract && h.role !== "burn" && h.role !== "token");
         const share = (rows) => {
@@ -3565,7 +3837,7 @@
         activity = null;
       }
     }
-    const ownerBalance = owner && !owner.renounced ? await readBalance(rpc, address, owner.address, block).then((balance) => ({ balance, bps: bps(balance) })).catch(() => null) : null;
+    const ownerBalance = owner && !owner.renounced ? await readBalance(rpc, address, owner.address, block).then((balance) => ({ balance, bps: bps2(balance) })).catch(() => null) : null;
     const probes = [];
     let probesSkipped = null;
     if (!has(TRANSFER_SIGNATURE)) {
@@ -3601,13 +3873,14 @@
       explorerError,
       pools,
       market,
+      liquidity,
       holders,
       activity
     };
   }
   async function probeCandidates(rpc, token, block, holders, deployer, owner, want, recentBlocks) {
     const excluded = new Set([token, deployer, owner].filter((x) => Boolean(x)).map((x) => x.toLowerCase()));
-    let shortlist = holders.filter((h) => (!h.isContract || h.delegated) && !BURN_ADDRESSES.has(h.address) && !excluded.has(h.address) && h.value > 0n).slice(0, Math.max(want * 3, 9)).map((h) => h.address);
+    let shortlist = holders.filter((h) => (!h.isContract || h.delegated) && !BURN_ADDRESSES2.has(h.address) && !excluded.has(h.address) && h.value > 0n).slice(0, Math.max(want * 3, 9)).map((h) => h.address);
     if (!shortlist.length) shortlist = await recentRecipients(rpc, token, block, excluded, Math.max(want * 4, 12), recentBlocks);
     const out2 = [];
     if (shortlist.length) {
@@ -3645,7 +3918,7 @@
       const topic = logs[i].topics[2];
       if (!topic) continue;
       const who = `0x${topic.slice(-40)}`.toLowerCase();
-      if (BURN_ADDRESSES.has(who) || excluded.has(who) || seen.includes(who)) continue;
+      if (BURN_ADDRESSES2.has(who) || excluded.has(who) || seen.includes(who)) continue;
       seen.push(who);
     }
     if (!seen.length) return [];
@@ -3681,7 +3954,7 @@
         if (error instanceof RpcError && error.isRevert) continue;
         return { owner: null, unread: true };
       }
-      const renounced = address === ZERO_ADDRESS || BURN_ADDRESSES.has(address);
+      const renounced = address === ZERO_ADDRESS || BURN_ADDRESSES2.has(address);
       let isContract = false;
       if (!renounced) {
         try {
@@ -3761,6 +4034,7 @@
   }
 
   // src/bouncer/room.ts
+  init_tape();
   async function readRoom(rpc, launch, fromBlock, toBlock, chunkSize, firstMinuteBlocks = 600) {
     const tape = await readTapeAdaptive(
       rpc,
@@ -3874,7 +4148,16 @@
     if (!id.launch && !id.token.code.empty) {
       if (!id.registered) slip.stamp = "NOT A LAUNCH";
       await attempt("open door", async () => {
-        slip.open = await readOpenDoor(rpc, id.token, id.meta, head.number, { blockscout: options.blockscout ?? null, dex: chain2.dex });
+        slip.open = await readOpenDoor(rpc, id.token, id.meta, head.number, {
+          blockscout: options.blockscout ?? null,
+          dex: chain2.dex,
+          lockers: chain2.lockers,
+          liquidity: options.skipLiquidity !== true,
+          // A week of this chain's blocks, capped so a fast chain does not turn
+          // one section into the whole read. A token older than the window reads
+          // as "no position opened here", which names the flag that widens it.
+          liquidityFromBlock: head.number - (options.liquidityBlocks ?? Math.min(5e5, Math.round(7 * 86400 * chain2.blocksPerSecond)))
+        });
       });
       if (!id.registered && launchpadKnown && options.blockscout && !options.skipLookalikes && id.meta?.symbol) {
         await attempt("lookalikes", async () => {
@@ -4087,8 +4370,8 @@
     for (const s of slip.skipped) notes.push({ level: "info", code: "skipped", text: `${s.section} could not be read: ${s.reason}` });
     return notes;
   }
-  function pct2(bps) {
-    return bps === null ? "an unknown share" : `${(bps / 100).toFixed(1)}%`;
+  function pct2(bps2) {
+    return bps2 === null ? "an unknown share" : `${(bps2 / 100).toFixed(1)}%`;
   }
   function openDoorFactNotes(slip, o) {
     const notes = [];
@@ -4139,9 +4422,33 @@
     if (o.pools) {
       const live = o.pools.filter((p) => (p.quoteReserve ?? 0n) > 0n);
       const q2 = slip.chain.native;
-      if (live.length) notes.push({ level: "info", code: "pools", text: `Trades in ${live.length} ${live[0].dex} pool${live.length === 1 ? "" : "s"} against W${q2.symbol}: the deepest (${(live[0].feeBps / 100).toFixed(2)}% fee) holds ${formatUnits(live[0].quoteReserve ?? 0n, q2.decimals, 3)} W${q2.symbol}. Whether that liquidity is locked is not read here, and pools on other venues or against other pairs are not counted.` });
+      if (live.length) notes.push({ level: "info", code: "pools", text: `Trades in ${live.length} ${live[0].dex} pool${live.length === 1 ? "" : "s"} against W${q2.symbol}: the deepest (${(live[0].feeBps / 100).toFixed(2)}% fee) holds ${formatUnits(live[0].quoteReserve ?? 0n, q2.decimals, 3)} W${q2.symbol}. Pools on other venues or against other pairs are not counted.` });
       else if (o.pools.length) notes.push({ level: "watch", code: "pools-empty", text: `A ${o.pools[0].dex} pool exists but holds no W${q2.symbol}: nothing to sell into there.` });
       else notes.push({ level: "info", code: "no-pool", text: `No W${q2.symbol} pool on the chain's known DEX factories. It may trade elsewhere (another DEX, a Uniswap V4 pool, another pair) or not at all.` });
+    }
+    if (o.liquidity) {
+      const l = o.liquidity;
+      const held = l.holders.filter((h2) => h2.kind === "wallet" || h2.kind === "contract");
+      if (l.burnedBps + l.lockedBps === 0 && l.freeBps > 0) {
+        notes.push({
+          level: "stop",
+          code: "liquidity-free",
+          text: `Every bit of the ${l.dex} pool's liquidity can be withdrawn: none of it is burned and none sits in a locker BOUNCER knows. ${held.length ? `It is held by ${held.slice(0, 3).map((h2) => shortAddress(h2.address)).join(", ")}${held.length > 3 ? ` and ${held.length - 3} more` : ""}.` : ""} Whoever holds it can take the pool away, and then there is nothing to sell into.`
+        });
+      } else if (l.freeBps >= 2e3) {
+        notes.push({
+          level: "watch",
+          code: "liquidity-partly-free",
+          text: `${pct2(l.freeBps)} of the ${l.dex} pool's liquidity can be withdrawn${l.burnedBps ? `, ${pct2(l.burnedBps)} is burned` : ""}${l.lockedBps ? `, ${pct2(l.lockedBps)} is in ${l.holders.find((h2) => h2.kind === "locked")?.name ?? "a locker"}` : ""}. Taking out the withdrawable part would thin the pool by that much.`
+        });
+      } else if (l.burnedBps + l.lockedBps > 0) {
+        notes.push({
+          level: "info",
+          code: "liquidity-held",
+          text: `${pct2(l.burnedBps + l.lockedBps)} of the ${l.dex} pool's liquidity cannot be withdrawn${l.burnedBps ? ` (${pct2(l.burnedBps)} burned)` : ""}${l.lockedBps ? ` (${pct2(l.lockedBps)} locked)` : ""}. A locked pool is not a promise about the price; it only means this liquidity stays put.`
+        });
+      }
+      if (l.unread) notes.push({ level: "info", code: "liquidity-unread", text: `About the liquidity read: ${l.unread}.` });
     }
     const m = o.market;
     if (m && m.quotes.length && m.best) {
@@ -4225,6 +4532,7 @@
   var MASCOT_SVG_INNER = `<rect x="11" y="1" width="10" height="1" fill="#3e3e4c"/><rect x="9" y="2" width="14" height="1" fill="#3e3e4c"/><rect x="8" y="3" width="16" height="1" fill="#3e3e4c"/><rect x="7" y="4" width="18" height="1" fill="#3e3e4c"/><rect x="6" y="5" width="5" height="1" fill="#3e3e4c"/><rect x="11" y="5" width="10" height="1" fill="#757584"/><rect x="21" y="5" width="5" height="1" fill="#3e3e4c"/><rect x="6" y="6" width="4" height="1" fill="#3e3e4c"/><rect x="10" y="6" width="12" height="1" fill="#757584"/><rect x="22" y="6" width="4" height="1" fill="#3e3e4c"/><rect x="5" y="7" width="4" height="1" fill="#3e3e4c"/><rect x="9" y="7" width="14" height="1" fill="#0a0a0e"/><rect x="23" y="7" width="4" height="1" fill="#3e3e4c"/><rect x="5" y="8" width="4" height="1" fill="#3e3e4c"/><rect x="9" y="8" width="14" height="1" fill="#0a0a0e"/><rect x="23" y="8" width="4" height="1" fill="#3e3e4c"/><rect x="27" y="8" width="1" height="1" fill="#d4a017"/><rect x="5" y="9" width="4" height="1" fill="#3e3e4c"/><rect x="9" y="9" width="1" height="1" fill="#757584"/><rect x="10" y="9" width="12" height="1" fill="#0a0a0e"/><rect x="22" y="9" width="1" height="1" fill="#757584"/><rect x="23" y="9" width="4" height="1" fill="#3e3e4c"/><rect x="27" y="9" width="1" height="1" fill="#d4a017"/><rect x="5" y="10" width="4" height="1" fill="#3e3e4c"/><rect x="9" y="10" width="14" height="1" fill="#757584"/><rect x="23" y="10" width="4" height="1" fill="#3e3e4c"/><rect x="28" y="10" width="1" height="1" fill="#d4a017"/><rect x="5" y="11" width="4" height="1" fill="#3e3e4c"/><rect x="9" y="11" width="4" height="1" fill="#757584"/><rect x="13" y="11" width="2" height="1" fill="#1c1c22"/><rect x="15" y="11" width="2" height="1" fill="#757584"/><rect x="17" y="11" width="2" height="1" fill="#1c1c22"/><rect x="19" y="11" width="4" height="1" fill="#757584"/><rect x="23" y="11" width="4" height="1" fill="#3e3e4c"/><rect x="28" y="11" width="1" height="1" fill="#d4a017"/><rect x="6" y="12" width="3" height="1" fill="#3e3e4c"/><rect x="9" y="12" width="14" height="1" fill="#757584"/><rect x="23" y="12" width="3" height="1" fill="#3e3e4c"/><rect x="28" y="12" width="1" height="1" fill="#d4a017"/><rect x="6" y="13" width="4" height="1" fill="#3e3e4c"/><rect x="10" y="13" width="12" height="1" fill="#757584"/><rect x="22" y="13" width="4" height="1" fill="#3e3e4c"/><rect x="7" y="14" width="4" height="1" fill="#3e3e4c"/><rect x="11" y="14" width="10" height="1" fill="#757584"/><rect x="21" y="14" width="4" height="1" fill="#3e3e4c"/><rect x="8" y="15" width="16" height="1" fill="#3e3e4c"/><rect x="4" y="16" width="24" height="1" fill="#3e3e4c"/><rect x="2" y="17" width="9" height="1" fill="#3e3e4c"/><rect x="11" y="17" width="12" height="1" fill="#111117"/><rect x="23" y="17" width="8" height="1" fill="#3e3e4c"/><rect x="1" y="18" width="10" height="1" fill="#3e3e4c"/><rect x="11" y="18" width="12" height="1" fill="#111117"/><rect x="23" y="18" width="9" height="1" fill="#3e3e4c"/><rect x="1" y="19" width="10" height="1" fill="#3e3e4c"/><rect x="11" y="19" width="5" height="1" fill="#111117"/><rect x="16" y="19" width="2" height="1" fill="#c8102e"/><rect x="18" y="19" width="5" height="1" fill="#111117"/><rect x="23" y="19" width="9" height="1" fill="#3e3e4c"/><rect x="1" y="20" width="5" height="1" fill="#3e3e4c"/><rect x="7" y="20" width="19" height="1" fill="#3e3e4c"/><rect x="27" y="20" width="5" height="1" fill="#3e3e4c"/><rect x="1" y="21" width="5" height="1" fill="#3e3e4c"/><rect x="7" y="21" width="19" height="1" fill="#3e3e4c"/><rect x="27" y="21" width="5" height="1" fill="#3e3e4c"/><rect x="1" y="22" width="5" height="1" fill="#3e3e4c"/><rect x="7" y="22" width="2" height="1" fill="#3e3e4c"/><rect x="9" y="22" width="4" height="1" fill="#757584"/><rect x="13" y="22" width="8" height="1" fill="#3e3e4c"/><rect x="21" y="22" width="4" height="1" fill="#757584"/><rect x="25" y="22" width="1" height="1" fill="#3e3e4c"/><rect x="27" y="22" width="5" height="1" fill="#3e3e4c"/><rect x="1" y="23" width="5" height="1" fill="#3e3e4c"/><rect x="7" y="23" width="2" height="1" fill="#3e3e4c"/><rect x="9" y="23" width="5" height="1" fill="#757584"/><rect x="14" y="23" width="6" height="1" fill="#3e3e4c"/><rect x="20" y="23" width="5" height="1" fill="#757584"/><rect x="25" y="23" width="1" height="1" fill="#3e3e4c"/><rect x="27" y="23" width="5" height="1" fill="#3e3e4c"/><rect x="1" y="24" width="5" height="1" fill="#3e3e4c"/><rect x="7" y="24" width="19" height="1" fill="#3e3e4c"/><rect x="27" y="24" width="5" height="1" fill="#3e3e4c"/><rect x="1" y="25" width="5" height="1" fill="#3e3e4c"/><rect x="8" y="25" width="17" height="1" fill="#3e3e4c"/><rect x="27" y="25" width="5" height="1" fill="#3e3e4c"/><rect x="1" y="26" width="5" height="1" fill="#3e3e4c"/><rect x="10" y="26" width="12" height="1" fill="#111117"/><rect x="27" y="26" width="5" height="1" fill="#3e3e4c"/><rect x="1" y="27" width="5" height="1" fill="#757584"/><rect x="10" y="27" width="12" height="1" fill="#111117"/><rect x="27" y="27" width="5" height="1" fill="#757584"/><rect x="1" y="28" width="5" height="1" fill="#757584"/><rect x="10" y="28" width="12" height="1" fill="#111117"/><rect x="27" y="28" width="5" height="1" fill="#757584"/><rect x="11" y="29" width="5" height="1" fill="#3e3e4c"/><rect x="17" y="29" width="5" height="1" fill="#3e3e4c"/><rect x="11" y="30" width="5" height="1" fill="#3e3e4c"/><rect x="17" y="30" width="5" height="1" fill="#3e3e4c"/><rect x="10" y="31" width="6" height="1" fill="#111117"/><rect x="17" y="31" width="6" height="1" fill="#111117"/>`;
 
   // src/bouncer/planner.ts
+  init_abi();
   async function readLaunchPlan(rpc, options) {
     const f = options.factory;
     const configId = options.configId ?? 0;
@@ -4303,6 +4611,8 @@
   }
 
   // src/bouncer/position.ts
+  init_abi();
+  init_tape();
   async function readPosition(rpc, launch, wallet, fromBlock, toBlock, factory, chunkSize = 2e3) {
     const who = wallet.toLowerCase();
     const buys = await readTape(rpc, { fromBlock, toBlock, address: launch.curve, events: [CURVE_EVENTS.CurveBuy], topics: [addressTopic(who)], chunkSize });
@@ -4324,6 +4634,8 @@
   }
 
   // src/bouncer/leaderboard.ts
+  init_abi();
+  init_tape();
   async function readBoard(rpc, options) {
     const factory = options.factory ?? PONS_V2_FACTORY;
     const top = options.top ?? 10;
@@ -4417,6 +4729,7 @@
   }
 
   // src/bouncer/watch.ts
+  init_tape();
   async function readWatchEvents(rpc, launch, options) {
     const factory = options.factory ?? PONS_V2_FACTORY;
     const q2 = options.quote ?? { symbol: "ETH", decimals: 18 };
@@ -4471,6 +4784,7 @@
   }
 
   // src/bouncer/txReceipt.ts
+  init_abi();
   async function readTradeReceipt(rpc, hash, factory) {
     const receipt = await rpc.send("eth_getTransactionReceipt", [hash]);
     if (!receipt) throw new Error(`no receipt for ${hash}; is it on this chain?`);
@@ -5237,8 +5551,8 @@
     const flat = text.replace(/[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u2028\u2029\u202a-\u202e\u2066-\u2069]/g, " ").replace(/\s+/g, " ").trim();
     return flat.length > max ? `${flat.slice(0, max - 1)}\u2026` : flat;
   }
-  function pctText(bps) {
-    return bps === null ? "unknown" : `${(bps / 100).toFixed(1)}%`;
+  function pctText(bps2) {
+    return bps2 === null ? "unknown" : `${(bps2 / 100).toFixed(1)}%`;
   }
   function money2(value) {
     if (!Number.isFinite(value)) return "unreadable";
