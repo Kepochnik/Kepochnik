@@ -92,6 +92,31 @@ jobs:
               ' || fail=1
             done
             echo "::endgroup::"
+
+            # Where the time actually goes. Three diagnoses of a slow Solana
+            # slip were made from the symptom and all three were wrong, so the
+            # run now measures instead: calls, total milliseconds and failures
+            # per method, against the live endpoint.
+            echo "::group::solana read profile"
+            node -e '
+              const { SolanaRpc } = require("./dist/src/chain/solana.js");
+              const { CHAINS } = require("./dist/src/chain/chains.js");
+              const { readSplDoor } = require("./dist/src/bouncer/spl.js");
+              const rpc = new SolanaRpc({ urls: CHAINS.solana.rpc });
+              const mint = process.argv[1];
+              const started = Date.now();
+              readSplDoor(rpc, mint, CHAINS.solana).then((slip) => {
+                console.log(`door took ${Date.now() - started} ms`);
+                for (const s of slip.skipped) console.log("  skipped:", s.section, "-", s.reason);
+                console.log("  market:", slip.market ? (slip.market.best ? slip.market.best.name : "no venue") : "MISSING");
+                console.log("  holders:", slip.holders ? slip.holders.top.length + " accounts" : "MISSING");
+                for (const r of rpc.stats()) console.log(`  ${r.method}: ${r.calls} calls, ${r.ms} ms total, ${r.failures} failed`);
+              }).catch((e) => {
+                console.log("door threw:", e.message);
+                for (const r of rpc.stats()) console.log(`  ${r.method}: ${r.calls} calls, ${r.ms} ms total, ${r.failures} failed`);
+              });
+            ' "${TOKEN_IN:-9BB6NFEcjBCtnNLFko2FqVQBq8HHM13kCyYcdQbgpump}" || true
+            echo "::endgroup::"
             exit $fail
           fi
 

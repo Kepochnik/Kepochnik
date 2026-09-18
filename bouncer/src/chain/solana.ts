@@ -66,6 +66,12 @@ export class SolanaRpc {
   private activeIndex = 0;
   private nextId = 1;
   private lastRequestAt = 0;
+  /**
+   * How many calls each method made and how long they took. Three times in a
+   * row a slow Solana slip was diagnosed from the symptom and the diagnosis
+   * was wrong; this is here so the next one is diagnosed from the numbers.
+   */
+  private readonly counters = new Map<string, { calls: number; ms: number; failures: number }>();
 
   constructor(options: SolanaRpcOptions) {
     if (!options.urls.length) throw new Error("at least one RPC url is required");
@@ -85,9 +91,23 @@ export class SolanaRpc {
     return this.urls[this.activeIndex];
   }
 
+  /** Per-method call counts and total milliseconds, for working out where a slow read went. */
+  stats(): { method: string; calls: number; ms: number; failures: number }[] {
+    return [...this.counters.entries()].map(([method, v]) => ({ method, ...v })).sort((a, b) => b.ms - a.ms);
+  }
+
+  private record(method: string, ms: number, failed: boolean): void {
+    const entry = this.counters.get(method) ?? { calls: 0, ms: 0, failures: 0 };
+    entry.calls += 1;
+    entry.ms += ms;
+    if (failed) entry.failures += 1;
+    this.counters.set(method, entry);
+  }
+
   async send(method: string, params: unknown[]): Promise<unknown> {
     if (!READ_ONLY_METHODS.has(method)) throw new SolanaRpcError(`refusing non-read method ${method}`);
     let lastError: unknown;
+    const startedAt = Date.now();
     for (let attempt = 0; attempt <= this.urls.length * this.retries; attempt++) {
       const url = this.urls[this.activeIndex];
       try {
@@ -105,6 +125,7 @@ export class SolanaRpc {
         if (!response.ok) throw new SolanaRpcError(`${url} responded ${response.status}`);
         const body = (await response.json()) as { result?: unknown; error?: { code: number; message: string } };
         if (body.error) throw new SolanaRpcError(body.error.message, body.error.code);
+        this.record(method, Date.now() - startedAt, false);
         return body.result;
       } catch (error) {
         lastError = error;
@@ -115,6 +136,7 @@ export class SolanaRpc {
         this.activeIndex = (this.activeIndex + 1) % this.urls.length;
       }
     }
+    this.record(method, Date.now() - startedAt, true);
     throw lastError instanceof Error ? lastError : new SolanaRpcError(String(lastError));
   }
 
