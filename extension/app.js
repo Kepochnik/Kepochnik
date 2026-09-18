@@ -1747,9 +1747,115 @@
     return { updateAuthority, mint, name, symbol, uri, sellerFeeBasisPoints, primarySaleHappened: d[offset] === 1, isMutable: d[offset + 1] === 1 };
   }
 
-  // src/chain/solanaPools.ts
+  // src/chain/solanaDerived.ts
   var WSOL = "So11111111111111111111111111111111111111112";
   var USDC = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
+  var WHIRLPOOL_PROGRAM = "whirLbMiicVdio4qvUfM5KAg6Ct8VwpYzGff3uctyCc";
+  var WHIRLPOOLS_CONFIG = "2LecshUwdy9xi7meFgHtFJQNSKk4KdTrcpvaB56dP2NQ";
+  var CPMM_PROGRAM = "CPMMoo8L3F4NbTegBCKVNunggL7H1ZpdTHKxQB5qKP1C";
+  var TICK_SPACINGS = [1, 2, 4, 8, 16, 64, 96, 128, 256];
+  var CPMM_CONFIG_INDEXES = [0, 1, 2, 3];
+  var enc = new TextEncoder();
+  function u16le(value) {
+    return new Uint8Array([value & 255, value >> 8 & 255]);
+  }
+  function u16be(value) {
+    return new Uint8Array([value >> 8 & 255, value & 255]);
+  }
+  function sortPair(a, b) {
+    const x = base58Decode(a);
+    const y = base58Decode(b);
+    for (let i = 0; i < 32; i++) {
+      if (x[i] !== y[i]) return x[i] < y[i] ? [a, b, true] : [b, a, false];
+    }
+    return [a, b, true];
+  }
+  var WHIRLPOOL_LAYOUT = { mintA: 101, vaultA: 133, mintB: 181, vaultB: 213 };
+  var CPMM_LAYOUT = { vaultA: 72, vaultB: 104, mintA: 168, mintB: 200 };
+  function deriveCandidates(mint, quotes = [WSOL, USDC]) {
+    const out2 = [];
+    for (const quote of quotes) {
+      let sorted;
+      try {
+        sorted = sortPair(mint, quote);
+      } catch {
+        continue;
+      }
+      const [first, second] = sorted;
+      const a = base58Decode(first);
+      const b = base58Decode(second);
+      for (const spacing of TICK_SPACINGS) {
+        const pda = findProgramAddress([enc.encode("whirlpool"), base58Decode(WHIRLPOOLS_CONFIG), a, b, u16le(spacing)], WHIRLPOOL_PROGRAM);
+        if (pda) out2.push({ address: pda.address, program: WHIRLPOOL_PROGRAM, name: `Orca Whirlpool (spacing ${spacing})`, concentrated: true, layout: WHIRLPOOL_LAYOUT });
+      }
+      for (const index of CPMM_CONFIG_INDEXES) {
+        const config = findProgramAddress([enc.encode("amm_config"), u16be(index)], CPMM_PROGRAM);
+        if (!config) continue;
+        const pda = findProgramAddress([enc.encode("pool"), base58Decode(config.address), a, b], CPMM_PROGRAM);
+        if (pda) out2.push({ address: pda.address, program: CPMM_PROGRAM, name: "Raydium CPMM", concentrated: false, layout: CPMM_LAYOUT });
+      }
+    }
+    return out2;
+  }
+  var QUOTES = {
+    [WSOL]: { symbol: "SOL", decimals: 9 },
+    [USDC]: { symbol: "USDC", decimals: 6 }
+  };
+  function pubkeyAt(data, offset) {
+    if (data.length < offset + 32) return null;
+    return base58Encode(data.slice(offset, offset + 32));
+  }
+  function u64At(data, offset) {
+    let value = 0n;
+    for (let i = 7; i >= 0; i--) value = value << 8n | BigInt(data[offset + i] ?? 0);
+    return value;
+  }
+  async function readDerivedPools(rpc, mint) {
+    const candidates = deriveCandidates(mint);
+    if (!candidates.length) return [];
+    const accounts = await rpc.multipleAccounts(candidates.map((c) => c.address));
+    const live = [];
+    const vaultAddresses = [];
+    candidates.forEach((candidate, i) => {
+      const account = accounts[i];
+      if (!account || account.owner !== candidate.program) return;
+      const mintA = pubkeyAt(account.data, candidate.layout.mintA);
+      const mintB = pubkeyAt(account.data, candidate.layout.mintB);
+      if (mintA === null || mintB === null) return;
+      const tokenIsA = mintA === mint;
+      if (!tokenIsA && mintB !== mint) return;
+      const quoteMint = tokenIsA ? mintB : mintA;
+      if (!QUOTES[quoteMint]) return;
+      const vaultToken = pubkeyAt(account.data, tokenIsA ? candidate.layout.vaultA : candidate.layout.vaultB);
+      const vaultQuote = pubkeyAt(account.data, tokenIsA ? candidate.layout.vaultB : candidate.layout.vaultA);
+      if (!vaultToken || !vaultQuote) return;
+      live.push({ candidate, account, quoteMint, tokenIsA });
+      vaultAddresses.push(vaultToken, vaultQuote);
+    });
+    if (!live.length) return [];
+    const vaults = await rpc.multipleAccounts(vaultAddresses);
+    const pools = [];
+    live.forEach((entry, i) => {
+      const tokenVault = vaults[i * 2];
+      const quoteVault = vaults[i * 2 + 1];
+      if (!tokenVault || !quoteVault) return;
+      const quote = QUOTES[entry.quoteMint];
+      pools.push({
+        address: entry.candidate.address,
+        program: entry.candidate.program,
+        name: entry.candidate.name,
+        concentrated: entry.candidate.concentrated,
+        tokenReserve: u64At(tokenVault.data, 64),
+        quoteMint: entry.quoteMint,
+        quoteSymbol: quote.symbol,
+        quoteDecimals: quote.decimals,
+        quoteReserve: u64At(quoteVault.data, 64)
+      });
+    });
+    return pools.sort((a, b) => b.quoteReserve > a.quoteReserve ? 1 : b.quoteReserve < a.quoteReserve ? -1 : 0);
+  }
+
+  // src/chain/solanaPools.ts
   var PUMP_PROGRAM = "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P";
   var POOL_PROGRAMS = {
     "675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8": { name: "Raydium AMM v4", concentrated: false },
@@ -1760,7 +1866,7 @@
     Eo7WjKq67rjJQSZxS6z3YkapzY3eMj6Xy8X5EQVn5UaB: { name: "Meteora Dynamic AMM", concentrated: false },
     pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA: { name: "pump.fun AMM", concentrated: false }
   };
-  var enc = new TextEncoder();
+  var enc2 = new TextEncoder();
   var u64 = (data, offset) => {
     let value = 0n;
     for (let i = 7; i >= 0; i--) value = value << 8n | BigInt(data[offset + i] ?? 0);
@@ -1774,7 +1880,7 @@
       return null;
     }
     if (key.length !== 32) return null;
-    return findProgramAddress([enc.encode("bonding-curve"), key], PUMP_PROGRAM)?.address ?? null;
+    return findProgramAddress([enc2.encode("bonding-curve"), key], PUMP_PROGRAM)?.address ?? null;
   }
   function parsePumpCurve(address, account) {
     if (account.owner !== PUMP_PROGRAM) return null;
@@ -1802,7 +1908,7 @@
     const afterFee = tokensIn - tokensIn * feeBps / 10000n;
     return pool.quoteReserve * afterFee / (pool.tokenReserve + afterFee);
   }
-  var QUOTES = {
+  var QUOTES2 = {
     [WSOL]: { symbol: "SOL", decimals: 9 },
     [USDC]: { symbol: "USDC", decimals: 6 }
   };
@@ -1836,9 +1942,9 @@
       const vaults = sides[i];
       if (!vaults) return;
       const ours = vaults.find((v) => v.mint === mint);
-      const other = vaults.find((v) => v.mint !== mint && QUOTES[v.mint]);
+      const other = vaults.find((v) => v.mint !== mint && QUOTES2[v.mint]);
       if (!ours || !other) return;
-      const quote = QUOTES[other.mint];
+      const quote = QUOTES2[other.mint];
       pools.push({
         address: c.authority,
         program: c.program,
@@ -1880,13 +1986,25 @@
       };
     }
     let pools = [];
+    let derivedFailed = false;
     try {
-      pools = await readSolanaPools(rpc, mint, scan);
+      pools = await readDerivedPools(rpc, mint);
     } catch {
+      derivedFailed = true;
+    }
+    if (scan || !pools.length) {
+      try {
+        const walked = await readSolanaPools(rpc, mint, scan);
+        for (const p of walked) if (!pools.some((seen) => seen.address === p.address)) pools.push(p);
+        pools.sort((a, b) => b.quoteReserve > a.quoteReserve ? 1 : b.quoteReserve < a.quoteReserve ? -1 : 0);
+      } catch {
+      }
+    }
+    if (!pools.length && derivedFailed) {
       return { ...empty, curve, note: "The pools could not be read from this endpoint." };
     }
     if (!pools.length) {
-      const how = "Pools are found by walking the twenty largest accounts holding this mint and asking which of them belong to a DEX. For a token whose biggest holders are exchanges or treasuries rather than pools, that search comes up empty even though pools exist.";
+      const how = "Pools are found two ways: the address an Orca Whirlpool or Raydium CPMM pool for this pair would live at is worked out locally and read directly, and \u2014 when the endpoint serves it \u2014 the twenty largest accounts holding the mint are walked for vaults belonging to any other DEX. A venue with neither a derivable address nor a vault among the largest holders is not seen.";
       return { ...empty, curve, note: `${curve?.complete ? "The bonding curve has graduated, but no" : "No"} pool against SOL or USDC turned up. ${how}` };
     }
     const priceable = pools.filter((p) => !p.concentrated && p.tokenReserve > 0n && p.quoteReserve > 0n);
@@ -2025,10 +2143,7 @@
         distinctOwners: byOwner.size
       };
     })();
-    if (!options.skipMarket && !scan) {
-      slip.skipped.push({ section: "market", reason: "it is found from the largest accounts holding the mint, and that read did not answer" });
-    }
-    const readMarket2 = options.skipMarket || !scan ? Promise.resolve() : attempt(
+    const readMarket2 = options.skipMarket ? Promise.resolve() : attempt(
       "market",
       async () => {
         const supply = slip.mint.supply;
