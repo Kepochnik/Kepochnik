@@ -61,3 +61,32 @@ jobs:
           echo "$URL" >> "$GITHUB_STEP_SUMMARY"
           echo "proxy_url=$URL" >> "$GITHUB_OUTPUT"
           echo "PROXY_URL=$URL"
+      - name: Every chain route answers on the deployed worker
+        working-directory: proxy
+        run: |
+          set -o pipefail
+          URL="$(grep -oE 'https://[a-z0-9.-]*workers\.dev' deploy.log | head -1 || true)"
+          if [ -z "$URL" ]; then echo "::error::no worker url in the deploy log"; exit 1; fi
+          # A deploy that succeeds and a worker that serves the site are not the
+          # same thing: the site reads through this proxy, so a chain whose route
+          # is missing or refused is a chain the site cannot check at all.
+          fail=0
+          check() {
+            key="$1"; body="$2"
+            code=$(curl -sS -m 30 -o /tmp/r.json -w '%{http_code}' -X POST "$URL/rpc/$key" -H 'content-type: application/json' -d "$body" || echo 000)
+            if [ "$code" = "200" ] && grep -q '"result"' /tmp/r.json; then
+              echo "PASS $key: $(head -c 160 /tmp/r.json)"
+            else
+              echo "::error::$key route failed (http $code): $(head -c 300 /tmp/r.json)"; fail=1
+            fi
+          }
+          EVM='{"jsonrpc":"2.0","id":1,"method":"eth_chainId","params":[]}'
+          check robinhood "$EVM"
+          check base      "$EVM"
+          check bnb       "$EVM"
+          check solana    '{"jsonrpc":"2.0","id":1,"method":"getSlot","params":[]}'
+          # A write must still be refused by the deployed worker, not only by the test.
+          code=$(curl -sS -m 30 -o /tmp/w.json -w '%{http_code}' -X POST "$URL/rpc/base" -H 'content-type: application/json' \
+            -d '{"jsonrpc":"2.0","id":1,"method":"eth_sendRawTransaction","params":["0x00"]}' || echo 000)
+          if [ "$code" = "200" ]; then echo "::error::the deployed worker accepted a write method"; fail=1; else echo "PASS writes refused (http $code)"; fi
+          exit $fail
