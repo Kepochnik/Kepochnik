@@ -37,22 +37,24 @@ jobs:
         if: inputs.address != ''
         env:
           ADDR: ${{ inputs.address }}
+          UA: "Mozilla/5.0 (X11; Linux x86_64) bouncer-probe/0.3"
         run: |
           B=https://robinhoodchain.blockscout.com
-          echo "=== address"; curl -sS "$B/api/v2/addresses/$ADDR" | head -c 1500; echo
-          echo "=== contract"; curl -sS "$B/api/v2/smart-contracts/$ADDR" | head -c 1500; echo
-          echo "=== token"; curl -sS "$B/api/v2/tokens/$ADDR" | head -c 800; echo
-          echo "=== counters"; curl -sS "$B/api/v2/tokens/$ADDR/counters" | head -c 400; echo
-          echo "=== holders"; curl -sS "$B/api/v2/tokens/$ADDR/holders" | head -c 3000; echo
-          echo "=== transfers"; curl -sS "$B/api/v2/tokens/$ADDR/transfers" | head -c 1500; echo
+          echo "=== address"; curl -sS -A "$UA" -H "accept: application/json" "$B/api/v2/addresses/$ADDR" | head -c 1500; echo
+          echo "=== contract"; curl -sS -A "$UA" -H "accept: application/json" "$B/api/v2/smart-contracts/$ADDR" | head -c 1500; echo
+          echo "=== token"; curl -sS -A "$UA" -H "accept: application/json" "$B/api/v2/tokens/$ADDR" | head -c 800; echo
+          echo "=== counters"; curl -sS -A "$UA" -H "accept: application/json" "$B/api/v2/tokens/$ADDR/counters" | head -c 400; echo
+          echo "=== holders"; curl -sS -A "$UA" -H "accept: application/json" "$B/api/v2/tokens/$ADDR/holders" | head -c 3000; echo
+          echo "=== transfers"; curl -sS -A "$UA" -H "accept: application/json" "$B/api/v2/tokens/$ADDR/transfers" | head -c 1500; echo
       - name: Extra urls
         if: inputs.urls != ''
         env:
           URLS: ${{ inputs.urls }}
+          UA: "Mozilla/5.0 (X11; Linux x86_64) bouncer-probe/0.3"
         run: |
           printf '%s\n' "$URLS" | while IFS= read -r u; do
             [ -z "$u" ] && continue
-            echo "=== GET $u"; curl -sS "$u" | head -c 4000; echo
+            echo "=== GET $u"; curl -sS -A "$UA" -H "accept: application/json" "$u" | head -c 4000; echo
           done
       - name: Raw JSON-RPC
         if: inputs.rpc != ''
@@ -62,6 +64,7 @@ jobs:
           printf '%s\n' "$RPC" | while IFS= read -r body; do
             [ -z "$body" ] && continue
             echo "=== RPC $body"; curl -sS -H 'content-type: application/json' --data "$body" https://rpc.mainnet.chain.robinhood.com | head -c 4000; echo
+            sleep 2
           done
       - name: bouncer door
         if: inputs.address != ''
