@@ -34,7 +34,7 @@ export function doorCard(slip: DoorSlip, options: CardOptions): string {
   const meta = slip.id.meta;
   const title = meta ? esc(meta.symbol) : shortAddress(slip.subject);
   const sub = meta ? esc(meta.name) : "unregistered contract";
-  const stampColor = slip.stamp === "ON THE LIST" ? c.brass : c.stop;
+  const stampColor = slip.stamp === "ON THE LIST" ? c.brass : slip.stamp === "NOT A LAUNCH" ? c.watch : c.stop;
   const lines: string[] = [];
   const idBits = [slip.id.registered ? "factory record" : "no factory record", slip.id.token.code.empty ? "no code" : `${slip.id.token.code.bytes} bytes`];
   if (slip.id.token.proxyImplementation || slip.id.token.code.minimalProxyTarget) idBits.push("proxy");

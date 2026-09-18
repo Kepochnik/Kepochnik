@@ -9,6 +9,7 @@ import { encodeWord, eventTopic, selector } from "../chain/abi.js";
 import { EIP1967_IMPLEMENTATION_SLOT } from "../chain/code.js";
 import { keccak256Hex } from "../chain/keccak.js";
 import { poolIdFor } from "./exitDoor.js";
+import { CHAINS } from "../chain/chains.js";
 import { CURVE_EVENTS, ERC20_EVENTS, FACTORY_EVENTS, PONS_V1_FACTORY, PONS_V2_FACTORY, ROBINHOOD_CHAIN_ID, ZERO_ADDRESS } from "../chain/pons.js";
 import { RpcClient } from "../chain/rpc.js";
 import { addressTopic } from "../chain/tape.js";
@@ -58,6 +59,34 @@ export const DEMO_V1 = { token: "0x0000000000000000000000000000000000001d1e", de
 
 /** Not a Pons launch: an upgradeable proxy token somebody named after a real one. */
 export const DEMO_IMPOSTOR = { token: "0x00000000000000000000000000000000000bad01", implementation: "0x00000000000000000000000000000000000bad02" };
+
+/**
+ * Not a Pons launch, not an impostor: an ordinary owned ERC-20 with mint,
+ * pause, blacklist and fee switches in its code, trading open, one of its
+ * three largest wallets blacklisted, a pool holding 30% and the deployer
+ * 25%. What the open-door check is for.
+ */
+export const DEMO_PLAIN = {
+  token: "0x0000000000000000000000000000000000f1a1a1",
+  owner: "0x00000000000000000000000000000000000000f1",
+  pool: "0x000000000000000000000000000000000000900f",
+  name: "Robin Rocket",
+  symbol: "ROCKET",
+  createdAt: HEAD - 50_000,
+  creationTx: "0xdemoplaincreate",
+  supply: 10n ** 27n,
+  /** [holder, share in bps, is contract, explorer label]. */
+  holders: [
+    ["0x000000000000000000000000000000000000900f", 3_000, true, "UniswapV3Pool"],
+    ["0x00000000000000000000000000000000000000f1", 2_500, false, null],
+    ["0x000000000000000000000000000000000000c500", 800, false, null],
+    ["0x000000000000000000000000000000000000c501", 500, false, null],
+    ["0x000000000000000000000000000000000000c502", 300, false, null],
+    ["0x000000000000000000000000000000000000dead", 200, false, null],
+  ] as [string, number, boolean, string | null][],
+  blacklisted: "0x000000000000000000000000000000000000c501",
+  powers: ["mint(address,uint256)", "pause()", "unpause()", "paused()", "owner()", "renounceOwnership()", "transferOwnership(address)", "setFees(uint256,uint256)", "blacklist(address,bool)", "tradingOpen()", "excludeFromFees(address,bool)"],
+};
 
 /** FRESH: launched nine seconds before the head; dev buy at the door, one sniper paid 61%. */
 const freshBuys: [number, string, bigint, number?][] = [[1, DEV_C, 400n * 10n ** 15n], [22, buyer(900), 300n * 10n ** 15n, 6_000], [70, buyer(901), 100n * 10n ** 15n, 1_900]];
@@ -211,10 +240,13 @@ export function demoFetch(): typeof fetch {
           if (byCurve.has(who)) return ok(DEMO_CODE.ponsCurve);
           if (who === DEMO_IMPOSTOR.token) return ok(DEMO_CODE.impostor);
           if (who === DEMO_V1.token || who === PONS_V1_FACTORY) return ok(DEMO_CODE.ponsToken);
+          if (who === DEMO_PLAIN.token) return ok(DEMO_CODE.plain);
+          if (who === DEMO_PLAIN.pool) return ok(DEMO_CODE.factory);
           return ok("0x");
         }
         case "eth_getTransactionReceipt": {
           const hash = (request.params as [string])[0];
+          if (hash === DEMO_PLAIN.creationTx) return ok({ transactionHash: hash, blockNumber: `0x${DEMO_PLAIN.createdAt.toString(16)}`, from: DEMO_PLAIN.owner, status: "0x1", logs: [] });
           for (const t of Object.values(DEMO.tokens)) {
             const logs = curveLogs(t, 0, DEMO.head) as { transactionHash: string; blockNumber: string }[];
             const hit = logs.filter((l) => l.transactionHash === hash);
@@ -284,6 +316,34 @@ export function demoFetch(): typeof fetch {
             if (s === sel("symbol()")) return ok(`0x${encodeString(DEMO_V1.symbol)}`);
             if (s === sel("decimals()")) return ok(`0x${encodeWord("uint8", 18n)}`);
             if (s === sel("totalSupply()")) return ok(`0x${encodeWord("uint256", 10n ** 27n)}`);
+          }
+          const dex = CHAINS.robinhood.dex!;
+          if (dex.v3Factories.some((f) => f.address === to) && s === sel("getPool(address,address,uint24)")) {
+            const [a, , fee] = [`0x${call.data.slice(34, 74)}`, 0, BigInt(`0x${call.data.slice(138, 202)}`)];
+            return ok(`0x${encodeWord("address", a === DEMO_PLAIN.token && fee === 3_000n ? DEMO_PLAIN.pool : ZERO_ADDRESS)}`);
+          }
+          if (to === dex.weth && s === sel("balanceOf(address)")) {
+            const who = `0x${call.data.slice(34)}`;
+            return ok(`0x${encodeWord("uint256", who === DEMO_PLAIN.pool ? 12n * ETH : 0n)}`);
+          }
+          if (to === DEMO_PLAIN.token) {
+            const from = (call as { from?: string }).from?.toLowerCase();
+            if (s === sel("name()")) return ok(`0x${encodeString(DEMO_PLAIN.name)}`);
+            if (s === sel("symbol()")) return ok(`0x${encodeString(DEMO_PLAIN.symbol)}`);
+            if (s === sel("decimals()")) return ok(`0x${encodeWord("uint8", 18n)}`);
+            if (s === sel("totalSupply()")) return ok(`0x${encodeWord("uint256", DEMO_PLAIN.supply)}`);
+            if (s === sel("owner()")) return ok(`0x${encodeWord("address", DEMO_PLAIN.owner)}`);
+            if (s === sel("paused()")) return ok(`0x${encodeWord("bool", false)}`);
+            if (s === sel("tradingOpen()")) return ok(`0x${encodeWord("bool", true)}`);
+            if (s === sel("balanceOf(address)")) {
+              const who = `0x${call.data.slice(34)}`;
+              const row = DEMO_PLAIN.holders.find((h) => h[0] === who);
+              return ok(`0x${encodeWord("uint256", row ? (DEMO_PLAIN.supply * BigInt(row[1])) / 10_000n : 0n)}`);
+            }
+            if (s === sel("transfer(address,uint256)")) {
+              if (from === DEMO_PLAIN.blacklisted) return { jsonrpc: "2.0", id: request.id, error: { code: 3, message: "execution reverted: Blacklisted", data: `0x08c379a0${encodeString("Blacklisted")}` } };
+              return ok(`0x${encodeWord("bool", true)}`);
+            }
           }
           if (to === DEMO_IMPOSTOR.token) {
             if (s === sel("name()")) return ok(`0x${encodeString("Sprint")}`);
@@ -362,6 +422,18 @@ export function demoBlockscoutFetch(): typeof fetch {
     }
     const v = url.pathname.match(/^\/api\/v2\/smart-contracts\/(0x[0-9a-f]{40})$/i);
     if (v) return json({ is_verified: tokens.some((t) => t.token === v[1].toLowerCase() || t.curve === v[1].toLowerCase()) });
+    const plain = DEMO_PLAIN;
+    if (url.pathname === `/api/v2/addresses/${plain.token}`) return json({ is_contract: true, is_verified: false, name: null, creator_address_hash: plain.owner, creation_transaction_hash: plain.creationTx });
+    if (url.pathname === `/api/v2/tokens/${plain.token}`) return json({ holders_count: "143", type: "ERC-20", name: plain.name, symbol: plain.symbol });
+    if (url.pathname === `/api/v2/tokens/${plain.token}/counters`) return json({ token_holders_count: "143", transfers_count: "2210" });
+    if (url.pathname === `/api/v2/tokens/${plain.token}/holders`) {
+      return json({ items: plain.holders.map(([hash, bps, is_contract, name]) => ({ address: { hash, is_contract, name }, value: ((plain.supply * BigInt(bps)) / 10_000n).toString() })), next_page_params: null });
+    }
+    if (url.pathname === `/api/v2/tokens/${plain.token}/transfers`) {
+      const at = (block: number) => new Date(Math.round(DEMO.genesisTimestamp + block * 0.1) * 1000).toISOString();
+      const items = [DEMO.head - 1_200, DEMO.head - 4_000, DEMO.head - 9_000].map((block, i) => ({ block_number: block, timestamp: at(block), from: { hash: plain.pool }, to: { hash: buyer(500 + i) }, total: { value: (10n ** 24n).toString() }, transaction_hash: `0xdemoplainxfer${i}` }));
+      return json({ items, next_page_params: null });
+    }
     return new Response("not found", { status: 404 });
   }) as typeof fetch;
 }
@@ -398,6 +470,8 @@ export const DEMO_CODE = {
   ponsToken: `0x60806040527f${"ff".repeat(16)}${"f4".repeat(16)}5b${"5b".repeat(200)}00${CBOR_TRAILER}`,
   ponsCurve: `0x60806040527f${"00".repeat(32)}5b${"5b".repeat(900)}00${CBOR_TRAILER}`,
   impostor: `0x6080604052${"5b".repeat(20)}f4${"5b".repeat(20)}ff00${CBOR_TRAILER}`,
+  /** A dispatcher: PUSH4 <selector> EQ PUSH2 <dest> JUMPI for each function the plain token has. */
+  plain: `0x6080604052${DEMO_PLAIN.powers.map((sig) => `63${selector(sig).slice(2)}1461${"0000"}57`).join("")}${"5b".repeat(60)}00${CBOR_TRAILER}`,
 };
 
 export function demoRpc(): RpcClient {

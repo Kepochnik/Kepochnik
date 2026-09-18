@@ -17,6 +17,8 @@ export interface ChainConfig {
   factory: string | null;
   /** The older Pons V1 factory on this chain, when there is one; V1 tokens are read from it so they are not called impostors. */
   factoryV1?: string;
+  /** Earlier V1 factory deployments (same read surface); a token that names one of them as its launchFactory() is read from it. */
+  olderFactoriesV1?: string[];
   launchpad: string;
   native: { symbol: string; decimals: number };
   /** Roughly how many blocks per second, for "the last N hours" estimates before pinning to headers. */
@@ -24,6 +26,8 @@ export interface ChainConfig {
   notes?: string;
   /** Well-known contracts that are not launchpad tokens, so the door can say what they are instead of just "not on the list". */
   known?: Record<string, string>;
+  /** Where ordinary tokens trade on this chain: Uniswap V3-style factories to ask for pools, and the wrapped native token they pair with. */
+  dex?: { weth: string; v3Factories: { name: string; address: string }[] };
 }
 
 export const CHAINS: Record<string, ChainConfig> = {
@@ -35,13 +39,18 @@ export const CHAINS: Record<string, ChainConfig> = {
     blockscout: "https://robinhoodchain.blockscout.com",
     factory: "0x7eD598BcEf8bd9Edd8C97A195C6d13f40801EC7e".toLowerCase(),
     factoryV1: "0xA5aAb3F0c6EeadF30Ef1D3Eb997108E976351feB".toLowerCase(),
+    olderFactoriesV1: ["0x0c37a24F5D23A486FA692d1500881d698B1F77a4".toLowerCase()],
     launchpad: "Pons V2",
     native: { symbol: "ETH", decimals: 18 },
     blocksPerSecond: 10,
     known: {
-      "0x39dbed3a2bd333467115de45665cc57f813c4571": "$PONS, the launchpad's own platform token. It was not launched through the Pons factory, so curves, door tax and creator tax do not apply; it trades on the DEX.",
+      "0x39dbed3a2bd333467115de45665cc57f813c4571": "$PONS, the launchpad's own platform token: a fixed-supply PonsLauncherToken paired into a Uniswap V3 pool at launch. The V2 curve, door tax and creator tax do not apply to it.",
       "0x7ed598bcef8bd9edd8c97a195c6d13f40801ec7e": "the Pons V2 launch factory itself, not a token.",
       "0xa5aab3f0c6eeadf30ef1d3eb997108e976351feb": "the Pons V1 launch factory itself, not a token.",
+    },
+    dex: {
+      weth: "0x0Bd7D308f8E1639FAb988df18A8011f41EAcAD73".toLowerCase(),
+      v3Factories: [{ name: "Uniswap V3", address: "0x1f7d7550B1b028f7571E69A784071F0205FD2EfA".toLowerCase() }],
     },
   },
   "arc-testnet": {

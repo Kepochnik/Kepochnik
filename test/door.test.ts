@@ -56,14 +56,15 @@ test("the curve address resolves to its token", async () => {
   assert.ok(slip.notes.some((n) => n.code === "curve-input"));
 });
 
-test("impostor: not on the list, proxy and dangerous opcodes are STOP notes", async () => {
+test("impostor without an explorer: not a launch, self-destruct is a STOP note, the proxy a WATCH note", async () => {
   const rpc = demoRpc();
   const slip = await readDoor(rpc, DEMO_IMPOSTOR.token, opts);
-  assert.equal(slip.stamp, "NOT ON THE LIST");
+  assert.equal(slip.stamp, "NOT A LAUNCH");
   assert.equal(slip.id.meta?.symbol, "SPRINT");
   assert.equal(slip.id.token.proxyImplementation, DEMO_IMPOSTOR.implementation);
-  const stops = slip.notes.filter((n) => n.level === "stop");
-  assert.ok(stops.length >= 3);
+  assert.ok(slip.notes.some((n) => n.level === "stop" && /SELFDESTRUCT/.test(n.text)));
+  assert.ok(slip.notes.some((n) => n.level === "watch" && /replaced/.test(n.text)));
+  assert.ok(slip.open);
   assert.equal(slip.cover, null);
   assert.equal(slip.rules, null);
 });

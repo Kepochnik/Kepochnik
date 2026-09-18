@@ -1,9 +1,10 @@
 /**
  * The smallest possible Blockscout v2 client: GET only, JSON only, one
- * base URL per chain. Used for two things the RPC cannot answer cheaply:
- * where a wallet's first native funds came from (ONE CREW) and which tokens
- * carry a given name or symbol (LOOKALIKE). Everything it returns is
- * cross-checked against the factory before it reaches a slip.
+ * base URL per chain. Used for what the RPC cannot answer cheaply: where a
+ * wallet's first native funds came from (ONE CREW), which tokens carry a
+ * given name or symbol (LOOKALIKE), and, for a token the launchpad did not
+ * make, who holds it, who deployed it and when it last moved (OPEN DOOR).
+ * Balances that matter are re-read from the chain before they reach a slip.
  */
 export interface BlockscoutOptions {
   baseUrl: string;
@@ -25,6 +26,45 @@ export interface TokenSearchHit {
   symbol: string;
 }
 
+export interface TokenHolder {
+  address: string;
+  value: bigint;
+  isContract: boolean;
+  /** The explorer's label for the holder (a verified contract's name, a tag), when it has one. */
+  name: string | null;
+}
+
+export interface TokenInfo {
+  holders: number | null;
+  transfers: number | null;
+  /** Token standard as the explorer indexed it ("ERC-20", "ERC-721", …). */
+  type: string | null;
+  /** Explorer's price feed, when it has one; null otherwise. Not read from the chain. */
+  priceUsd: number | null;
+  volume24hUsd: number | null;
+  marketCapUsd: number | null;
+}
+
+export interface AddressInfo {
+  isContract: boolean;
+  isVerified: boolean;
+  /** The explorer's scam flag, when it sets one. */
+  isScam: boolean;
+  name: string | null;
+  /** Who deployed it and in which transaction, when the explorer indexed the creation. */
+  creator: string | null;
+  creationTx: string | null;
+}
+
+export interface TokenTransfer {
+  from: string;
+  to: string;
+  value: bigint;
+  block: number;
+  timestamp: number | null;
+  hash: string;
+}
+
 export class BlockscoutClient {
   private readonly baseUrl: string;
   private readonly fetchImpl: typeof fetch;
@@ -36,11 +76,14 @@ export class BlockscoutClient {
     this.timeoutMs = options.timeoutMs ?? 15_000;
   }
 
+  /** Browsers drop the user-agent header silently; Node and workers send it, which keeps bot challenges away. */
+  static readonly USER_AGENT = "Mozilla/5.0 (compatible; bouncer/0.3; +https://github.com/Kepochnik/bouncer)";
+
   async get<T>(path: string): Promise<T> {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.timeoutMs);
     try {
-      const response = await this.fetchImpl(`${this.baseUrl}${path}`, { method: "GET", headers: { accept: "application/json" }, signal: controller.signal });
+      const response = await this.fetchImpl(`${this.baseUrl}${path}`, { method: "GET", headers: { accept: "application/json", "user-agent": BlockscoutClient.USER_AGENT }, signal: controller.signal });
       if (!response.ok) throw new Error(`blockscout ${response.status} for ${path}`);
       return (await response.json()) as T;
     } finally {
@@ -81,6 +124,58 @@ export class BlockscoutClient {
       .map((i) => ({ address: String(i.address ?? i.address_hash).toLowerCase(), name: i.name ?? "", symbol: i.symbol ?? "" }));
   }
 
+  /** Largest holders first, as the explorer ranks them; `limit` caps the count, one page is 50. */
+  async tokenHolders(token: string, limit = 50): Promise<TokenHolder[]> {
+    const body = await this.get<{ items: BlockscoutHolder[] }>(`/api/v2/tokens/${token}/holders`);
+    return (body.items ?? []).slice(0, limit).map((h) => ({
+      address: (h.address?.hash ?? "").toLowerCase(),
+      value: BigInt(h.value ?? "0"),
+      isContract: Boolean(h.address?.is_contract),
+      name: h.address?.name ?? h.address?.metadata?.tags?.[0]?.name ?? null,
+    }));
+  }
+
+  /** Holder and transfer counts for a token; nulls when the explorer has not counted yet. */
+  async tokenInfo(token: string): Promise<TokenInfo> {
+    const info = await this.get<{ holders?: string | number; holders_count?: string | number; type?: string; exchange_rate?: string | null; volume_24h?: string | null; circulating_market_cap?: string | null }>(`/api/v2/tokens/${token}`);
+    let transfers: number | null = null;
+    let holders = numberOrNull(info.holders_count ?? info.holders);
+    try {
+      const counters = await this.get<{ token_holders_count?: string | number; transfers_count?: string | number }>(`/api/v2/tokens/${token}/counters`);
+      transfers = numberOrNull(counters.transfers_count);
+      holders = holders ?? numberOrNull(counters.token_holders_count);
+    } catch {
+      // counters are optional
+    }
+    return { holders, transfers, type: info.type ?? null, priceUsd: numberOrNull(info.exchange_rate ?? undefined), volume24hUsd: numberOrNull(info.volume_24h ?? undefined), marketCapUsd: numberOrNull(info.circulating_market_cap ?? undefined) };
+  }
+
+  /** What the explorer knows about an address: contract or not, verified, who created it. */
+  async addressInfo(address: string): Promise<AddressInfo> {
+    const body = await this.get<{ is_contract?: boolean; is_verified?: boolean; is_scam?: boolean; name?: string | null; creator_address_hash?: string | null; creation_transaction_hash?: string | null; creation_tx_hash?: string | null }>(`/api/v2/addresses/${address}`);
+    return {
+      isContract: Boolean(body.is_contract),
+      isVerified: Boolean(body.is_verified),
+      isScam: Boolean(body.is_scam),
+      name: body.name ?? null,
+      creator: body.creator_address_hash ? body.creator_address_hash.toLowerCase() : null,
+      creationTx: body.creation_transaction_hash ?? body.creation_tx_hash ?? null,
+    };
+  }
+
+  /** The newest token transfers the explorer indexed, newest first (one page). */
+  async tokenTransfers(token: string): Promise<TokenTransfer[]> {
+    const body = await this.get<{ items: BlockscoutTransfer[] }>(`/api/v2/tokens/${token}/transfers`);
+    return (body.items ?? []).map((t) => ({
+      from: (t.from?.hash ?? "").toLowerCase(),
+      to: (t.to?.hash ?? "").toLowerCase(),
+      value: BigInt(t.total?.value ?? "0"),
+      block: Number(t.block_number ?? 0),
+      timestamp: t.timestamp ? Math.floor(Date.parse(t.timestamp) / 1000) : null,
+      hash: t.transaction_hash ?? t.tx_hash ?? "",
+    }));
+  }
+
   /** Whether the explorer holds verified source for the address. */
   async isVerified(address: string): Promise<boolean | null> {
     try {
@@ -90,6 +185,27 @@ export class BlockscoutClient {
       return null;
     }
   }
+}
+
+function numberOrNull(value: string | number | undefined): number | null {
+  if (value === undefined || value === null || value === "") return null;
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
+}
+
+interface BlockscoutHolder {
+  address?: { hash: string; is_contract?: boolean; name?: string | null; metadata?: { tags?: { name?: string }[] } | null };
+  value?: string;
+}
+
+interface BlockscoutTransfer {
+  from?: { hash: string };
+  to?: { hash: string };
+  total?: { value?: string };
+  block_number?: number | string;
+  timestamp?: string | null;
+  transaction_hash?: string;
+  tx_hash?: string;
 }
 
 interface BlockscoutTx {

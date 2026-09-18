@@ -5,7 +5,7 @@
 <p align="center"><strong>Check the list before you pay the cover.</strong><br/>Read-only door check for Pons V2 launches on Robinhood Chain, and for Radian (the Pons V2 port) on Circle's Arc.</p>
 
 <p align="center">
-  <img alt="tests 47 passing" src="https://img.shields.io/badge/tests-47_passing-c9a227?style=flat-square&labelColor=0e0d10" />
+  <img alt="tests 60 passing" src="https://img.shields.io/badge/tests-60_passing-c9a227?style=flat-square&labelColor=0e0d10" />
   <img alt="node 22+" src="https://img.shields.io/badge/node-22%2B-c9a227?style=flat-square&labelColor=0e0d10" />
   <img alt="runtime deps 0" src="https://img.shields.io/badge/runtime_deps-0-c9a227?style=flat-square&labelColor=0e0d10" />
   <img alt="Robinhood Chain 4663" src="https://img.shields.io/badge/Robinhood_Chain-4663-c9a227?style=flat-square&labelColor=0e0d10" />
@@ -24,7 +24,9 @@
 
 Twenty-five thousand tokens launch on Pons every day. Each one has a door: a 99% anti-snipe tax that decays to zero over the first fifteen seconds, a creator tax of up to 10% on every trade, a fee recipient the creator can move, a "buyback" that vests back to the creator instead of burning, and a deployer with a history. None of that is on the chart. All of it is on the chain.
 
-BOUNCER reads it and prints a slip: **ID check** (did the factory really deploy this token, and can its code change), **cover charge** (is the door tax still open, what did the buys inside the window actually pay), **house rules** (the terms in plain words), **the room** (who bought, how much the creator funded, buys landing in the same block), the **exit door** (what 10 / 25 / 50 / 100% of a position fetches right now, on the curve or in the graduated pool), **one crew** (which of the first buyers were funded by the same hand), **lookalikes** (other tokens with the same ticker, and which came first) and the **dev report card** (what this deployer launched before and how it went). The stamp says `ON THE LIST` or `NOT ON THE LIST`. The notes say what to read before paying. Older Pons V1 tokens (fixed supply, Uniswap V3 pool from block one) are on the list too, with their own rules.
+BOUNCER reads it and prints a slip: **ID check** (did the factory really deploy this token, and can its code change), **cover charge** (is the door tax still open, what did the buys inside the window actually pay), **house rules** (the terms in plain words), **the room** (who bought, how much the creator funded, buys landing in the same block), the **exit door** (what 10 / 25 / 50 / 100% of a position fetches right now, on the curve or in the graduated pool), **one crew** (which of the first buyers were funded by the same hand), **lookalikes** (other tokens with the same ticker, and which came first) and the **dev report card** (what this deployer launched before and how it went). The stamp says `ON THE LIST` (the factory made it), `NOT A LAUNCH` (an ordinary token, checked as one) or `NOT ON THE LIST` (nothing there, or a token wearing a real launch's ticker). The notes say what to read before paying. Older Pons V1 tokens (fixed supply, Uniswap V3 pool from block one) are on the list too, with their own rules.
+
+**Any token gets a slip, not just launches.** For a contract the factory did not make, BOUNCER runs the **open door**: which switches the code carries (mint, pause, blacklist, fee, limit, trading, upgrade functions read off the bytecode's dispatcher), who holds the keys (`owner()`, renounced or not, `paused()`, the trading switch), whether the largest wallets could actually transfer right now (an `eth_call` simulation, nothing sent), who holds the supply (top wallets, deployer's share, what sits in pools and contracts), where it trades (pools on the chain's Uniswap V3 factory and what they hold, the explorer's price feed), when it was deployed and when it last moved. V1 tokens get the same facts under their V1 rules.
 
 For holders there is a **position** (one wallet on one launch: cost basis, fees and taxes paid, exit value now), a **receipt** (one trade itemised: protocol fee, creator tax, cover charge) and a **watch** (DEV MOVED: the deployer sold or moved tokens, the tax recipient moved, buyback flipped; CREW EXIT: the crew leaving together). For creators there is a **launch planner** (what a launch looks like under today's factory terms, before anything is signed). For everyone there is **the board** (tonight's deployers, serial launchers, cover charge collected and paid) and, for agents, a **read-only MCP server** with all of it as tools.
 
@@ -213,7 +215,7 @@ docs/                       RULES, LIMITATIONS, LAUNCH-KIT
 ## Tests
 
 ```bash
-npm run check     # read-only check + build + 47 tests + site bundle, no network
+npm run check     # read-only check + build + 60 tests + site bundle, no network
 ```
 
 ## License

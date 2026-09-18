@@ -144,7 +144,7 @@ test("a Pons V1 token is on the list with its own rules, not bounced", async () 
   assert.ok(slip.notes.some((n) => n.code === "v1-caps"));
   assert.ok(slip.id.v1!.rules.some((r) => /Uniswap V3/.test(r)));
   const unknown = await readDoor(demoRpc(), "0x00000000000000000000000000000000000bad01", { chain: CHAINS.robinhood, factory: PONS_V2_FACTORY, blockscout: null, chunkSize: 100_000, launchSearchBlocks: 400_000 });
-  assert.equal(unknown.stamp, "NOT ON THE LIST");
+  assert.equal(unknown.stamp, "NOT A LAUNCH");
   assert.match(unknown.notes[0].text, /nor the Pons V1 factory/);
 });
 
@@ -152,7 +152,7 @@ test("a well-known non-launch contract is named instead of bounced", async () =>
   const rpc = demoRpc();
   const chain = { ...CHAINS.robinhood, known: { "0x00000000000000000000000000000000000bad01": "a demo platform token, not a launch." } };
   const slip = await readDoor(rpc, "0x00000000000000000000000000000000000bad01", { chain, factory: PONS_V2_FACTORY, blockscout: null, chunkSize: 100_000, launchSearchBlocks: 400_000 });
-  assert.equal(slip.stamp, "NOT ON THE LIST");
+  assert.equal(slip.stamp, "NOT A LAUNCH");
   assert.match(slip.known ?? "", /platform token/);
   assert.equal(slip.notes[0].code, "known-address");
   assert.equal(slip.notes[0].level, "info");
