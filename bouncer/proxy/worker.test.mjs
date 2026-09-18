@@ -62,3 +62,29 @@ test("explorer routes: only the three the site uses, query string kept", async (
   const noApi = await handle(new Request("https://p.invalid/api/other/api/v2/search?q=x"), upstreams, fetchImpl);
   assert.equal(noApi.status, 404);
 });
+
+test("solana speaks its own read list, and neither list widens the other", async () => {
+  const upstreams = {
+    solana: { rpc: "https://solana.invalid", api: null, family: "solana" },
+    base: { rpc: "https://base.invalid", api: "https://base.blockscout.invalid" },
+  };
+  const seen = [];
+  const fetchImpl = async (url, init) => {
+    seen.push({ url, body: init?.body });
+    return new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, result: { value: null } }), { headers: { "content-type": "application/json" } });
+  };
+  const post = (chain, method) =>
+    handle(new Request(`https://proxy.invalid/rpc/${chain}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params: [] }) }), upstreams, fetchImpl);
+
+  assert.equal((await post("solana", "getAccountInfo")).status, 200);
+  assert.equal((await post("solana", "getTokenLargestAccounts")).status, 200);
+  // An EVM method must not be smuggled through the Solana route, nor the reverse.
+  assert.equal((await post("solana", "eth_call")).status, 403);
+  assert.equal((await post("base", "getAccountInfo")).status, 403);
+  assert.equal((await post("base", "eth_call")).status, 200);
+  // And nothing that writes, on either.
+  for (const method of ["sendTransaction", "requestAirdrop", "eth_sendRawTransaction", "eth_sign"]) {
+    assert.equal((await post("solana", method)).status, 403, method);
+    assert.equal((await post("base", method)).status, 403, method);
+  }
+});

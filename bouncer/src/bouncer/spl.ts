@@ -123,7 +123,15 @@ export async function readSplDoor(rpc: SolanaRpc, input: string, chain: ChainCon
       slip.holders = { top: [], top10Bps: null, distinctOwners: null };
       return;
     }
-    const owners = await rpc.multipleAccounts(largest.map((a) => a.address));
+    // Resolving accounts to the wallets behind them is a second read, and it is
+    // the one most likely to be refused. Losing it must cost the owner column,
+    // not the whole holder list.
+    let owners: (Awaited<ReturnType<typeof rpc.multipleAccounts>>[number])[] = [];
+    try {
+      owners = await rpc.multipleAccounts(largest.map((a) => a.address));
+    } catch (error) {
+      slip.skipped.push({ section: "holder owners", reason: error instanceof Error ? error.message : String(error) });
+    }
     const supply = slip.mint!.supply;
     const top: SplHolder[] = largest.map((a, i) => ({
       account: a.address,

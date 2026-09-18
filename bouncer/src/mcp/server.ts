@@ -12,6 +12,8 @@ import { PonsReader } from "../chain/reader.js";
 import { RpcClient } from "../chain/rpc.js";
 import { findBlockByTimestamp } from "../chain/tape.js";
 import { renderReceipt } from "../receipt.js";
+import { SolanaRpc } from "../chain/solana.js";
+import { readSplDoor, splReceipt } from "../bouncer/spl.js";
 import { readCoverCharge } from "../bouncer/coverCharge.js";
 import { devReportLine, readDevReport } from "../bouncer/devReport.js";
 import { doorReceipt, findLaunchBlock, readDoor, slipJson } from "../bouncer/door.js";
@@ -43,6 +45,8 @@ export interface McpDeps {
   rpcFor: (chain: ChainConfig) => RpcClient;
   blockscoutFor?: (chain: ChainConfig) => BlockscoutClient | null;
   factoryFor?: (chain: ChainConfig) => string | null;
+  /** Supplied when the server should answer for Solana as well; omitted, Solana requests say so. */
+  solanaRpcFor?: (chain: ChainConfig) => SolanaRpc;
   /** Demo-sized windows for tests. */
   demo?: boolean;
 }
@@ -56,15 +60,21 @@ interface ToolDef {
 
 const CHAIN_PROP = { type: "string", enum: Object.keys(CHAINS), description: "Chain key; default robinhood." };
 const ADDRESS_PROP = { type: "string", pattern: "^0x[0-9a-fA-F]{40}$", description: "20-byte hex address." };
+/** bouncer_check takes either, because the chain list offers both kinds. */
+const ANY_ADDRESS_PROP = { type: "string", description: "A 20-byte hex address on an EVM chain, or a base58 mint address on Solana." };
 
 export function createMcpServer(deps: McpDeps): { tools: ToolDef[]; handle: (message: JsonRpcRequest) => Promise<JsonRpcResponse | null> } {
   const ctx = (args: Record<string, unknown>) => {
     const chain = chainByKey(typeof args.chain === "string" ? args.chain : undefined);
     const factory = (deps.factoryFor ? deps.factoryFor(chain) : chain.factory) ?? "";
-    if (!factory) throw new Error(`${chain.name}: ${chain.notes ?? "factory not known"}`);
     const rpc = deps.rpcFor(chain);
     const blockscout = deps.blockscoutFor ? deps.blockscoutFor(chain) : chain.blockscout ? new BlockscoutClient({ baseUrl: chain.blockscout }) : null;
     return { chain, factory, rpc, blockscout };
+  };
+  /** The launchpad tools cannot answer without a factory, and say which chain has none. */
+  const needFactory = (chain: { name: string; launchpad: string | null }, factory: string): string => {
+    if (factory) return factory;
+    throw new Error(chain.launchpad ? `${chain.name}: the ${chain.launchpad} factory address is not published yet` : `${chain.name}: no launchpad runs here, so there is no launch to read. Use bouncer_check, which answers for any token.`);
   };
   const demoWindow = deps.demo ? { chunkSize: 100_000, launchSearchBlocks: 400_000 } : {};
   const str = (v: unknown, name: string): string => {
@@ -75,10 +85,16 @@ export function createMcpServer(deps: McpDeps): { tools: ToolDef[]; handle: (mes
   const tools: ToolDef[] = [
     {
       name: "bouncer_check",
-      description: "The full door slip for a launchpad token or curve on Robinhood Chain or Arc: ID check (factory record, bytecode, proxies), cover charge (anti-snipe window and what buys inside it paid), house rules, the room, exit door, one crew, lookalikes, dev report card, and door notes at STOP / WATCH / INFO. Read-only; nothing is scored or advised.",
-      inputSchema: { type: "object", properties: { address: ADDRESS_PROP, chain: CHAIN_PROP, dev_hours: { type: "number", description: "Dev report window in hours (default 24)." } }, required: ["address"] },
+      description: "The full door slip for any token. On a chain with a launchpad: the factory record, the anti-snipe window and what buys inside it paid, house rules, the room, the exit door, one crew, lookalikes and the dev report card. On any other token: which switches its code carries, who holds the keys, whether a holder could sell into the pool right now, who holds the supply and where it trades. On Solana: whether anyone can print more or freeze your account, and the Token-2022 rules on every transfer. Door notes at STOP / WATCH / INFO. Read-only; nothing is scored or advised.",
+      inputSchema: { type: "object", properties: { address: ANY_ADDRESS_PROP, chain: CHAIN_PROP, dev_hours: { type: "number", description: "Dev report window in hours (default 24)." } }, required: ["address"] },
       run: async (args) => {
-        const { chain, factory, rpc, blockscout } = ctx(args);
+        const chain = chainByKey(typeof args.chain === "string" ? args.chain : undefined);
+        if (chain.family === "solana") {
+          if (!deps.solanaRpcFor) throw new Error("this server was started without a Solana endpoint");
+          const slip = await readSplDoor(deps.solanaRpcFor(chain), str(args.address, "address"), chain);
+          return { text: renderReceipt(splReceipt(slip), "markdown"), structured: JSON.parse(slipJson({ stamp: slip.stamp, subject: slip.subject, chain: slip.chain, at: slip.at, notes: slip.notes, skipped: slip.skipped })) };
+        }
+        const { factory, rpc, blockscout } = ctx(args);
         const slip = await readDoor(rpc, str(args.address, "address"), { chain, factory, blockscout, devHours: typeof args.dev_hours === "number" ? args.dev_hours : deps.demo ? 8 : 24, ...demoWindow });
         return { text: renderReceipt(doorReceipt(slip), "markdown"), structured: JSON.parse(slipJson({ stamp: slip.stamp, subject: slip.subject, chain: slip.chain, at: slip.at, notes: slip.notes, skipped: slip.skipped })) };
       },
@@ -89,6 +105,7 @@ export function createMcpServer(deps: McpDeps): { tools: ToolDef[]; handle: (mes
       inputSchema: { type: "object", properties: { address: ADDRESS_PROP, chain: CHAIN_PROP }, required: ["address"] },
       run: async (args) => {
         const { factory, rpc, chain } = ctx(args);
+        needFactory(chain, factory);
         const head = await rpc.getBlock("latest");
         const launch = await new PonsReader(rpc, factory).launchedToken(str(args.address, "address"), head.number);
         const launchBlock = await findLaunchBlock(rpc, launch.token, head.number, deps.demo ? 400_000 : Math.round(7 * 86_400 * chain.blocksPerSecond), factory, deps.demo ? 100_000 : undefined);
@@ -104,6 +121,7 @@ export function createMcpServer(deps: McpDeps): { tools: ToolDef[]; handle: (mes
       inputSchema: { type: "object", properties: { address: ADDRESS_PROP, chain: CHAIN_PROP }, required: ["address"] },
       run: async (args) => {
         const { factory, rpc, chain, blockscout } = ctx(args);
+        needFactory(chain, factory);
         const head = await rpc.blockNumber();
         const launch = await new PonsReader(rpc, factory).launchedToken(str(args.address, "address"), head);
         const launchBlock = await findLaunchBlock(rpc, launch.token, head, deps.demo ? 400_000 : Math.round(7 * 86_400 * chain.blocksPerSecond), factory, deps.demo ? 100_000 : undefined);
@@ -119,7 +137,8 @@ export function createMcpServer(deps: McpDeps): { tools: ToolDef[]; handle: (mes
       description: "The dev report card: every launch this deployer made in the window, with phase, creator tax and seconds from launch to sweep.",
       inputSchema: { type: "object", properties: { address: ADDRESS_PROP, hours: { type: "number", description: "Window in hours (default 24)." }, chain: CHAIN_PROP }, required: ["address"] },
       run: async (args) => {
-        const { factory, rpc } = ctx(args);
+        const { chain, factory, rpc } = ctx(args);
+        needFactory(chain, factory);
         const head = await rpc.getBlock("latest");
         const hours = typeof args.hours === "number" ? args.hours : 24;
         const fromBlock = deps.demo ? Math.max(0, head.number - 300_000) : await findBlockByTimestamp(rpc, head.timestamp - hours * 3600, head.number);
@@ -133,6 +152,7 @@ export function createMcpServer(deps: McpDeps): { tools: ToolDef[]; handle: (mes
       inputSchema: { type: "object", properties: { tx: { type: "string", description: "Transaction hash." }, chain: CHAIN_PROP }, required: ["tx"] },
       run: async (args) => {
         const { factory, rpc, chain } = ctx(args);
+        needFactory(chain, factory);
         const rs = await readTradeReceipt(rpc, str(args.tx, "tx"), factory);
         const q = chain.native;
         const f = (v: bigint) => `${Number(v) / 10 ** q.decimals} ${q.symbol}`;
@@ -145,6 +165,7 @@ export function createMcpServer(deps: McpDeps): { tools: ToolDef[]; handle: (mes
       inputSchema: { type: "object", properties: { address: ADDRESS_PROP, amount: { type: "number", description: "Token amount in whole tokens (default 1% of a 1B supply)." }, chain: CHAIN_PROP }, required: ["address"] },
       run: async (args) => {
         const { factory, rpc, chain } = ctx(args);
+        needFactory(chain, factory);
         const head = await rpc.blockNumber();
         const launch = await new PonsReader(rpc, factory).launchedToken(str(args.address, "address"), head);
         const position = typeof args.amount === "number" ? BigInt(Math.round(args.amount)) * 10n ** 18n : 10n ** 25n;
@@ -159,6 +180,7 @@ export function createMcpServer(deps: McpDeps): { tools: ToolDef[]; handle: (mes
       inputSchema: { type: "object", properties: { tax_bps: { type: "number", description: "Creator tax in basis points (default 100)." }, config: { type: "number", description: "Launch config id (default 0)." }, quote: { type: "string", description: "Quote token address; omit for the native asset." }, chain: CHAIN_PROP } },
       run: async (args) => {
         const { factory, rpc, chain } = ctx(args);
+        needFactory(chain, factory);
         const plan = await readLaunchPlan(rpc, { factory, block: await rpc.blockNumber(), nativeSymbol: chain.native.symbol, creatorTaxBps: BigInt(typeof args.tax_bps === "number" ? args.tax_bps : 100), configId: typeof args.config === "number" ? args.config : 0, pairToken: typeof args.quote === "string" ? args.quote : undefined });
         const d = plan.quote.decimals;
         return { text: [`quote ${plan.quote.symbol}, supply ${Number(plan.supply) / 1e18}, graduates at ${Number(plan.graduationThreshold) / 10 ** d} ${plan.quote.symbol}`, `start price ${Number(plan.startPrice) / 10 ** d}, graduation price ${Number(plan.graduationPrice) / 10 ** d} (${(Number(plan.graduationPrice) / Number(plan.startPrice || 1n)).toFixed(2)}x)`, `sold on curve ${Number(plan.tokensSoldOnCurve) / 1e18}, to pool ${Number(plan.tokensToPool) / 1e18}, FDV at graduation ${Number(plan.fdvAtGraduation) / 10 ** d} ${plan.quote.symbol}`, `creator tax ${Number(plan.creatorTaxBps) / 100}% (ceiling ${Number(plan.maxCreatorTaxBps) / 100}%), launch fee ${Number(plan.launchFee) / 10 ** chain.native.decimals} ${chain.native.symbol}`, `cover charge ${Number(plan.snipe.startBps) / 100}% in the launch second, 0 after ${plan.snipe.seconds} s`].join("\n"), structured: JSON.parse(slipJson(plan)) };
@@ -170,6 +192,7 @@ export function createMcpServer(deps: McpDeps): { tools: ToolDef[]; handle: (mes
       inputSchema: { type: "object", properties: { hours: { type: "number", description: "Window in hours (default 1)." }, top: { type: "number", description: "Rows per board (default 10)." }, chain: CHAIN_PROP } },
       run: async (args) => {
         const { factory, rpc, chain } = ctx(args);
+        needFactory(chain, factory);
         const head = await rpc.getBlock("latest");
         const hours = typeof args.hours === "number" ? args.hours : 1;
         const fromBlock = deps.demo ? Math.max(0, head.number - 300_000) : await findBlockByTimestamp(rpc, head.timestamp - hours * 3600, head.number);
@@ -191,7 +214,7 @@ export function createMcpServer(deps: McpDeps): { tools: ToolDef[]; handle: (mes
           protocolVersion: typeof message.params?.protocolVersion === "string" ? message.params.protocolVersion : MCP_PROTOCOL_VERSION,
           capabilities: { tools: { listChanged: false } },
           serverInfo: { name: "bouncer", version: SERVER_VERSION },
-          instructions: "Read-only door check for Pons V2 launches on Robinhood Chain and Arc. Every tool reads the chain at one block; none can sign, send or hold a key. Call bouncer_check before a trade, bouncer_tax_now during a launch's first seconds, bouncer_exit before a sell.",
+          instructions: "Read-only checks on any token: Robinhood Chain, Base, BNB Chain, Solana and Arc. Every tool reads the chain at one block; none can sign, send or hold a key, and a read that fails is reported as unread rather than as a finding. Call bouncer_check before a trade; on a chain with a launchpad, bouncer_tax_now during a launch's first seconds and bouncer_exit before a sell.",
         });
       case "notifications/initialized":
       case "notifications/cancelled":

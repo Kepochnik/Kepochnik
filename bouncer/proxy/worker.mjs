@@ -6,12 +6,15 @@
  * requests. It cannot be used to send transactions: every method must be
  * on the read allow-list, batches are capped, and nothing is signed here.
  *
- *   POST /rpc/<chain>          JSON-RPC to that chain's RPC
+ *   POST /rpc/<chain>          JSON-RPC to that chain's RPC (EVM or Solana, each with its own read list)
  *   GET  /api/<chain>/<path>   Blockscout v2 GET, same path (funding sources, token search, holders, creator)
  *   GET  /                     health: the chains this proxy serves
  */
 export const UPSTREAMS = {
   robinhood: { rpc: "https://rpc.mainnet.chain.robinhood.com", api: "https://robinhoodchain.blockscout.com" },
+  base: { rpc: "https://base-rpc.publicnode.com", api: "https://base.blockscout.com" },
+  bnb: { rpc: "https://bsc-rpc.publicnode.com", api: null },
+  solana: { rpc: "https://api.mainnet-beta.solana.com", api: null, family: "solana" },
   "arc-testnet": { rpc: "https://rpc.testnet.arc.network", api: "https://testnet.arcscan.app" },
   arc: { rpc: "https://rpc.arc-scan.org", api: null },
 };
@@ -26,6 +29,20 @@ export const READ_ONLY_METHODS = new Set([
   "eth_getCode",
   "eth_getTransactionReceipt",
   "eth_getStorageAt",
+]);
+
+/** Solana speaks a different JSON-RPC; its read surface is listed separately so neither list can widen the other. */
+export const SOLANA_READ_ONLY_METHODS = new Set([
+  "getAccountInfo",
+  "getMultipleAccounts",
+  "getTokenSupply",
+  "getTokenLargestAccounts",
+  "getSlot",
+  "getBlockTime",
+  "getHealth",
+  "getVersion",
+  "getSignaturesForAddress",
+  "getEpochInfo",
 ]);
 
 const MAX_BATCH = 50;
@@ -69,8 +86,9 @@ export async function handle(request, upstreams = UPSTREAMS, fetchImpl = (i, o) 
     }
     const items = Array.isArray(payload) ? payload : [payload];
     if (items.length === 0 || items.length > MAX_BATCH) return json({ error: `batch must be 1..${MAX_BATCH} requests` }, 400);
+    const allowed = up.family === "solana" ? SOLANA_READ_ONLY_METHODS : READ_ONLY_METHODS;
     for (const item of items) {
-      if (!item || typeof item.method !== "string" || !READ_ONLY_METHODS.has(item.method)) {
+      if (!item || typeof item.method !== "string" || !allowed.has(item.method)) {
         return json({ jsonrpc: "2.0", id: item?.id ?? null, error: { code: -32601, message: `method not allowed through bouncer-proxy: ${item?.method ?? "?"}` } }, 403);
       }
     }
