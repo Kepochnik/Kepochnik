@@ -59,6 +59,28 @@ const popup = html
   .replace('<script src="app.js"></script>', '<script src="popup-init.js"></script>\n<script src="app.js"></script>');
 writeFileSync("extension/popup.html", popup);
 copyFileSync("site/dist/app.js", "extension/app.js");
+
+// The popup offers every chain the app knows, so its manifest has to allow
+// every endpoint those chains use. Hand-keeping that list is how Base, BNB and
+// Solana ended up selectable in a popup that could not reach them: MV3 grants
+// optional_host_permissions only when something asks at runtime, and nothing
+// here does. Derived from the chain table so the two cannot drift again.
+{
+  const { CHAINS } = await import("../dist/src/chain/chains.js");
+  const hosts = new Set(["https://*.workers.dev/*"]);
+  for (const chain of Object.values(CHAINS)) {
+    for (const url of chain.rpc) hosts.add(`${new URL(url).origin}/*`);
+    if (chain.blockscout) hosts.add(`${new URL(chain.blockscout).origin}/*`);
+  }
+  const manifestPath = "extension/manifest.json";
+  const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+  const next = [...hosts].sort();
+  if (JSON.stringify(manifest.host_permissions) !== JSON.stringify(next)) {
+    manifest.host_permissions = next;
+    writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+    console.log(`extension: host_permissions refreshed (${next.length} origins)`);
+  }
+}
 try {
   rmSync("site/dist/bouncer-extension.zip", { force: true });
   execFileSync("zip", ["-q", "-r", "-X", "../site/dist/bouncer-extension.zip", ".", "-x", "*.DS_Store", "store/*", "store/"], { cwd: "extension" });

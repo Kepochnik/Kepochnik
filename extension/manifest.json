@@ -2,19 +2,31 @@
   "manifest_version": 3,
   "name": "BOUNCER \u00b7 door check",
   "version": "0.3.1",
-  "description": "Read-only door check for Pons V2 launches on Robinhood Chain and Arc. Open the popup on any token page: ID check, cover charge countdown, house rules, exit door, one crew, dev report card. No wallet, no signing.",
+  "description": "Read-only door check for any token: Robinhood Chain, Base, BNB Chain, Solana and Arc. Open the popup on a token page and see who controls it, whether a holder can sell right now, who holds the supply and where it trades. No wallet, no keys, no signing.",
   "permissions": [
     "activeTab",
     "storage"
   ],
   "host_permissions": [
-    "https://rpc.mainnet.chain.robinhood.com/*",
+    "https://*.workers.dev/*",
+    "https://api.mainnet-beta.solana.com/*",
+    "https://base-rpc.publicnode.com/*",
+    "https://base.blockscout.com/*",
+    "https://base.drpc.org/*",
+    "https://base.llamarpc.com/*",
+    "https://binance.llamarpc.com/*",
+    "https://bsc-dataseed.bnbchain.org/*",
+    "https://bsc-dataseed1.defibit.io/*",
+    "https://bsc-rpc.publicnode.com/*",
+    "https://mainnet.base.org/*",
     "https://robinhoodchain.blockscout.com/*",
-    "https://rpc.testnet.arc.network/*",
-    "https://rpc.testnet.arc.io/*",
-    "https://testnet.arcscan.app/*",
     "https://rpc.arc-scan.org/*",
-    "https://*.workers.dev/*"
+    "https://rpc.mainnet.chain.robinhood.com/*",
+    "https://rpc.testnet.arc.io/*",
+    "https://rpc.testnet.arc.network/*",
+    "https://solana-rpc.publicnode.com/*",
+    "https://solana.drpc.org/*",
+    "https://testnet.arcscan.app/*"
   ],
   "action": {
     "default_popup": "popup.html",
@@ -40,7 +52,12 @@
         "https://gmgn.ai/*",
         "https://robinhoodchain.blockscout.com/*",
         "https://testnet.arcscan.app/*",
-        "https://dexscreener.com/*"
+        "https://dexscreener.com/*",
+        "https://basescan.org/*",
+        "https://base.blockscout.com/*",
+        "https://bscscan.com/*",
+        "https://solscan.io/*",
+        "https://solana.fm/*"
       ],
       "js": [
         "content.js"
