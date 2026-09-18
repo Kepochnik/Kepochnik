@@ -75,19 +75,39 @@ test("mcp: initialize, list, call, unknown method, notifications are silent", as
   assert.equal(await server.handle({ jsonrpc: "2.0", method: "notifications/initialized" }), null);
   const list = await server.handle({ jsonrpc: "2.0", id: 2, method: "tools/list" });
   const names = (list?.result as { tools: { name: string; annotations: { readOnlyHint: boolean } }[] }).tools;
-  assert.deepEqual(names.map((t) => t.name), ["bouncer_check", "bouncer_tax_now", "bouncer_crew", "bouncer_dev", "bouncer_receipt", "bouncer_exit", "bouncer_plan", "bouncer_board"]);
+  assert.deepEqual(names.map((t) => t.name), ["bouncer_check", "bouncer_tax_now", "bouncer_crew", "bouncer_dev", "bouncer_receipt", "bouncer_exit", "bouncer_wallet", "bouncer_plan", "bouncer_board"]);
   assert.ok(names.every((t) => t.annotations.readOnlyHint));
   const call = await server.handle({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "bouncer_check", arguments: { address: DEMO.tokens.fresh.token } } });
   const result = call?.result as { content: { type: string; text: string }[]; structuredContent: { stamp: string; notes: unknown[] }; isError: boolean };
   assert.equal(result.isError, false);
   assert.equal(result.structuredContent.stamp, "ON THE LIST");
   assert.match(result.content[0].text, /Cover charge/);
+  // An address with no launch and no pool behind it is a question with an
+  // answer — "nothing trades here" — not an error to hand back to an agent.
   const bad = await server.handle({ jsonrpc: "2.0", id: 4, method: "tools/call", params: { name: "bouncer_exit", arguments: { address: "0x000000000000000000000000000000000000dead" } } });
-  assert.equal((bad?.result as { isError: boolean }).isError, true);
+  const badResult = bad?.result as { isError: boolean; content: { text: string }[] };
+  assert.equal(badResult.isError, false);
+  assert.match(badResult.content[0].text, /venue: no pool found/);
   const unknown = await server.handle({ jsonrpc: "2.0", id: 5, method: "resources/list" });
   assert.equal(unknown?.error?.code, -32601);
   const board = await server.handle({ jsonrpc: "2.0", id: 6, method: "tools/call", params: { name: "bouncer_board", arguments: {} } });
   assert.match((board?.result as { content: { text: string }[] }).content[0].text, /launches 5/);
+
+  // The market tools answer for any token, so they must not be gated on a
+  // launchpad the way the launchpad tools are. A chain with none used to turn
+  // "what would this sell for" into "no launchpad runs here", which is not an
+  // answer to the question.
+  const text = (r: unknown) => (r as { content: { text: string }[] }).content[0].text;
+  // A server wired the way the real binary is: each chain gets its own factory,
+  // and a chain with no launchpad gets none.
+  const real = createMcpServer({ demo: true, rpcFor: () => demoRpc(), factoryFor: (c) => c.factory });
+  for (const name of ["bouncer_exit", "bouncer_wallet"]) {
+    const r = await real.handle({ jsonrpc: "2.0", id: 7, method: "tools/call", params: { name, arguments: { address: DEMO.tokens.fresh.token, wallet: DEMO.tokens.fresh.deployer, chain: "base" } } });
+    assert.doesNotMatch(text(r?.result), /no launchpad runs here/, `${name} refused a market question because the chain has no launchpad`);
+  }
+  // The launchpad tools still say exactly that, and name the one that answers.
+  const padOnly = await real.handle({ jsonrpc: "2.0", id: 8, method: "tools/call", params: { name: "bouncer_board", arguments: { chain: "base" } } });
+  assert.match(text(padOnly?.result), /no launchpad runs here[\s\S]*bouncer_check/);
 });
 
 test("mcp over stdio: one line in, one line out, parse errors answered", async () => {

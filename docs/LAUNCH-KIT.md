@@ -77,7 +77,7 @@ same slip, same rules, USDC at the door.
 ```
 your agent buys through Robinhood's rails? give it a bouncer first.
 read-only MCP server, 8 tools, no key, no signer:
-bouncer_check · bouncer_tax_now · bouncer_exit · bouncer_crew · bouncer_dev · bouncer_receipt · bouncer_plan · bouncer_board
+bouncer_check · bouncer_tax_now · bouncer_exit · bouncer_wallet · bouncer_crew · bouncer_dev · bouncer_receipt · bouncer_plan · bouncer_board
 ```
 
 ## 4. Чек-лист
