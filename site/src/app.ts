@@ -409,7 +409,7 @@ function summarySentence(slip: DoorSlip): string {
     return parts.map((x) => x.charAt(0).toUpperCase() + x.slice(1)).join(". ") + ".";
   }
   if (!slip.id.registered) return openDoorSentence(slip);
-  const parts: string[] = [`Real ${slip.chain.launchpad} launch`];
+  const parts: string[] = [`Real ${slip.chain.launchpad ?? "launchpad"} launch`];
   const c = slip.cover;
   if (c?.status === "open") parts.push(`the door tax is still on for ${c.secondsLeft} s (up to ${formatBps(c.terms.startBps)} of a buy goes to the creator)`);
   else if (c?.status === "closed") parts.push("the door tax has ended");
@@ -427,9 +427,9 @@ function openDoorSentence(slip: DoorSlip): string {
   if (t.code.delegatedTo) return `This is a wallet, not a token: its code is an EIP-7702 delegation its owner signed.`;
   const parts: string[] = [];
   const impostor = impostorOf(slip);
-  if (impostor) parts.push(`an older ${slip.chain.launchpad} launch is called ${slip.lookalikes!.query} and this is not it`);
+  if (impostor) parts.push(`an older ${slip.chain.launchpad ?? "launchpad"} launch is called ${slip.lookalikes!.query} and this is not it`);
   if (slip.known) parts.push(`this is ${slip.known.replace(/\.$/, "")}`);
-  else parts.push(`not a ${slip.chain.launchpad} launch, checked as an ordinary token`);
+  else parts.push(slip.chain.launchpad ? `not a ${slip.chain.launchpad} launch, checked as an ordinary token` : `checked as an ordinary token: no launchpad BOUNCER knows runs on ${slip.chain.name}`);
   if (t.proxyImplementation || t.code.minimalProxyTarget) parts.push("its code can be replaced (proxy)");
   if (t.code.opcodes.selfdestruct) parts.push("it can self-destruct");
   const o = slip.open;
@@ -528,8 +528,8 @@ function renderSlip(slip: DoorSlip): void {
     `<details class="sec" id="${id}"${open ? " open" : ""}><summary><h2>${title}</h2><span class="what">${what}</span><span class="chev">▶</span></summary><div class="body">${body}</div></details>`;
 
   const idBody = `<dl class="kv">
-    <dt>chain</dt><dd>${esc(slip.chain.name)} · ${esc(slip.chain.launchpad)}</dd>
-    <dt>factory record</dt><dd>${registered ? `<span class="flag ok">yes</span> ${v1 ? "the Pons V1 factory" : "the launchpad's own factory"} deployed this token${slip.id.resolvedAs === "curve" ? " (you pasted its curve)" : ""}` : `<span class="flag ${o ? "" : "bad"}">none</span> neither the ${esc(slip.chain.launchpad)} factory${slip.chain.key === "robinhood" ? " nor the Pons V1 factory" : ""} deployed this address${o ? "; checked as an ordinary token below" : ""}`}</dd>
+    <dt>chain</dt><dd>${esc(slip.chain.name)}${slip.chain.launchpad ? ` · ${esc(slip.chain.launchpad)}` : ""}</dd>
+    <dt>factory record</dt><dd>${registered ? `<span class="flag ok">yes</span> ${v1 ? "the Pons V1 factory" : "the launchpad's own factory"} deployed this token${slip.id.resolvedAs === "curve" ? " (you pasted its curve)" : ""}` : `<span class="flag ${o ? "" : "bad"}">none</span> ${slip.chain.launchpad ? `neither the ${esc(slip.chain.launchpad)} factory${slip.chain.key === "robinhood" ? " nor the Pons V1 factory" : ""} deployed this address` : `no launchpad BOUNCER knows runs on ${esc(slip.chain.name)}`}${o ? "; checked as an ordinary token below" : ""}`}</dd>
     <dt>token code</dt><dd>${t.code.empty ? "empty (no contract)" : `${t.code.bytes} bytes`}<br>${idFlags(t)}</dd>
     ${slip.id.curve ? `<dt>curve code</dt><dd>${slip.id.curve.code.bytes} bytes<br>${idFlags(slip.id.curve)}</dd>` : ""}
     ${v1 ? `<dt>launchpad</dt><dd>Pons V1</dd><dt>deployer</dt><dd><span class="mono">${esc(v1.record.deployer.toLowerCase())}</span></dd>` : ""}
@@ -980,7 +980,7 @@ function boot(): void {
   chainSelect.addEventListener("change", () => {
     storage("bouncer.chain", chainSelect.value);
     const c = chainByKey(chainSelect.value);
-    $("chain-hint").textContent = `${c.name} (${c.chainId}) · ${c.launchpad} · RPC ${c.rpc[0]}${c.blockscout ? ` · explorer ${c.blockscout}` : " · no explorer known, the funder check and same-name search are off"}${c.notes ? ` · ${c.notes}` : ""}`;
+    $("chain-hint").textContent = `${c.name}${c.chainId ? ` (${c.chainId})` : ""}${c.launchpad ? ` · ${c.launchpad}` : " · no launchpad known here"} · RPC ${c.rpc[0]}${c.blockscout ? ` · explorer ${c.blockscout}` : " · no explorer known, the funder check and same-name search are off"}${c.notes ? ` · ${c.notes}` : ""}`;
     if (mode === "live") setMode("live", true);
     renderChips();
   });

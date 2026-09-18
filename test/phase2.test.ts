@@ -23,7 +23,31 @@ test("chains: keys, ids, Arc has USDC as the native quote", () => {
   assert.equal(chainByKey("ARC").native.symbol, "USDC");
   assert.equal(CHAINS.arc.factory, null);
   assert.equal(chainById(5042002)?.name, "Arc Testnet");
-  assert.throws(() => chainByKey("solana"), /unknown chain/);
+  assert.throws(() => chainByKey("nosuchchain"), /unknown chain/);
+});
+
+test("the chain table is coherent: every chain can be read, every dex points at the right wrapper", () => {
+  for (const [key, c] of Object.entries(CHAINS)) {
+    assert.equal(c.key, key, `${key}: the key and the record must agree`);
+    assert.ok(c.rpc.length > 0, `${key}: no RPC`);
+    assert.ok(c.family === "evm" || c.family === "solana", `${key}: unknown family`);
+    if (c.family === "evm") assert.ok(c.chainId > 0, `${key}: an EVM chain needs a chain id`);
+    if (c.factory) assert.match(c.factory, /^0x[0-9a-f]{40}$/, `${key}: factory must be lower-cased hex`);
+    if (c.dex) {
+      assert.match(c.dex.weth, /^0x[0-9a-f]{40}$/, `${key}: the wrapped native address must be lower-cased hex`);
+      assert.ok(c.dex.wethSymbol.length > 0, `${key}: the wrapper needs a symbol to print`);
+      for (const f of [...(c.dex.v3Factories ?? []), ...(c.dex.v2Factories ?? []), ...(c.dex.solidlyFactories ?? [])]) {
+        assert.match(f.address, /^0x[0-9a-f]{40}$/, `${key}: ${f.name} must be lower-cased hex`);
+      }
+    }
+    // A chain with no launchpad must not be missing the thing that replaces it.
+    if (!c.launchpad && c.family === "evm") assert.ok(c.dex, `${key}: no launchpad and no dex table leaves nothing to read`);
+  }
+  assert.equal(CHAINS.base.chainId, 8453);
+  assert.equal(CHAINS.bnb.native.symbol, "BNB");
+  assert.equal(CHAINS.solana.family, "solana");
+  // PancakeSwap's middle tier is 0.25%, not Uniswap's 0.3%: asking the wrong one finds no pool.
+  assert.deepEqual(CHAINS.bnb.dex?.v3Factories?.[0].feeTiers, [100, 500, 2_500, 10_000]);
 });
 
 test("a chain without a published factory still checks the token, and says which question it could not ask", async () => {

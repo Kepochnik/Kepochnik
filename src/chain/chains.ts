@@ -1,39 +1,87 @@
 /**
- * The chains BOUNCER knows. Pons V2 was written to be deployed on more than
- * one chain ("any chain this deploys to", in the factory's own comments);
- * Radian is a faithful port of it on Circle's Arc, quoted in native USDC.
- * Everything chain-specific lives here: id, RPC, explorer, the factory, and
- * what the native quote asset is called. The read path is the same.
+ * The chains BOUNCER knows.
+ *
+ * Two things vary and both live here. The first is the launchpad: Pons V2 was
+ * written to be deployed on more than one chain, Radian is a faithful port of
+ * it on Circle's Arc, and most chains have no launchpad BOUNCER knows at all.
+ * Where there is one, its factory record is the genuineness test; where there
+ * is none, every token is simply an ordinary token and is checked as one.
+ *
+ * The second is the family. An EVM chain is read with eth_call and eth_getLogs
+ * against bytecode; Solana is read with getAccountInfo against account layouts,
+ * where the questions that matter (can they mint more, can they freeze you) are
+ * explicit fields rather than things inferred from a dispatcher. The two read
+ * paths are separate on purpose, and `family` is what picks between them.
  */
+
+/** How this chain is read. */
+export type ChainFamily = "evm" | "solana";
+
+/** A Uniswap V3-style factory: getPool(tokenA, tokenB, fee). Fee tiers differ per deployment. */
+export interface V3Factory {
+  name: string;
+  address: string;
+  /** Fee tiers to ask for, in hundredths of a basis point. PancakeSwap uses 2500 where Uniswap uses 3000. */
+  feeTiers?: number[];
+}
+
+/** A Uniswap V2-style factory: getPair(tokenA, tokenB). Most memecoin liquidity outside Robinhood Chain still lives here. */
+export interface V2Factory {
+  name: string;
+  address: string;
+}
+
+/** A Solidly-style factory (Aerodrome, Velodrome, Thena): getPool(tokenA, tokenB, stable). */
+export interface SolidlyFactory {
+  name: string;
+  address: string;
+}
+
+export interface DexTable {
+  /** The wrapped native token every pool is looked up against. */
+  weth: string;
+  /** What to call it in a sentence: WETH, WBNB. */
+  wethSymbol: string;
+  v3Factories?: V3Factory[];
+  v2Factories?: V2Factory[];
+  solidlyFactories?: SolidlyFactory[];
+}
+
 export interface ChainConfig {
-  /** Short key used on the CLI (`--chain arc`) and in site links. */
+  /** Short key used on the CLI (`--chain base`) and in site links. */
   key: string;
   name: string;
+  family: ChainFamily;
+  /** EVM chain id, checked against the endpoint before any read. 0 on non-EVM chains. */
   chainId: number;
   rpc: string[];
-  /** Blockscout instance base URL (used for links and the funding-source read), or null. */
+  /** Blockscout instance base URL (used for links, holders, the funding-source read), or null. */
   blockscout: string | null;
-  /** Launchpad factory (PonsV2LaunchFactory or its port), lower-cased, or null when not published yet. */
+  /** An explorer for links only, when there is no machine-readable one. */
+  explorerUrl?: string;
+  /** Launchpad factory (PonsV2LaunchFactory or its port), lower-cased, or null when this chain has none. */
   factory: string | null;
   /** The older Pons V1 factory on this chain, when there is one; V1 tokens are read from it so they are not called impostors. */
   factoryV1?: string;
   /** Earlier V1 factory deployments (same read surface); a token that names one of them as its launchFactory() is read from it. */
   olderFactoriesV1?: string[];
-  launchpad: string;
+  /** The launchpad's name, or null when BOUNCER knows no launchpad here. */
+  launchpad: string | null;
   native: { symbol: string; decimals: number };
   /** Roughly how many blocks per second, for "the last N hours" estimates before pinning to headers. */
   blocksPerSecond: number;
   notes?: string;
   /** Well-known contracts that are not launchpad tokens, so the door can say what they are instead of just "not on the list". */
   known?: Record<string, string>;
-  /** Where ordinary tokens trade on this chain: Uniswap V3-style factories to ask for pools, and the wrapped native token they pair with. */
-  dex?: { weth: string; v3Factories: { name: string; address: string }[] };
+  /** Where ordinary tokens trade on this chain. */
+  dex?: DexTable;
 }
 
 export const CHAINS: Record<string, ChainConfig> = {
   robinhood: {
     key: "robinhood",
     name: "Robinhood Chain",
+    family: "evm",
     chainId: 4663,
     rpc: ["https://rpc.mainnet.chain.robinhood.com"],
     blockscout: "https://robinhoodchain.blockscout.com",
@@ -50,12 +98,71 @@ export const CHAINS: Record<string, ChainConfig> = {
     },
     dex: {
       weth: "0x0Bd7D308f8E1639FAb988df18A8011f41EAcAD73".toLowerCase(),
+      wethSymbol: "WETH",
       v3Factories: [{ name: "Uniswap V3", address: "0x1f7d7550B1b028f7571E69A784071F0205FD2EfA".toLowerCase() }],
     },
+  },
+  base: {
+    key: "base",
+    name: "Base",
+    family: "evm",
+    chainId: 8453,
+    rpc: ["https://mainnet.base.org", "https://base.llamarpc.com"],
+    blockscout: "https://base.blockscout.com",
+    factory: null,
+    launchpad: null,
+    native: { symbol: "ETH", decimals: 18 },
+    blocksPerSecond: 0.5,
+    notes: "No launchpad BOUNCER knows runs here, so every address is checked as an ordinary token: who can change its rules, whether a holder can sell right now, who holds it, where it trades.",
+    dex: {
+      weth: "0x4200000000000000000000000000000000000006",
+      wethSymbol: "WETH",
+      v3Factories: [{ name: "Uniswap V3", address: "0x33128a8fC17869897dcE68Ed026d694621f6FDfD".toLowerCase() }],
+      v2Factories: [{ name: "Uniswap V2", address: "0x8909Dc15e40173Ff4699343b6eB8132c65e18eC6".toLowerCase() }],
+      solidlyFactories: [{ name: "Aerodrome", address: "0x420DD381b31aEf6683db6B902084cB0FFECe40Da".toLowerCase() }],
+    },
+  },
+  bnb: {
+    key: "bnb",
+    name: "BNB Chain",
+    family: "evm",
+    chainId: 56,
+    rpc: ["https://bsc-dataseed.bnbchain.org", "https://bsc-dataseed1.defibit.io", "https://bsc-dataseed1.ninicoin.io"],
+    blockscout: null,
+    explorerUrl: "https://bscscan.com",
+    factory: null,
+    launchpad: null,
+    native: { symbol: "BNB", decimals: 18 },
+    blocksPerSecond: 1.33,
+    notes: "No launchpad BOUNCER knows runs here, and BNB Chain has no public Blockscout, so holders, the deployer and the price feed are not read. Everything the chain itself answers still is: the code's switches, the owner, whether a holder can sell into the pool, and the pools themselves.",
+    dex: {
+      weth: "0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c".toLowerCase(),
+      wethSymbol: "WBNB",
+      v3Factories: [
+        { name: "PancakeSwap V3", address: "0x0BFbCF9fa4f9C56B0F40a671Ad40E0805A091865".toLowerCase(), feeTiers: [100, 500, 2_500, 10_000] },
+        { name: "Uniswap V3", address: "0xdB1d10011AD0Ff90774D0C6Bb92e5C5c8b4461F7".toLowerCase() },
+      ],
+      v2Factories: [{ name: "PancakeSwap V2", address: "0xcA143Ce32Fe78f1f7019d7d551a6402fC5350c73".toLowerCase() }],
+    },
+  },
+  solana: {
+    key: "solana",
+    name: "Solana",
+    family: "solana",
+    chainId: 0,
+    rpc: ["https://api.mainnet-beta.solana.com"],
+    blockscout: null,
+    explorerUrl: "https://solscan.io",
+    factory: null,
+    launchpad: null,
+    native: { symbol: "SOL", decimals: 9 },
+    blocksPerSecond: 2.5,
+    notes: "Read as SPL: the mint account says outright whether anyone can print more tokens or freeze yours, and Token-2022 extensions say whether a transfer costs a fee, runs someone's code, or can be reversed by a permanent delegate. Pools and prices are not read here yet.",
   },
   "arc-testnet": {
     key: "arc-testnet",
     name: "Arc Testnet",
+    family: "evm",
     chainId: 5042002,
     rpc: ["https://rpc.testnet.arc.network", "https://rpc.testnet.arc.io"],
     blockscout: "https://testnet.arcscan.app",
@@ -68,6 +175,7 @@ export const CHAINS: Record<string, ChainConfig> = {
   arc: {
     key: "arc",
     name: "Arc",
+    family: "evm",
     chainId: 5042,
     rpc: ["https://rpc.arc-scan.org"],
     blockscout: null,
@@ -75,11 +183,14 @@ export const CHAINS: Record<string, ChainConfig> = {
     launchpad: "Radian (Pons V2 port)",
     native: { symbol: "USDC", decimals: 18 },
     blocksPerSecond: 1,
-    notes: "Mainnet opens 2026-09-16. The Radian mainnet factory is not published yet: pass --factory 0x… (CLI) or set it in the site's live settings once it is.",
+    notes: "The Radian mainnet factory is not published yet: pass --factory 0x… (CLI) or set it in the site's live settings once it is. Every check that needs no factory runs regardless.",
   },
 };
 
 export const DEFAULT_CHAIN = CHAINS.robinhood;
+
+/** Uniswap's standard fee tiers, used by any V3 factory that does not name its own. */
+export const DEFAULT_V3_FEE_TIERS = [100, 500, 3_000, 10_000];
 
 export function chainByKey(key: string | undefined): ChainConfig {
   if (!key) return DEFAULT_CHAIN;
@@ -89,10 +200,12 @@ export function chainByKey(key: string | undefined): ChainConfig {
 }
 
 export function chainById(chainId: number): ChainConfig | undefined {
-  return Object.values(CHAINS).find((c) => c.chainId === chainId);
+  return Object.values(CHAINS).find((c) => c.family === "evm" && c.chainId === chainId);
 }
 
 /** Explorer link for an address on this chain, or null when the chain has no known explorer. */
 export function explorerAddress(chain: ChainConfig, address: string): string | null {
-  return chain.blockscout ? `${chain.blockscout}/address/${address}` : null;
+  if (chain.blockscout) return `${chain.blockscout}/address/${address}`;
+  if (chain.explorerUrl) return chain.family === "solana" ? `${chain.explorerUrl}/token/${address}` : `${chain.explorerUrl}/address/${address}`;
+  return null;
 }
