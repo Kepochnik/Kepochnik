@@ -15,12 +15,13 @@ import { RpcClient } from "../../src/chain/rpc.js";
 import { findBlockByTimestamp } from "../../src/chain/tape.js";
 import { doorCard } from "../../src/bouncer/card.js";
 import { coverChargeLine } from "../../src/bouncer/coverCharge.js";
-import { DEMO, DEMO_BLOCKSCOUT, DEMO_IMPOSTOR, DEMO_V1, demoBlockscoutFetch, demoRpc } from "../../src/bouncer/demo.js";
+import { DEMO, DEMO_BLOCKSCOUT, DEMO_IMPOSTOR, DEMO_PLAIN, DEMO_V1, demoBlockscoutFetch, demoRpc } from "../../src/bouncer/demo.js";
 import { devReportLine, readDevReport, type DevReport } from "../../src/bouncer/devReport.js";
 import { findLaunchBlock, readDoor, slipJson, type DoorSlip } from "../../src/bouncer/door.js";
-import { lookalikeLine } from "../../src/bouncer/lookalike.js";
+import { lookalikeLine, registeredLookalikes } from "../../src/bouncer/lookalike.js";
 import { MASCOT_SVG_INNER } from "../../src/bouncer/mascot.js";
 import { oneCrewLine } from "../../src/bouncer/oneCrew.js";
+import { POWER_MEANING, powerKinds } from "../../src/bouncer/openDoor.js";
 import { readLaunchPlan, type LaunchPlan } from "../../src/bouncer/planner.js";
 import { readPosition, type Position } from "../../src/bouncer/position.js";
 import { roomLine } from "../../src/bouncer/room.js";
@@ -147,6 +148,7 @@ const EXAMPLES: { label: string; hint: string; hash: string }[] = [
   { label: "A fresh launch", hint: "9 s old, door tax still open", hash: `#/demo/${DEMO.tokens.fresh.token}` },
   { label: "A graduated token", hint: "filled its curve in 212 s", hash: `#/demo/${DEMO.tokens.sprint.token}` },
   { label: "A fake copy", hint: "same name, not from the factory", hash: `#/demo/${DEMO_IMPOSTOR.token}` },
+  { label: "An ordinary token", hint: "not a launch: owner keeps mint, pause, blacklist", hash: `#/demo/${DEMO_PLAIN.token}` },
   { label: "A dev on the move", hint: "sold and moved tokens, watch on", hash: `#/demo/${DEMO.tokens.late.token}?watch=1` },
   { label: "A trade receipt", hint: "one buy, itemised", hash: `#/tx/0xdemoFRESH${DEMO.tokens.fresh.launched + 22}?chain=demo` },
   { label: "A Pons V1 token", hint: "the older launchpad, caps still on", hash: `#/demo/${DEMO_V1.token}` },
@@ -212,7 +214,7 @@ function done(text: string): void {
 /** Addresses the demo chain knows; anything else is a real address and needs a real chain. */
 function isDemoAddress(address: string): boolean {
   const a = address.toLowerCase();
-  return Object.values(DEMO.tokens).some((t) => t.token === a || t.curve === a || t.deployer === a) || a === DEMO_IMPOSTOR.token || a === DEMO_V1.token || a === DEMO_V1.deployer || a === "0x000000000000000000000000000000000000dead";
+  return Object.values(DEMO.tokens).some((t) => t.token === a || t.curve === a || t.deployer === a) || a === DEMO_IMPOSTOR.token || a === DEMO_PLAIN.token || a === DEMO_V1.token || a === DEMO_V1.deployer || a === "0x000000000000000000000000000000000000dead";
 }
 
 async function runDoor(address: string): Promise<void> {
@@ -406,17 +408,7 @@ function summarySentence(slip: DoorSlip): string {
     parts.push(v.status.graduated ? "graduated" : `${formatUnits(v.status.pairedPrincipal, v.quote.decimals)} of ${formatUnits(v.status.threshold, v.quote.decimals)} ${v.quote.symbol} towards graduation`);
     return parts.map((x) => x.charAt(0).toUpperCase() + x.slice(1)).join(". ") + ".";
   }
-  if (!slip.id.registered) {
-    const t = slip.id.token;
-    if (slip.known) return `This is ${slip.known} Nothing here needs a bouncer.`;
-    if (t.code.empty) return `There is no contract at this address on ${slip.chain.name}.`;
-    const flags: string[] = [];
-    if (t.proxyImplementation || t.code.minimalProxyTarget) flags.push("its code can be swapped (proxy)");
-    if (t.code.opcodes.selfdestruct) flags.push("it can self-destruct");
-    if (t.code.opcodes.delegatecall) flags.push("it delegates calls");
-    const named = slip.id.meta ? `${slip.id.meta.name} (${slip.id.meta.symbol})` : "this contract";
-    return `Not a launchpad token: neither Pons factory deployed ${named}${flags.length ? `, and ${flags.join(", ")}` : ""}. It may be an ordinary token on ${slip.chain.name} or something launched elsewhere; the door check covers launchpad launches only.`;
-  }
+  if (!slip.id.registered) return openDoorSentence(slip);
   const parts: string[] = [`Real ${slip.chain.launchpad} launch`];
   const c = slip.cover;
   if (c?.status === "open") parts.push(`the door tax is still on for ${c.secondsLeft} s (up to ${formatBps(c.terms.startBps)} of a buy goes to the creator)`);
@@ -429,12 +421,43 @@ function summarySentence(slip: DoorSlip): string {
   return parts.map((x) => x.charAt(0).toUpperCase() + x.slice(1)).join(". ") + ".";
 }
 
+function openDoorSentence(slip: DoorSlip): string {
+  const t = slip.id.token;
+  if (t.code.empty) return `There is no contract at this address on ${slip.chain.name}.`;
+  const parts: string[] = [];
+  const real = slip.lookalikes ? registeredLookalikes(slip.lookalikes) : [];
+  if (real.length) parts.push(`a real ${slip.chain.launchpad} launch is called ${slip.lookalikes!.query} and this is not it`);
+  if (slip.known) parts.push(`this is ${slip.known.replace(/\.$/, "")}`);
+  else parts.push(`not a ${slip.chain.launchpad} launch, checked as an ordinary token`);
+  if (t.proxyImplementation || t.code.minimalProxyTarget) parts.push("its code can be replaced (proxy)");
+  if (t.code.opcodes.selfdestruct) parts.push("it can self-destruct");
+  const o = slip.open;
+  if (o) {
+    const kinds = powerKinds(o).filter((k) => k !== "exempt" && k !== "sweep");
+    if (o.paused) parts.push("transfers are paused right now");
+    if (o.tradingOpen && !o.tradingOpen.open) parts.push("trading is switched off");
+    if (kinds.length && o.owner && !o.owner.renounced) parts.push(`the owner can still ${kinds.join(", ")}`);
+    else if (kinds.length && o.owner?.renounced) parts.push(`ownership renounced, so its ${kinds.join(", ")} functions have no owner left`);
+    else if (o.owner?.renounced) parts.push("ownership renounced, no special powers seen");
+    else if (kinds.length) parts.push(`the code can ${kinds.join(", ")} and has no owner() to tell who may`);
+    else if (o.owner) parts.push("has an owner but no mint, pause, blacklist or fee switch was seen");
+    if (o.probes.length) {
+      const failed = o.probes.filter((p) => !p.ok).length;
+      parts.push(failed === o.probes.length ? "the largest wallets cannot transfer right now" : failed ? `${failed} of the ${o.probes.length} largest wallets cannot transfer` : "transfers work");
+    }
+    if (o.holders) parts.push(`the 10 largest wallets hold ${(o.holders.top10WalletsBps / 100).toFixed(0)}%`);
+    if (o.deployer?.createdAt) parts.push(`deployed ${formatDuration(Math.max(0, slip.at.timestamp - o.deployer.createdAt))} ago`);
+  }
+  return parts.map((x) => x.charAt(0).toUpperCase() + x.slice(1)).join(". ") + ".";
+}
+
 function renderSlip(slip: DoorSlip): void {
   const meta = slip.id.meta;
   const c0 = chain();
   const explorer = c0.blockscout ? `${c0.blockscout}/address/${slip.subject}` : null;
   const sym = meta ? esc(meta.symbol) : shortAddress(slip.subject);
   const name = meta ? esc(meta.name) : slip.known ? "known contract, not a launch" : slip.id.token.code.empty ? "no contract at this address" : "contract without a name";
+  const o = slip.open;
   const qd = slip.rules?.quote ?? slip.chain.native;
   const amt = (v: bigint) => `${formatUnits(v, qd.decimals)} ${esc(qd.symbol)}`;
   const c = slip.cover;
@@ -463,6 +486,8 @@ function renderSlip(slip: DoorSlip): void {
         <div class="tile"><div class="l">${room && room.buys > 0 ? "Creator funded" : "Curve full"}</div><div class="v ${room && room.devShareBps >= 5_000 ? "bad" : ""}">${room && room.buys > 0 ? `${(room.devShareBps / 100).toFixed(0)}%` : r?.fill ? `${(r.fill.bps / 100).toFixed(0)}%` : "—"}</div><div class="s">${room && room.buys > 0 ? `of all buys · ${room.buyers} buyers` : r?.fill ? "of the way to graduation" : ""}</div></div>
         <div class="tile"><div class="l">This dev before</div><div class="v ${d && d.counts.launched >= 5 && d.counts.graduated === 0 ? "bad" : ""}">${d ? `${d.counts.launched}` : "—"}</div><div class="s">${d ? `launch${d.counts.launched === 1 ? "" : "es"} in ${mode === "demo" ? "8" : "24"} h · ${d.counts.graduated} graduated` : ""}</div></div>
       </div>`
+    : o
+    ? openDoorTiles(slip)
     : "";
 
   const notes = slip.notes.map((n) => `<div class="note"><span class="lvl ${n.level}">${LEVEL_WORD[n.level as Level]}</span><span>${esc(n.text)}</span></div>`).join("");
@@ -484,7 +509,7 @@ function renderSlip(slip: DoorSlip): void {
 
   const idBody = `<dl class="kv">
     <dt>chain</dt><dd>${esc(slip.chain.name)} · ${esc(slip.chain.launchpad)}</dd>
-    <dt>factory record</dt><dd>${registered ? `<span class="flag ok">yes</span> ${v1 ? "the Pons V1 factory" : "the launchpad's own factory"} deployed this token${slip.id.resolvedAs === "curve" ? " (you pasted its curve)" : ""}` : `<span class="flag bad">none</span> neither the ${esc(slip.chain.launchpad)} factory${slip.chain.key === "robinhood" ? " nor the Pons V1 factory" : ""} has seen this address`}</dd>
+    <dt>factory record</dt><dd>${registered ? `<span class="flag ok">yes</span> ${v1 ? "the Pons V1 factory" : "the launchpad's own factory"} deployed this token${slip.id.resolvedAs === "curve" ? " (you pasted its curve)" : ""}` : `<span class="flag ${o ? "" : "bad"}">none</span> neither the ${esc(slip.chain.launchpad)} factory${slip.chain.key === "robinhood" ? " nor the Pons V1 factory" : ""} deployed this address${o ? "; checked as an ordinary token below" : ""}`}</dd>
     <dt>token code</dt><dd>${t.code.empty ? "empty (no contract)" : `${t.code.bytes} bytes`}<br>${idFlags(t)}</dd>
     ${slip.id.curve ? `<dt>curve code</dt><dd>${slip.id.curve.code.bytes} bytes<br>${idFlags(slip.id.curve)}</dd>` : ""}
     ${v1 ? `<dt>launchpad</dt><dd>Pons V1</dd><dt>deployer</dt><dd><span class="mono">${esc(v1.record.deployer.toLowerCase())}</span></dd>` : ""}
@@ -541,7 +566,7 @@ function renderSlip(slip: DoorSlip): void {
     <div class="summary">
       <div class="top">
         <div class="who"><div class="sym">${sym}</div><div class="name">${name}</div><div class="addr">${esc(slip.subject)}</div><div class="at">${mode === "demo" ? "DEMO · " : ""}${esc(slip.chain.name)} · block ${slip.at.block} · ${isoUtc(slip.at.timestamp)}</div></div>
-        <div class="stamp ${slip.stamp === "ON THE LIST" ? "" : "no"}">${slip.known ? "NOT A LAUNCH" : slip.stamp}</div>
+        <div class="stamp ${slip.stamp === "ON THE LIST" ? "" : slip.stamp === "NOT A LAUNCH" ? "mid" : "no"}">${slip.stamp}</div>
       </div>
       <p class="lead">${esc(summarySentence(slip))}</p>
       ${tiles}
@@ -552,9 +577,12 @@ function renderSlip(slip: DoorSlip): void {
       </div>
     </div>
     <div class="card-wrap" id="card"></div>
-    <div class="notes"><h2>What to know</h2>${notes || `<div class="note"><span class="lvl info">Note</span><span>Nothing stands out. The factory made this token and none of its terms needs a second look.</span></div>`}</div>
+    <div class="notes"><h2>What to know</h2>${notes || `<div class="note"><span class="lvl info">Note</span><span>Nothing stands out. ${registered ? "The factory made this token and none of its terms needs a second look." : "Nothing in the code or the holder list needs a second look."}</span></div>`}</div>
     <div class="stack">
-      ${section("s-id", "Is it real?", "Did the launchpad's factory deploy this token, and can its code change later?", idBody, true)}
+      ${section("s-id", "Is it real?", "Did the launchpad's factory deploy this token, and can its code change later?", idBody, !o)}
+      ${o ? section("s-control", "Who controls it", "Which switches the code has (mint, pause, blacklist, fees), who holds the keys, and whether holders can move tokens right now.", controlBody(slip), true) : ""}
+      ${o && (o.pools || o.explorer) ? section("s-trades", "Where it trades", "Pools on the chain's DEX factories and what they hold, plus the explorer's price feed.", tradesBody(slip), true) : ""}
+      ${o && (o.holders || o.deployer || o.activity) ? section("s-holders", "Who holds it", "The largest wallets, the deployer's share, what sits in pools and contracts, and when it last moved.", holdersBody(slip), true) : ""}
       ${registered && !v1 ? section("s-cover", "Door tax", `The anti-snipe tax in the first ${c?.terms.seconds ?? 15} seconds, and who paid it.`, coverBody, c?.status === "open") : ""}
       ${r ? section("s-rules", "Fees and rules", "What every trade costs, where the creator's cut goes, what buyback really does.", rulesBody, false) : ""}
       ${v1 ? section("s-v1", "Rules (Pons V1)", "How this older kind of launch works: pool from block one, launch caps, locked liquidity.", `<ol class="rules">${v1.rules.map((x) => `<li>${esc(x)}</li>`).join("")}</ol>`, true) : ""}
@@ -615,6 +643,75 @@ function renderSlip(slip: DoorSlip): void {
       }
     }, 1000);
   }
+}
+
+function openDoorTiles(slip: DoorSlip): string {
+  const o = slip.open!;
+  const kinds = powerKinds(o).filter((k) => k !== "exempt" && k !== "sweep");
+  const failed = o.probes.filter((p) => !p.ok).length;
+  const ownerV = o.owner === null ? "NONE" : o.owner.renounced ? "GONE" : "KEYS";
+  const ownerS = o.owner === null ? "no owner() function" : o.owner.renounced ? "ownership renounced" : `owner ${shortAddress(o.owner.address)}${o.owner.isContract ? " (contract)" : ""}`;
+  const moveV = o.paused ? "PAUSED" : o.tradingOpen && !o.tradingOpen.open ? "CLOSED" : o.probes.length ? (failed === o.probes.length ? "NO" : failed ? `${o.probes.length - failed}/${o.probes.length}` : "YES") : "—";
+  const moveS = o.paused ? "paused() is true" : o.tradingOpen && !o.tradingOpen.open ? `${o.tradingOpen.view} is false` : o.probes.length ? `of the ${o.probes.length} largest wallets can transfer now` : "no holder to simulate from";
+  const moveBad = o.paused || (o.tradingOpen && !o.tradingOpen.open) || (o.probes.length > 0 && failed === o.probes.length);
+  const h = o.holders;
+  return `<div class="tiles">
+    <div class="tile"><div class="l">Owner</div><div class="v ${o.owner && !o.owner.renounced && kinds.length ? "bad" : ""}">${ownerV}</div><div class="s">${esc(ownerS)}</div></div>
+    <div class="tile"><div class="l">Can still</div><div class="v ${kinds.length ? "bad" : ""}">${kinds.length ? kinds.length : "0"}</div><div class="s">${kinds.length ? esc(kinds.join(", ")) : "no mint, pause, blacklist, fee or trading switch seen"}</div></div>
+    <div class="tile"><div class="l">Can holders sell?</div><div class="v ${moveBad ? "bad" : ""}">${moveV}</div><div class="s">${esc(moveS)}</div></div>
+    <div class="tile"><div class="l">Top 10 wallets</div><div class="v ${h && h.top10WalletsBps >= 5_000 ? "bad" : ""}">${h ? `${(h.top10WalletsBps / 100).toFixed(0)}%` : "—"}</div><div class="s">${h ? `of supply · ${h.count ?? "?"} holders` : "explorer not reachable"}</div></div>
+  </div>`;
+}
+
+function controlBody(slip: DoorSlip): string {
+  const o = slip.open!;
+  const pct = (b: number) => `${(b / 100).toFixed(1)}%`;
+  const powers = o.powers.length
+    ? `<div class="tbl"><table class="buys"><thead><tr><th>function in the code</th><th>lets its caller</th></tr></thead><tbody>${o.powers.map((p) => `<tr><td><span class="mono">${esc(p.signature)}</span></td><td>${esc(POWER_MEANING[p.kind])}</td></tr>`).join("")}</tbody></table></div>`
+    : `<p style="color:var(--muted);font-size:13px;margin:8px 0 0">No mint, pause, blacklist, fee, limit, trading or upgrade function was seen among the ${o.selectors} functions in the code.</p>`;
+  const probes = o.probes.length
+    ? `<div class="tbl"><table class="buys"><thead><tr><th>transfer from</th><th>result</th></tr></thead><tbody>${o.probes.map((p) => `<tr><td><span class="mono">${shortAddress(p.from)}</span></td><td>${p.ok ? '<span class="flag ok">works</span>' : `<span class="flag bad">reverts</span> ${p.reason ? esc(p.reason) : ""}`}</td></tr>`).join("")}</tbody></table></div><p style="color:var(--dim);font-size:12px;margin:6px 0 0">Simulated on the chain with eth_call from the largest plain wallets holding it; nothing was sent.</p>`
+    : "";
+  return `<dl class="kv">
+    <dt>owner</dt><dd>${o.owner === null ? "no owner() function in the code" : o.owner.renounced ? '<span class="flag ok">renounced</span> nobody can call owner-only functions' : `<span class="mono">${esc(o.owner.address)}</span>${o.owner.isContract ? " (a contract)" : ""}${o.ownerBalance ? ` · holds ${pct(o.ownerBalance.bps)}` : ""}${o.ownable ? "" : " · no renounceOwnership()"}`}</dd>
+    ${o.paused !== null ? `<dt>paused</dt><dd>${o.paused ? '<span class="flag bad">yes</span>' : '<span class="flag ok">no</span>'}</dd>` : ""}
+    ${o.tradingOpen ? `<dt>${esc(o.tradingOpen.view)}</dt><dd>${o.tradingOpen.open ? '<span class="flag ok">true</span> trading is open' : '<span class="flag bad">false</span> trading is switched off'}</dd>` : ""}
+    <dt>source</dt><dd>${o.verified === null ? "explorer not reachable" : o.verified ? '<span class="flag ok">verified</span> the code can be read on the explorer' : '<span class="flag bad">not verified</span> only the bytes can be read'}</dd>
+    <dt>read from</dt><dd>${o.surfaceFrom === "implementation" ? "the proxy's current implementation" : "the token's own bytecode"} · ${o.selectors} functions</dd>
+  </dl>${powers}${probes}`;
+}
+
+function tradesBody(slip: DoorSlip): string {
+  const o = slip.open!;
+  const q = slip.chain.native;
+  const dec = slip.id.meta?.decimals ?? 18;
+  const explorer = chain().blockscout;
+  const usd = (v: number) => (v >= 1e9 ? `$${(v / 1e9).toFixed(2)}B` : v >= 1e6 ? `$${(v / 1e6).toFixed(1)}M` : v >= 1e3 ? `$${(v / 1e3).toFixed(0)}K` : `$${v.toFixed(0)}`);
+  const pools = o.pools
+    ? o.pools.length
+      ? `<div class="tbl"><table class="buys"><thead><tr><th>pool</th><th>fee</th><th>W${esc(q.symbol)} inside</th><th>tokens inside</th></tr></thead><tbody>${o.pools.map((p) => `<tr><td>${explorer && mode !== "demo" ? `<a href="${explorer}/address/${p.address}" target="_blank" rel="noopener">${esc(p.dex)} · ${shortAddress(p.address)}</a>` : `${esc(p.dex)} · ${shortAddress(p.address)}`}</td><td>${p.feeBps.toFixed(2)}%</td><td>${formatUnits(p.quoteReserve, q.decimals, 3)}</td><td>${formatUnits(p.tokenReserve, dec, 0)}</td></tr>`).join("")}</tbody></table></div><p style="color:var(--dim);font-size:12px;margin:6px 0 0">Reserves are the pool's balances at this block. Whether the liquidity is locked is not read here.</p>`
+      : `<p style="color:var(--muted);font-size:13px;margin:0">No W${esc(q.symbol)} pool on the chain's known DEX factories. It may trade on another DEX, against another pair, or not at all.</p>`
+    : "";
+  const feed = o.explorer && o.explorer.priceUsd !== null
+    ? `<dl class="kv"><dt>explorer price</dt><dd>$${o.explorer.priceUsd < 0.01 ? o.explorer.priceUsd.toPrecision(3) : o.explorer.priceUsd.toFixed(o.explorer.priceUsd < 1 ? 4 : 2)}${o.explorer.volume24hUsd !== null ? ` · ${usd(o.explorer.volume24hUsd)} in 24 h` : ""}${o.explorer.marketCapUsd !== null ? ` · ${usd(o.explorer.marketCapUsd)} market cap` : ""} <small style="color:var(--dim)">the explorer's feed, not the chain's</small></dd></dl>`
+    : "";
+  return `${feed}${pools}`;
+}
+
+function holdersBody(slip: DoorSlip): string {
+  const o = slip.open!;
+  const h = o.holders;
+  const pct = (b: number) => `${(b / 100).toFixed(1)}%`;
+  const role = (x: NonNullable<typeof h>["top"][number]) => (x.role === "deployer" ? '<span class="flag">deployer</span>' : x.role === "owner" ? '<span class="flag">owner</span>' : x.role === "burn" ? '<span class="flag ok">burn</span>' : x.role === "token" ? '<span class="flag">the token</span>' : x.isContract ? `<span class="flag">${esc(x.name ?? "contract")}</span>` : "");
+  const explorer = chain().blockscout;
+  return `<dl class="kv">
+    ${o.deployer ? `<dt>deployer</dt><dd><span class="mono">${esc(o.deployer.address)}</span> · holds ${pct(o.deployer.bps)}${o.deployer.createdAt ? ` · deployed ${isoUtc(o.deployer.createdAt)} (${formatDuration(Math.max(0, slip.at.timestamp - o.deployer.createdAt))} ago)` : ""}</dd>` : ""}
+    ${h ? `<dt>holders</dt><dd>${h.count ?? "unknown"}${h.transfers !== null ? ` · ${h.transfers} transfers indexed` : ""}</dd>
+    <dt>top 10 wallets</dt><dd>${pct(h.top10WalletsBps)} of supply (contracts and burn addresses not counted)</dd>
+    <dt>in contracts</dt><dd>${pct(h.contractsBps)} (pools, lockers, vaults, the token itself)${h.burnedBps ? ` · burned ${pct(h.burnedBps)}` : ""}</dd>` : ""}
+    ${o.activity ? `<dt>last transfer</dt><dd>${o.activity.lastTransferAt ? `${formatDuration(Math.max(0, slip.at.timestamp - o.activity.lastTransferAt))} ago · ${o.activity.recentWallets} wallets in the last ${o.activity.recent} transfers` : "none indexed by the explorer"}</dd>` : ""}
+  </dl>
+  ${h && h.top.length ? `<div class="tbl"><table class="buys"><thead><tr><th>#</th><th>holder</th><th>share</th></tr></thead><tbody>${h.top.slice(0, 15).map((x, i) => `<tr><td>${i + 1}</td><td>${explorer && mode !== "demo" ? `<a href="${explorer}/address/${x.address}" target="_blank" rel="noopener"><span class="mono">${shortAddress(x.address)}</span></a>` : `<span class="mono">${shortAddress(x.address)}</span>`} ${role(x)}</td><td>${pct(x.bps)}</td></tr>`).join("")}</tbody></table></div>` : ""}`;
 }
 
 function devSection(d: DevReport, subject: string | null, standalone: boolean, bodyOnly = false): string {

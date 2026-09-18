@@ -11,7 +11,25 @@ Every line on a slip comes from one of the reads below, pinned to one head block
 | token / curve code | `eth_getCode` | Runtime bytecode is walked opcode by opcode. PUSH1..PUSH32 immediates are skipped (bytes inside them are data, not opcodes). The Solidity CBOR metadata trailer (length in the last two bytes, map byte `0xa1..0xa3`) is skipped. Counts: `SELFDESTRUCT 0xff`, `DELEGATECALL 0xf4`, `CALLCODE 0xf2`, `CREATE 0xf0`, `CREATE2 0xf5`. |
 | proxy | `eth_getStorageAt` at the EIP-1967 implementation and beacon slots; the 45-byte EIP-1167 pattern | A set slot or the minimal-proxy shape means the code behind the address can be swapped. |
 
-A `STOP` note is written for every code finding on an address the factory does not know. On a registered launch the same finding is a `WATCH` note, because Pons deploys the same token contract for every launch; if it ever trips, read the code.
+On an address the factory does not know, `SELFDESTRUCT` and `CALLCODE` are `STOP` notes (the code can vanish) and a proxy or `DELEGATECALL` is a `WATCH` note (the code can be replaced; many honest tokens are proxies, every rug can be too). On a registered launch every finding is a `WATCH` note, because Pons deploys the same token contract for every launch; if it ever trips, read the code.
+
+A token missing from both factories is also asked for `launchFactory()`, the view a `PonsLauncherToken` carries. When it names a factory the chain table lists (the current V1 factory or an older deployment such as `0x0c37a24F5D23A486FA692d1500881d698B1F77a4`, which made $PONS), that factory's `getLaunchedToken` record is read and the token is on the list as a V1 launch. A factory the table does not list is a claim, noted as such (`claimed-factory`), never proof.
+
+## Open door (any token)
+
+Run for every contract the V2 factory did not make: ordinary tokens and V1 tokens alike.
+
+| Fact | Read | Rule |
+| --- | --- | --- |
+| function surface | four-byte constants pushed by the runtime code (`PUSH1..PUSH4` immediates, metadata trailer skipped); for an EIP-1967 or EIP-1167 proxy, the implementation's code | Solidity and Vyper dispatchers compare the calldata selector against pushed constants, so the set is the contract's function surface. Matched against a catalogue of signatures token generators use: mint, pause, blacklist, fee, limit, trading switch, upgrade, burn-others, exempt, sweep. A match is a fact about a name in the code; who may call it is not readable from bytes. A miss means "not seen", never "not there". |
+| owner | `owner()` (or `getOwner()`) when the surface has it; `eth_getCode` on the result | Zero or a burn address means renounced. A contract owner is named as such (multisig, timelock, or anything else). |
+| switches | `paused()`; the first of `tradingOpen()`, `tradingEnabled()`, `tradingActive()`, … the surface has | Read as booleans; `paused == true` or trading `false` is a `STOP` note. |
+| transfer simulation | `eth_call` of `transfer(0x…b0ce, 1)` with `from` set to each of the three largest plain-wallet holders (from the explorer), or the deployer when no holder list is available | Nothing is signed or sent. All revert: `STOP`. Some revert: `WATCH` (a blacklist looks like this; the revert reason is quoted). None revert: `INFO`. |
+| deployer, age | explorer `creator_address_hash` and creation tx, then `eth_getTransactionReceipt` for the block; `balanceOf(deployer)` | The deployer's share is re-read from the chain. |
+| holders | explorer top-50 holders; `holders_count`, `transfers_count` | Top-10-wallets share excludes contracts, burn addresses and the token itself; contracts' share and burned share are listed separately. ≥ 50% in ten wallets is a `WATCH` note. |
+| pools | `getPool(token, WETH, fee)` on each factory in the chain's DEX table at 0.01 / 0.05 / 0.3 / 1%; then `balanceOf(pool)` on the token and on WETH | Reserves are the pool's balances at the block. Whether liquidity is locked is not read. |
+| explorer feed | `exchange_rate`, `volume_24h`, `circulating_market_cap`, `is_scam` | Shown as the explorer's, never as the chain's. A scam flag is a `STOP` note. |
+| activity | explorer's newest page of token transfers | Last transfer time; distinct wallets in the page. > 7 days quiet is a `WATCH` note. |
 
 ## Cover charge
 
@@ -95,9 +113,33 @@ Factory `TokenLaunched`, `LaunchSwept`, `PoolGraduated` over the window (adaptiv
 
 | Level | Code | When |
 | --- | --- | --- |
-| STOP | not-registered | no factory record |
-| STOP | code | proxy / SELFDESTRUCT / DELEGATECALL / CALLCODE on an unregistered address |
-| WATCH | code | the same on a registered launch |
+| STOP | not-registered | no contract at the address |
+| INFO | not-registered | not a launch; checked as an ordinary token (the note says so) |
+| STOP | lookalike-impostor | a registered launch carries this ticker and this address is not it |
+| WATCH | claimed-factory | the token names a launch factory the chain table does not list |
+| INFO | known-address | a well-known non-launch contract from the chain table ($PONS, the factories) |
+| STOP | code | SELFDESTRUCT / CALLCODE on an unregistered address |
+| WATCH | code | proxy / DELEGATECALL on an unregistered address; any finding on a registered launch |
+| STOP | paused | `paused()` is true |
+| STOP | trading-closed | the trading switch is off |
+| WATCH | owner-powers | owner not renounced and the code has mint / pause / blacklist / fee / limit / trading / upgrade functions |
+| INFO | renounced-with-powers | such functions exist but ownership is renounced |
+| WATCH | powers-no-owner | such functions exist and there is no `owner()` to say who may call them |
+| INFO | owner-plain / renounced | an owner with no such functions / renounced with none |
+| WATCH | unverified | no verified source on the explorer |
+| STOP | explorer-scam | the explorer flags the address as a scam |
+| STOP | transfer-reverts | every simulated transfer from the largest wallets reverts |
+| WATCH | transfer-some-revert | some of them revert |
+| INFO | transfer-ok | none revert |
+| WATCH | concentrated | top 10 wallets hold ≥ 50% |
+| INFO | spread / in-contracts / burned | holder facts |
+| WATCH | deployer-holds / owner-holds | the deployer or owner holds ≥ 20% |
+| INFO | pools / no-pool | pools on the DEX table and their WETH depth / none found |
+| WATCH | pools-empty | a pool exists with no WETH in it |
+| INFO | price | the explorer's price, 24 h volume and market cap |
+| INFO | deployed | age and deployer |
+| INFO | active | last transfer and wallets in the newest transfers |
+| WATCH | quiet | no transfer for 7 days, or none indexed |
 | WATCH | cover-open | window still open |
 | INFO | cover-closed | window closed; count of buys inside it and the highest charge paid |
 | WATCH | terms-retuned | factory terms changed after the launch |
@@ -124,4 +166,4 @@ Factory `TokenLaunched`, `LaunchSwept`, `PoolGraduated` over the window (adaptiv
 | INFO | exit-thin | selling 1% of supply realises < 50% of spot |
 | INFO | skipped | a section could not be read; the reason is in the note |
 
-The stamp is `ON THE LIST` when the factory record exists and `NOT ON THE LIST` otherwise. It is not a score. A launch with five WATCH notes is still on the list; the notes are what to read before paying the cover.
+The stamp is `ON THE LIST` when a known factory's record exists, `NOT A LAUNCH` for any other contract (checked as an ordinary token), and `NOT ON THE LIST` when there is no contract at the address or a registered launch carries the same ticker. It is not a score. A launch with five WATCH notes is still on the list; the notes are what to read before paying the cover.

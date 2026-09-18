@@ -6,8 +6,8 @@
  * trusted deployers. The bytecode scan is the second question, asked of
  * every address, Pons or not: can this contract change or disappear?
  */
-import { decodeOutputs, encodeCall, isAddress, normalizeAddress } from "../chain/abi.js";
-import { EIP1967_BEACON_SLOT, EIP1967_IMPLEMENTATION_SLOT, scanBytecode, storageWordAddress, storageWordIsSet, type CodeScan } from "../chain/code.js";
+import { decodeOutputs, encodeCall, isAddress, normalizeAddress, selector, type FunctionAbi } from "../chain/abi.js";
+import { EIP1967_BEACON_SLOT, EIP1967_IMPLEMENTATION_SLOT, pushedSelectors, scanBytecode, storageWordAddress, storageWordIsSet, type CodeScan } from "../chain/code.js";
 import { CURVE_FUNCTIONS, ERC20_FUNCTIONS, ZERO_ADDRESS, type LaunchedToken } from "../chain/pons.js";
 import { NotAPonsLaunch, PonsReader, type TokenMeta } from "../chain/reader.js";
 import type { RpcClient } from "../chain/rpc.js";
@@ -34,12 +34,22 @@ export interface IdCheck {
   token: ContractId;
   meta: TokenMeta | null;
   curve: ContractId | null;
+  /**
+   * The factory the token itself names in launchFactory(), when its code has
+   * that view. Proof only when the factory is one the chain table lists and
+   * that factory's record confirms it; otherwise just a claim, kept so the
+   * door can say so.
+   */
+  claimedFactory: string | null;
 }
 
 export interface IdCheckOptions {
   factoryV1?: string;
+  olderFactoriesV1?: string[];
   native?: { symbol: string; decimals: number };
 }
+
+const LAUNCH_FACTORY_VIEW: FunctionAbi = { name: "launchFactory", inputs: [], outputs: ["address"] };
 
 export async function readIdCheck(rpc: RpcClient, input: string, block: number, factory?: string, options: IdCheckOptions = {}): Promise<IdCheck> {
   if (!isAddress(input)) throw new Error(`${input} is not an address`);
@@ -68,10 +78,11 @@ export async function readIdCheck(rpc: RpcClient, input: string, block: number, 
     }
   }
 
+  const native = options.native ?? { symbol: "ETH", decimals: 18 };
   let v1: V1Launch | null = null;
   if (!launch && options.factoryV1) {
     try {
-      v1 = await readV1Launch(rpc, options.factoryV1, address, block, options.native ?? { symbol: "ETH", decimals: 18 });
+      v1 = await readV1Launch(rpc, options.factoryV1, address, block, native);
       if (v1) resolvedAs = "token";
     } catch {
       v1 = null;
@@ -83,7 +94,33 @@ export async function readIdCheck(rpc: RpcClient, input: string, block: number, 
   const curve = launch ? await readContractId(rpc, launch.curve.toLowerCase(), block) : null;
   const meta = token.code.empty ? null : await readMetaSafely(rpc, tokenAddress, block);
 
-  return { input: address, resolvedAs, registered: launch !== null || v1 !== null, launchpad: launch ? "v2" : v1 ? "v1" : null, launch, v1, token, meta, curve };
+  // A V1-style token carries the address of the factory that made it. Ask
+  // that factory too, but only count it when the chain table knows it.
+  let claimedFactory: string | null = null;
+  if (!launch && !v1 && !token.code.empty && token.code.selectors.has(selector("launchFactory()"))) {
+    claimedFactory = await launchFactoryOf(rpc, tokenAddress, block);
+    const known = new Set([options.factoryV1, ...(options.olderFactoriesV1 ?? [])].filter((x): x is string => Boolean(x)).map((x) => x.toLowerCase()));
+    if (claimedFactory && known.has(claimedFactory) && claimedFactory !== options.factoryV1) {
+      try {
+        v1 = await readV1Launch(rpc, claimedFactory, address, block, native);
+        if (v1) resolvedAs = "token";
+      } catch {
+        v1 = null;
+      }
+    }
+  }
+
+  return { input: address, resolvedAs, registered: launch !== null || v1 !== null, launchpad: launch ? "v2" : v1 ? "v1" : null, launch, v1, token, meta, curve, claimedFactory };
+}
+
+async function launchFactoryOf(rpc: RpcClient, token: string, block: number): Promise<string | null> {
+  try {
+    const [raw] = await rpc.callBatch([{ to: token, data: encodeCall(LAUNCH_FACTORY_VIEW, []) }], block);
+    const [factory] = decodeOutputs(LAUNCH_FACTORY_VIEW, raw) as [string];
+    return factory && factory !== ZERO_ADDRESS ? factory.toLowerCase() : null;
+  } catch {
+    return null;
+  }
 }
 
 export async function readContractId(rpc: RpcClient, address: string, block: number): Promise<ContractId> {

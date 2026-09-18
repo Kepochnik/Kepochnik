@@ -29,6 +29,8 @@ export interface CodeScan {
   opcodes: OpcodeCounts;
   /** Implementation address when the code is an EIP-1167 minimal proxy. */
   minimalProxyTarget: string | null;
+  /** Four-byte constants the code pushes: the function dispatcher's selectors, see pushedSelectors. */
+  selectors: Set<string>;
 }
 
 const OP_SELFDESTRUCT = 0xff;
@@ -52,6 +54,7 @@ export function scanBytecode(code: Hex | string): CodeScan {
     metadataBytes: metadataTrailerLength(bytes),
     opcodes: { selfdestruct: 0, delegatecall: 0, callcode: 0, create: 0, create2: 0 },
     minimalProxyTarget: minimalProxyTarget(bytes),
+    selectors: pushedSelectors(code),
   };
   const end = bytes.length - scan.metadataBytes;
   for (let i = 0; i < end; i++) {
@@ -99,4 +102,30 @@ export function storageWordIsSet(word: string): boolean {
 
 export function storageWordAddress(word: string): string {
   return `0x${word.replace(/^0x/, "").padStart(64, "0").slice(24)}`;
+}
+
+/**
+ * Four-byte constants the code pushes: for Solidity and Vyper contracts the
+ * function dispatcher compares the calldata selector against each PUSH4
+ * (PUSH1–PUSH3 when the selector has leading zero bytes), so this is the
+ * contract's function surface as far as bytes can tell. Other 4-byte
+ * constants land in the set too; a caller matches it against known
+ * signatures, where a chance collision is a 1-in-4-billion event.
+ */
+export function pushedSelectors(code: Hex | string): Set<string> {
+  const bytes = hexToBytes(code);
+  const end = bytes.length - metadataTrailerLength(bytes);
+  const out = new Set<string>();
+  for (let i = 0; i < end; i++) {
+    const op = bytes[i];
+    if (op < OP_PUSH1 || op > OP_PUSH32) continue;
+    const size = op - OP_PUSH1 + 1;
+    if (size <= 4 && i + size < end) {
+      let hex = "";
+      for (let j = 1; j <= size; j++) hex += bytes[i + j].toString(16).padStart(2, "0");
+      out.add(`0x${hex.padStart(8, "0")}`);
+    }
+    i += size;
+  }
+  return out;
 }

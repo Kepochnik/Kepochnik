@@ -30,7 +30,7 @@ export interface LookalikeReport {
   subjectIsEarliest: boolean | null;
 }
 
-export async function readLookalikes(rpc: RpcClient, blockscout: BlockscoutClient, subject: string, symbol: string, block: number, factory: string, searchBlocks: number, limit = 8): Promise<LookalikeReport> {
+export async function readLookalikes(rpc: RpcClient, blockscout: BlockscoutClient, subject: string, symbol: string, block: number, factory: string, searchBlocks: number, limit = 8, subjectRegistered = true): Promise<LookalikeReport> {
   const hits = await blockscout.searchTokens(symbol);
   const reader = new PonsReader(rpc, factory);
   const candidates: Lookalike[] = [];
@@ -50,7 +50,7 @@ export async function readLookalikes(rpc: RpcClient, blockscout: BlockscoutClien
   }
   if (!candidates.some((c) => c.address === subject.toLowerCase())) {
     // The explorer may lag the chain by a few blocks; the subject is always a candidate.
-    candidates.unshift({ address: subject.toLowerCase(), name: "", symbol, registered: true, phase: null, launchBlock: null });
+    candidates.unshift({ address: subject.toLowerCase(), name: "", symbol, registered: subjectRegistered, phase: null, launchBlock: null });
   }
   const dated = candidates.filter((c) => c.registered && c.launchBlock !== null).sort((a, b) => a.launchBlock! - b.launchBlock!);
   const earliest = dated[0] ?? null;
@@ -62,6 +62,11 @@ export async function readLookalikes(rpc: RpcClient, blockscout: BlockscoutClien
     earliest,
     subjectIsEarliest: earliest ? earliest.address === subject.toLowerCase() : null,
   };
+}
+
+/** The registered launches that carry the subject's ticker when the subject itself is not one: the impostor test. */
+export function registeredLookalikes(l: LookalikeReport): Lookalike[] {
+  return l.candidates.filter((c) => c.address !== l.subject && c.registered);
 }
 
 export function lookalikeLine(l: LookalikeReport): string {

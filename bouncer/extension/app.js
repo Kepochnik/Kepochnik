@@ -1,7 +1,7 @@
 "use strict";
 (() => {
   // src/chain/blockscout.ts
-  var BlockscoutClient = class {
+  var BlockscoutClient = class _BlockscoutClient {
     baseUrl;
     fetchImpl;
     timeoutMs;
@@ -10,11 +10,13 @@
       this.fetchImpl = options.fetchImpl ?? ((input, init) => fetch(input, init));
       this.timeoutMs = options.timeoutMs ?? 15e3;
     }
+    /** Browsers drop the user-agent header silently; Node and workers send it, which keeps bot challenges away. */
+    static USER_AGENT = "Mozilla/5.0 (compatible; bouncer/0.3; +https://github.com/Kepochnik/bouncer)";
     async get(path) {
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), this.timeoutMs);
       try {
-        const response = await this.fetchImpl(`${this.baseUrl}${path}`, { method: "GET", headers: { accept: "application/json" }, signal: controller.signal });
+        const response = await this.fetchImpl(`${this.baseUrl}${path}`, { method: "GET", headers: { accept: "application/json", "user-agent": _BlockscoutClient.USER_AGENT }, signal: controller.signal });
         if (!response.ok) throw new Error(`blockscout ${response.status} for ${path}`);
         return await response.json();
       } finally {
@@ -50,6 +52,53 @@
       const body = await this.get(`/api/v2/search?q=${encodeURIComponent(query)}`);
       return (body.items ?? []).filter((i) => i.type === "token" && (i.address || i.address_hash)).map((i) => ({ address: String(i.address ?? i.address_hash).toLowerCase(), name: i.name ?? "", symbol: i.symbol ?? "" }));
     }
+    /** Largest holders first, as the explorer ranks them; `limit` caps the count, one page is 50. */
+    async tokenHolders(token, limit = 50) {
+      const body = await this.get(`/api/v2/tokens/${token}/holders`);
+      return (body.items ?? []).slice(0, limit).map((h) => ({
+        address: (h.address?.hash ?? "").toLowerCase(),
+        value: BigInt(h.value ?? "0"),
+        isContract: Boolean(h.address?.is_contract),
+        name: h.address?.name ?? h.address?.metadata?.tags?.[0]?.name ?? null
+      }));
+    }
+    /** Holder and transfer counts for a token; nulls when the explorer has not counted yet. */
+    async tokenInfo(token) {
+      const info = await this.get(`/api/v2/tokens/${token}`);
+      let transfers = null;
+      let holders = numberOrNull(info.holders_count ?? info.holders);
+      try {
+        const counters = await this.get(`/api/v2/tokens/${token}/counters`);
+        transfers = numberOrNull(counters.transfers_count);
+        holders = holders ?? numberOrNull(counters.token_holders_count);
+      } catch {
+      }
+      return { holders, transfers, type: info.type ?? null, priceUsd: numberOrNull(info.exchange_rate ?? void 0), volume24hUsd: numberOrNull(info.volume_24h ?? void 0), marketCapUsd: numberOrNull(info.circulating_market_cap ?? void 0) };
+    }
+    /** What the explorer knows about an address: contract or not, verified, who created it. */
+    async addressInfo(address) {
+      const body = await this.get(`/api/v2/addresses/${address}`);
+      return {
+        isContract: Boolean(body.is_contract),
+        isVerified: Boolean(body.is_verified),
+        isScam: Boolean(body.is_scam),
+        name: body.name ?? null,
+        creator: body.creator_address_hash ? body.creator_address_hash.toLowerCase() : null,
+        creationTx: body.creation_transaction_hash ?? body.creation_tx_hash ?? null
+      };
+    }
+    /** The newest token transfers the explorer indexed, newest first (one page). */
+    async tokenTransfers(token) {
+      const body = await this.get(`/api/v2/tokens/${token}/transfers`);
+      return (body.items ?? []).map((t) => ({
+        from: (t.from?.hash ?? "").toLowerCase(),
+        to: (t.to?.hash ?? "").toLowerCase(),
+        value: BigInt(t.total?.value ?? "0"),
+        block: Number(t.block_number ?? 0),
+        timestamp: t.timestamp ? Math.floor(Date.parse(t.timestamp) / 1e3) : null,
+        hash: t.transaction_hash ?? t.tx_hash ?? ""
+      }));
+    }
     /** Whether the explorer holds verified source for the address. */
     async isVerified(address) {
       try {
@@ -60,6 +109,11 @@
       }
     }
   };
+  function numberOrNull(value) {
+    if (value === void 0 || value === null || value === "") return null;
+    const n = Number(value);
+    return Number.isFinite(n) ? n : null;
+  }
 
   // src/chain/chains.ts
   var CHAINS = {
@@ -71,13 +125,18 @@
       blockscout: "https://robinhoodchain.blockscout.com",
       factory: "0x7eD598BcEf8bd9Edd8C97A195C6d13f40801EC7e".toLowerCase(),
       factoryV1: "0xA5aAb3F0c6EeadF30Ef1D3Eb997108E976351feB".toLowerCase(),
+      olderFactoriesV1: ["0x0c37a24F5D23A486FA692d1500881d698B1F77a4".toLowerCase()],
       launchpad: "Pons V2",
       native: { symbol: "ETH", decimals: 18 },
       blocksPerSecond: 10,
       known: {
-        "0x39dbed3a2bd333467115de45665cc57f813c4571": "$PONS, the launchpad's own platform token. It was not launched through the Pons factory, so curves, door tax and creator tax do not apply; it trades on the DEX.",
+        "0x39dbed3a2bd333467115de45665cc57f813c4571": "$PONS, the launchpad's own platform token: a fixed-supply PonsLauncherToken paired into a Uniswap V3 pool at launch. The V2 curve, door tax and creator tax do not apply to it.",
         "0x7ed598bcef8bd9edd8c97a195c6d13f40801ec7e": "the Pons V2 launch factory itself, not a token.",
         "0xa5aab3f0c6eeadf30ef1d3eb997108e976351feb": "the Pons V1 launch factory itself, not a token."
+      },
+      dex: {
+        weth: "0x0Bd7D308f8E1639FAb988df18A8011f41EAcAD73".toLowerCase(),
+        v3Factories: [{ name: "Uniswap V3", address: "0x1f7d7550B1b028f7571E69A784071F0205FD2EfA".toLowerCase() }]
       }
     },
     "arc-testnet": {
@@ -1215,7 +1274,7 @@
     const meta = slip.id.meta;
     const title = meta ? esc(meta.symbol) : shortAddress(slip.subject);
     const sub = meta ? esc(meta.name) : "unregistered contract";
-    const stampColor = slip.stamp === "ON THE LIST" ? c.brass : c.stop;
+    const stampColor = slip.stamp === "ON THE LIST" ? c.brass : slip.stamp === "NOT A LAUNCH" ? c.watch : c.stop;
     const lines = [];
     const idBits = [slip.id.registered ? "factory record" : "no factory record", slip.id.token.code.empty ? "no code" : `${slip.id.token.code.bytes} bytes`];
     if (slip.id.token.proxyImplementation || slip.id.token.code.minimalProxyTarget) idBits.push("proxy");
@@ -1290,7 +1349,8 @@
       empty: bytes.length === 0,
       metadataBytes: metadataTrailerLength(bytes),
       opcodes: { selfdestruct: 0, delegatecall: 0, callcode: 0, create: 0, create2: 0 },
-      minimalProxyTarget: minimalProxyTarget(bytes)
+      minimalProxyTarget: minimalProxyTarget(bytes),
+      selectors: pushedSelectors(code)
     };
     const end = bytes.length - scan.metadataBytes;
     for (let i = 0; i < end; i++) {
@@ -1327,6 +1387,23 @@
   }
   function storageWordAddress(word) {
     return `0x${word.replace(/^0x/, "").padStart(64, "0").slice(24)}`;
+  }
+  function pushedSelectors(code) {
+    const bytes = hexToBytes(code);
+    const end = bytes.length - metadataTrailerLength(bytes);
+    const out2 = /* @__PURE__ */ new Set();
+    for (let i = 0; i < end; i++) {
+      const op = bytes[i];
+      if (op < OP_PUSH1 || op > OP_PUSH32) continue;
+      const size = op - OP_PUSH1 + 1;
+      if (size <= 4 && i + size < end) {
+        let hex = "";
+        for (let j = 1; j <= size; j++) hex += bytes[i + j].toString(16).padStart(2, "0");
+        out2.add(`0x${hex.padStart(8, "0")}`);
+      }
+      i += size;
+    }
+    return out2;
   }
 
   // src/bouncer/exitDoor.ts
@@ -1454,6 +1531,27 @@
   var DEMO_BLOCKSCOUT = "https://demo.blockscout.invalid";
   var DEMO_V1 = { token: "0x0000000000000000000000000000000000001d1e", deployer: "0x00000000000000000000000000000000000001d1", positionId: 777n, restrictionsEndBlock: BigInt(HEAD + 40), name: "Old School", symbol: "OLDIE" };
   var DEMO_IMPOSTOR = { token: "0x00000000000000000000000000000000000bad01", implementation: "0x00000000000000000000000000000000000bad02" };
+  var DEMO_PLAIN = {
+    token: "0x0000000000000000000000000000000000f1a1a1",
+    owner: "0x00000000000000000000000000000000000000f1",
+    pool: "0x000000000000000000000000000000000000900f",
+    name: "Robin Rocket",
+    symbol: "ROCKET",
+    createdAt: HEAD - 5e4,
+    creationTx: "0xdemoplaincreate",
+    supply: 10n ** 27n,
+    /** [holder, share in bps, is contract, explorer label]. */
+    holders: [
+      ["0x000000000000000000000000000000000000900f", 3e3, true, "UniswapV3Pool"],
+      ["0x00000000000000000000000000000000000000f1", 2500, false, null],
+      ["0x000000000000000000000000000000000000c500", 800, false, null],
+      ["0x000000000000000000000000000000000000c501", 500, false, null],
+      ["0x000000000000000000000000000000000000c502", 300, false, null],
+      ["0x000000000000000000000000000000000000dead", 200, false, null]
+    ],
+    blacklisted: "0x000000000000000000000000000000000000c501",
+    powers: ["mint(address,uint256)", "pause()", "unpause()", "paused()", "owner()", "renounceOwnership()", "transferOwnership(address)", "setFees(uint256,uint256)", "blacklist(address,bool)", "tradingOpen()", "excludeFromFees(address,bool)"]
+  };
   var freshBuys = [[1, DEV_C, 400n * 10n ** 15n], [22, buyer(900), 300n * 10n ** 15n, 6e3], [70, buyer(901), 100n * 10n ** 15n, 1900]];
   var sprintBuys = [[3, DEV_A, 2600n * 10n ** 15n]];
   for (let i = 1; i <= 8; i++) sprintBuys.push([100 + i * 250, buyer(i), 200n * 10n ** 15n]);
@@ -1595,10 +1693,13 @@
             if (byCurve.has(who)) return ok(DEMO_CODE.ponsCurve);
             if (who === DEMO_IMPOSTOR.token) return ok(DEMO_CODE.impostor);
             if (who === DEMO_V1.token || who === PONS_V1_FACTORY) return ok(DEMO_CODE.ponsToken);
+            if (who === DEMO_PLAIN.token) return ok(DEMO_CODE.plain);
+            if (who === DEMO_PLAIN.pool) return ok(DEMO_CODE.factory);
             return ok("0x");
           }
           case "eth_getTransactionReceipt": {
             const hash = request.params[0];
+            if (hash === DEMO_PLAIN.creationTx) return ok({ transactionHash: hash, blockNumber: `0x${DEMO_PLAIN.createdAt.toString(16)}`, from: DEMO_PLAIN.owner, status: "0x1", logs: [] });
             for (const t of Object.values(DEMO.tokens)) {
               const logs = curveLogs(t, 0, DEMO.head);
               const hit = logs.filter((l) => l.transactionHash === hash);
@@ -1669,6 +1770,34 @@
               if (s === sel("decimals()")) return ok(`0x${encodeWord("uint8", 18n)}`);
               if (s === sel("totalSupply()")) return ok(`0x${encodeWord("uint256", 10n ** 27n)}`);
             }
+            const dex = CHAINS.robinhood.dex;
+            if (dex.v3Factories.some((f) => f.address === to) && s === sel("getPool(address,address,uint24)")) {
+              const [a, , fee] = [`0x${call.data.slice(34, 74)}`, 0, BigInt(`0x${call.data.slice(138, 202)}`)];
+              return ok(`0x${encodeWord("address", a === DEMO_PLAIN.token && fee === 3000n ? DEMO_PLAIN.pool : ZERO_ADDRESS)}`);
+            }
+            if (to === dex.weth && s === sel("balanceOf(address)")) {
+              const who = `0x${call.data.slice(34)}`;
+              return ok(`0x${encodeWord("uint256", who === DEMO_PLAIN.pool ? 12n * ETH : 0n)}`);
+            }
+            if (to === DEMO_PLAIN.token) {
+              const from = call.from?.toLowerCase();
+              if (s === sel("name()")) return ok(`0x${encodeString(DEMO_PLAIN.name)}`);
+              if (s === sel("symbol()")) return ok(`0x${encodeString(DEMO_PLAIN.symbol)}`);
+              if (s === sel("decimals()")) return ok(`0x${encodeWord("uint8", 18n)}`);
+              if (s === sel("totalSupply()")) return ok(`0x${encodeWord("uint256", DEMO_PLAIN.supply)}`);
+              if (s === sel("owner()")) return ok(`0x${encodeWord("address", DEMO_PLAIN.owner)}`);
+              if (s === sel("paused()")) return ok(`0x${encodeWord("bool", false)}`);
+              if (s === sel("tradingOpen()")) return ok(`0x${encodeWord("bool", true)}`);
+              if (s === sel("balanceOf(address)")) {
+                const who = `0x${call.data.slice(34)}`;
+                const row = DEMO_PLAIN.holders.find((h) => h[0] === who);
+                return ok(`0x${encodeWord("uint256", row ? DEMO_PLAIN.supply * BigInt(row[1]) / 10000n : 0n)}`);
+              }
+              if (s === sel("transfer(address,uint256)")) {
+                if (from === DEMO_PLAIN.blacklisted) return { jsonrpc: "2.0", id: request.id, error: { code: 3, message: "execution reverted: Blacklisted", data: `0x08c379a0${encodeString("Blacklisted")}` } };
+                return ok(`0x${encodeWord("bool", true)}`);
+              }
+            }
             if (to === DEMO_IMPOSTOR.token) {
               if (s === sel("name()")) return ok(`0x${encodeString("Sprint")}`);
               if (s === sel("symbol()")) return ok(`0x${encodeString("SPRINT")}`);
@@ -1737,6 +1866,18 @@
       }
       const v = url.pathname.match(/^\/api\/v2\/smart-contracts\/(0x[0-9a-f]{40})$/i);
       if (v) return json({ is_verified: tokens.some((t) => t.token === v[1].toLowerCase() || t.curve === v[1].toLowerCase()) });
+      const plain = DEMO_PLAIN;
+      if (url.pathname === `/api/v2/addresses/${plain.token}`) return json({ is_contract: true, is_verified: false, name: null, creator_address_hash: plain.owner, creation_transaction_hash: plain.creationTx });
+      if (url.pathname === `/api/v2/tokens/${plain.token}`) return json({ holders_count: "143", type: "ERC-20", name: plain.name, symbol: plain.symbol });
+      if (url.pathname === `/api/v2/tokens/${plain.token}/counters`) return json({ token_holders_count: "143", transfers_count: "2210" });
+      if (url.pathname === `/api/v2/tokens/${plain.token}/holders`) {
+        return json({ items: plain.holders.map(([hash, bps, is_contract, name]) => ({ address: { hash, is_contract, name }, value: (plain.supply * BigInt(bps) / 10000n).toString() })), next_page_params: null });
+      }
+      if (url.pathname === `/api/v2/tokens/${plain.token}/transfers`) {
+        const at = (block) => new Date(Math.round(DEMO.genesisTimestamp + block * 0.1) * 1e3).toISOString();
+        const items = [DEMO.head - 1200, DEMO.head - 4e3, DEMO.head - 9e3].map((block, i) => ({ block_number: block, timestamp: at(block), from: { hash: plain.pool }, to: { hash: buyer(500 + i) }, total: { value: (10n ** 24n).toString() }, transaction_hash: `0xdemoplainxfer${i}` }));
+        return json({ items, next_page_params: null });
+      }
       return new Response("not found", { status: 404 });
     });
   }
@@ -1763,7 +1904,9 @@
     factory: `0x6080604052${"5b".repeat(40)}00${CBOR_TRAILER}`,
     ponsToken: `0x60806040527f${"ff".repeat(16)}${"f4".repeat(16)}5b${"5b".repeat(200)}00${CBOR_TRAILER}`,
     ponsCurve: `0x60806040527f${"00".repeat(32)}5b${"5b".repeat(900)}00${CBOR_TRAILER}`,
-    impostor: `0x6080604052${"5b".repeat(20)}f4${"5b".repeat(20)}ff00${CBOR_TRAILER}`
+    impostor: `0x6080604052${"5b".repeat(20)}f4${"5b".repeat(20)}ff00${CBOR_TRAILER}`,
+    /** A dispatcher: PUSH4 <selector> EQ PUSH2 <dest> JUMPI for each function the plain token has. */
+    plain: `0x6080604052${DEMO_PLAIN.powers.map((sig) => `63${selector(sig).slice(2)}1461${"0000"}57`).join("")}${"5b".repeat(60)}00${CBOR_TRAILER}`
   };
   function demoRpc() {
     return new RpcClient({ urls: ["demo://robinhood-chain"], expectedChainId: ROBINHOOD_CHAIN_ID, fetchImpl: demoFetch(), minSpacingMs: 0 });
@@ -1900,6 +2043,7 @@
   }
 
   // src/bouncer/idCheck.ts
+  var LAUNCH_FACTORY_VIEW = { name: "launchFactory", inputs: [], outputs: ["address"] };
   async function readIdCheck(rpc, input, block, factory, options = {}) {
     if (!isAddress(input)) throw new Error(`${input} is not an address`);
     const address = normalizeAddress(input);
@@ -1924,10 +2068,11 @@
         }
       }
     }
+    const native = options.native ?? { symbol: "ETH", decimals: 18 };
     let v1 = null;
     if (!launch && options.factoryV1) {
       try {
-        v1 = await readV1Launch(rpc, options.factoryV1, address, block, options.native ?? { symbol: "ETH", decimals: 18 });
+        v1 = await readV1Launch(rpc, options.factoryV1, address, block, native);
         if (v1) resolvedAs = "token";
       } catch {
         v1 = null;
@@ -1937,7 +2082,29 @@
     const token = await readContractId(rpc, tokenAddress, block);
     const curve = launch ? await readContractId(rpc, launch.curve.toLowerCase(), block) : null;
     const meta = token.code.empty ? null : await readMetaSafely(rpc, tokenAddress, block);
-    return { input: address, resolvedAs, registered: launch !== null || v1 !== null, launchpad: launch ? "v2" : v1 ? "v1" : null, launch, v1, token, meta, curve };
+    let claimedFactory = null;
+    if (!launch && !v1 && !token.code.empty && token.code.selectors.has(selector("launchFactory()"))) {
+      claimedFactory = await launchFactoryOf(rpc, tokenAddress, block);
+      const known = new Set([options.factoryV1, ...options.olderFactoriesV1 ?? []].filter((x) => Boolean(x)).map((x) => x.toLowerCase()));
+      if (claimedFactory && known.has(claimedFactory) && claimedFactory !== options.factoryV1) {
+        try {
+          v1 = await readV1Launch(rpc, claimedFactory, address, block, native);
+          if (v1) resolvedAs = "token";
+        } catch {
+          v1 = null;
+        }
+      }
+    }
+    return { input: address, resolvedAs, registered: launch !== null || v1 !== null, launchpad: launch ? "v2" : v1 ? "v1" : null, launch, v1, token, meta, curve, claimedFactory };
+  }
+  async function launchFactoryOf(rpc, token, block) {
+    try {
+      const [raw] = await rpc.callBatch([{ to: token, data: encodeCall(LAUNCH_FACTORY_VIEW, []) }], block);
+      const [factory] = decodeOutputs(LAUNCH_FACTORY_VIEW, raw);
+      return factory && factory !== ZERO_ADDRESS ? factory.toLowerCase() : null;
+    } catch {
+      return null;
+    }
   }
   async function readContractId(rpc, address, block) {
     const code = scanBytecode(await rpc.getCode(address, block));
@@ -2004,7 +2171,7 @@
   }
 
   // src/bouncer/lookalike.ts
-  async function readLookalikes(rpc, blockscout, subject, symbol, block, factory, searchBlocks, limit = 8) {
+  async function readLookalikes(rpc, blockscout, subject, symbol, block, factory, searchBlocks, limit = 8, subjectRegistered = true) {
     const hits = await blockscout.searchTokens(symbol);
     const reader = new PonsReader(rpc, factory);
     const candidates = [];
@@ -2023,7 +2190,7 @@
       candidates.push({ address: hit.address, name: hit.name, symbol: hit.symbol, registered, phase, launchBlock });
     }
     if (!candidates.some((c) => c.address === subject.toLowerCase())) {
-      candidates.unshift({ address: subject.toLowerCase(), name: "", symbol, registered: true, phase: null, launchBlock: null });
+      candidates.unshift({ address: subject.toLowerCase(), name: "", symbol, registered: subjectRegistered, phase: null, launchBlock: null });
     }
     const dated = candidates.filter((c) => c.registered && c.launchBlock !== null).sort((a, b) => a.launchBlock - b.launchBlock);
     const earliest = dated[0] ?? null;
@@ -2035,6 +2202,9 @@
       earliest,
       subjectIsEarliest: earliest ? earliest.address === subject.toLowerCase() : null
     };
+  }
+  function registeredLookalikes(l) {
+    return l.candidates.filter((c) => c.address !== l.subject && c.registered);
   }
   function lookalikeLine(l) {
     const others = l.candidates.filter((c) => c.address !== l.subject);
@@ -2080,6 +2250,325 @@
     if (!c.crews.length) return `${c.checked} first buyers checked \xB7 no shared funder${c.unresolved ? ` \xB7 ${c.unresolved} unresolved` : ""}`;
     const top = c.crews[0];
     return `${c.checked} first buyers checked \xB7 ${top.wallets.length} share a funder (${(top.shareBps / 100).toFixed(0)}% of the curve)${c.fundedByCreator.length ? ` \xB7 ${c.fundedByCreator.length} funded by the creator` : ""}`;
+  }
+
+  // src/bouncer/openDoor.ts
+  var POWER_MEANING = {
+    mint: "create new tokens out of thin air, diluting every holder",
+    pause: "freeze every transfer",
+    blacklist: "block chosen wallets from selling",
+    fees: "change the tax on buys and sells",
+    limits: "change or remove per-wallet and per-trade caps",
+    trading: "switch trading on or off",
+    upgrade: "replace the contract's code",
+    "burn-others": "destroy tokens held by other wallets",
+    exempt: "exempt chosen wallets from fees or limits",
+    sweep: "pull tokens or coins that sit in the contract"
+  };
+  var POWER_SIGNATURES = {
+    mint: ["mint(address,uint256)", "mint(uint256)", "mint(address)", "mintTo(address,uint256)", "issue(uint256)", "issue(address,uint256)"],
+    pause: ["pause()", "unpause()", "setPaused(bool)", "pauseTransfers(bool)"],
+    blacklist: [
+      "blacklist(address)",
+      "blacklist(address,bool)",
+      "addBlacklist(address)",
+      "addToBlacklist(address)",
+      "setBlacklist(address,bool)",
+      "setBlacklisted(address,bool)",
+      "blacklistAddress(address,bool)",
+      "setIsBlacklisted(address,bool)",
+      "blockAccount(address)",
+      "blockAddress(address)",
+      "setBots(address[],bool)",
+      "addBots(address[])",
+      "addBot(address)",
+      "setBot(address,bool)",
+      "delBot(address)",
+      "blacklistAccount(address,bool)",
+      "setBlacklistEnabled(bool)",
+      "banAddress(address)",
+      "setBanned(address,bool)",
+      "blacklistBots(address[])",
+      "multiBlacklist(address[])",
+      "blacklistMultipleWallets(address[])",
+      "addSniper(address)",
+      "setSniper(address,bool)"
+    ],
+    fees: [
+      "setFee(uint256)",
+      "setFees(uint256,uint256)",
+      "setFees(uint256,uint256,uint256)",
+      "setTaxes(uint256,uint256)",
+      "setTax(uint256)",
+      "setBuyFee(uint256)",
+      "setSellFee(uint256)",
+      "setBuyTax(uint256)",
+      "setSellTax(uint256)",
+      "updateFees(uint256,uint256)",
+      "updateBuyFees(uint256,uint256)",
+      "updateSellFees(uint256,uint256)",
+      "updateBuyFees(uint256,uint256,uint256)",
+      "updateSellFees(uint256,uint256,uint256)",
+      "setTaxFee(uint256)",
+      "setTaxFeePercent(uint256)",
+      "setLiquidityFeePercent(uint256)",
+      "setFeePercent(uint256)",
+      "setTransferFee(uint256)",
+      "setTransferTax(uint256)",
+      "reduceFee(uint256)",
+      "reduceFees(uint256,uint256)",
+      "changeFees(uint256,uint256)",
+      "setSellFeePercent(uint256)",
+      "setBuyFeePercent(uint256)",
+      "setMarketingFee(uint256)",
+      "setFeeRate(uint256)",
+      "updateTaxes(uint256,uint256)",
+      "setTradingFees(uint256,uint256)"
+    ],
+    limits: [
+      "setMaxTxAmount(uint256)",
+      "setMaxTx(uint256)",
+      "setMaxTxPercent(uint256)",
+      "setMaxWallet(uint256)",
+      "setMaxWalletAmount(uint256)",
+      "setMaxWalletPercent(uint256)",
+      "setMaxWalletSize(uint256)",
+      "updateMaxTxnAmount(uint256)",
+      "updateMaxWalletAmount(uint256)",
+      "removeLimits()",
+      "removeAllLimits()",
+      "setLimits(uint256,uint256)",
+      "setMaxBuy(uint256)",
+      "setMaxSell(uint256)",
+      "setMaxTransaction(uint256)",
+      "setCooldownEnabled(bool)",
+      "setTransferDelayEnabled(bool)",
+      "setLimitsInEffect(bool)"
+    ],
+    trading: ["enableTrading()", "openTrading()", "startTrading()", "setTradingEnabled(bool)", "setTrading(bool)", "setTradingOpen(bool)", "enableTrading(bool)", "tradingStatus(bool)", "setTradingStatus(bool)", "toggleTrading()", "activateTrading()", "setTradingActive(bool)", "setLaunched(bool)"],
+    upgrade: ["upgradeTo(address)", "upgradeToAndCall(address,bytes)", "setImplementation(address)", "changeImplementation(address)"],
+    "burn-others": ["burn(address,uint256)", "burnFrom(address,uint256)", "burnTokens(address,uint256)"],
+    exempt: ["excludeFromFees(address,bool)", "excludeFromFee(address)", "excludeFromFee(address,bool)", "setExcludedFromFees(address,bool)", "excludeFromLimits(address,bool)", "setExcludedFromMaxTransaction(address,bool)", "excludeMultipleAccountsFromFees(address[],bool)", "setFeeExempt(address,bool)", "setIsExcludedFromFee(address,bool)", "excludeFromMaxTransaction(address,bool)", "setExcludeFromMaxWallet(address,bool)"],
+    sweep: ["manualSwap()", "manualswap()", "manualSend()", "manualsend()", "clearStuckBalance()", "clearStuckBalance(uint256)", "withdrawStuckETH()", "withdrawStuckEth()", "withdrawStuckTokens(address)", "withdrawStuckTokens(address,uint256)", "rescueTokens(address)", "rescueTokens(address,uint256)", "rescueETH()", "rescueETH(uint256)", "claimStuckTokens(address)", "sweep(address)", "recoverERC20(address,uint256)"]
+  };
+  var V3_FACTORY_FUNCTIONS = {
+    getPool: { name: "getPool", inputs: ["address", "address", "uint24"], outputs: ["address"] }
+  };
+  var V3_FEE_TIERS = [100n, 500n, 3000n, 10000n];
+  var OWNER_FUNCTIONS = {
+    owner: { name: "owner", inputs: [], outputs: ["address"] },
+    getOwner: { name: "getOwner", inputs: [], outputs: ["address"] },
+    paused: { name: "paused", inputs: [], outputs: ["bool"] },
+    transfer: { name: "transfer", inputs: ["address", "uint256"], outputs: ["bool"] }
+  };
+  var TRADING_VIEWS = ["tradingOpen()", "tradingEnabled()", "tradingActive()", "isTradingEnabled()", "tradingIsEnabled()", "launched()", "tradingLive()", "tradingStarted()"];
+  var RENOUNCE_SIGNATURES = ["renounceOwnership()", "transferOwnership(address)"];
+  var PROBE_RECIPIENT = "0x000000000000000000000000000000000000b0ce";
+  var BURN_ADDRESSES = /* @__PURE__ */ new Set([ZERO_ADDRESS, "0x000000000000000000000000000000000000dead", "0x0000000000000000000000000000000000000001"]);
+  async function readOpenDoor(rpc, token, meta, block, options = {}) {
+    const address = token.address.toLowerCase();
+    let surfaceFrom = "token";
+    let code = await rpc.getCode(address, block);
+    const implementation = token.proxyImplementation ?? token.code.minimalProxyTarget;
+    if (implementation) {
+      try {
+        const implCode = await rpc.getCode(implementation, block);
+        if (implCode.length > 2) {
+          code = implCode;
+          surfaceFrom = "implementation";
+        }
+      } catch {
+      }
+    }
+    const present = pushedSelectors(code);
+    const has = (signature) => present.has(selector(signature));
+    const powers = [];
+    for (const kind of Object.keys(POWER_SIGNATURES)) {
+      for (const signature of POWER_SIGNATURES[kind]) if (has(signature)) powers.push({ kind, signature });
+    }
+    const ownable = RENOUNCE_SIGNATURES.some(has);
+    const owner = await readOwner(rpc, address, block, has);
+    const paused = has("paused()") ? await readBool(rpc, address, OWNER_FUNCTIONS.paused, block) : null;
+    let tradingOpen = null;
+    for (const view2 of TRADING_VIEWS) {
+      if (!has(view2)) continue;
+      const open = await readBool(rpc, address, { name: view2.slice(0, -2), inputs: [], outputs: ["bool"] }, block);
+      if (open !== null) tradingOpen = { view: view2, open };
+      break;
+    }
+    const supply = meta?.totalSupply ?? 0n;
+    const bps = (v) => supply > 0n ? Number(v * 10000n / supply) : 0;
+    let holders = null;
+    let deployer = null;
+    let activity = null;
+    let verified = null;
+    let explorer = null;
+    let topHolders = [];
+    const bs = options.blockscout;
+    if (bs) {
+      verified = await bs.isVerified(address);
+      try {
+        const info = await bs.addressInfo(address);
+        explorer = { isScam: info.isScam, priceUsd: null, volume24hUsd: null, marketCapUsd: null };
+        if (info.creator) {
+          let createdAtBlock = null;
+          let createdAt = null;
+          if (info.creationTx) {
+            try {
+              const receipt = await rpc.send("eth_getTransactionReceipt", [info.creationTx]);
+              if (receipt?.blockNumber) {
+                createdAtBlock = Number(BigInt(receipt.blockNumber));
+                createdAt = (await rpc.getBlock(createdAtBlock)).timestamp;
+              }
+            } catch {
+            }
+          }
+          const balance = await readBalance(rpc, address, info.creator, block);
+          deployer = { address: info.creator, creationTx: info.creationTx, createdAtBlock, createdAt, balance, bps: bps(balance) };
+        }
+      } catch {
+        deployer = null;
+      }
+      try {
+        const [list, info] = await Promise.all([bs.tokenHolders(address, 50), bs.tokenInfo(address).catch(() => ({ holders: null, transfers: null, type: null, priceUsd: null, volume24hUsd: null, marketCapUsd: null }))]);
+        topHolders = list;
+        explorer = { isScam: explorer?.isScam ?? false, priceUsd: info.priceUsd, volume24hUsd: info.volume24hUsd, marketCapUsd: info.marketCapUsd };
+        const top = list.map((h) => ({
+          address: h.address,
+          value: h.value,
+          bps: bps(h.value),
+          isContract: h.isContract,
+          name: h.name,
+          role: h.address === deployer?.address ? "deployer" : owner && h.address === owner.address ? "owner" : h.address === address ? "token" : BURN_ADDRESSES.has(h.address) ? "burn" : null
+        }));
+        const wallets = top.filter((h) => !h.isContract && h.role !== "burn" && h.role !== "token");
+        holders = {
+          count: info.holders,
+          transfers: info.transfers,
+          top,
+          top10WalletsBps: wallets.slice(0, 10).reduce((a, h) => a + h.bps, 0),
+          contractsBps: top.filter((h) => h.isContract || h.role === "token").reduce((a, h) => a + h.bps, 0),
+          burnedBps: top.filter((h) => h.role === "burn").reduce((a, h) => a + h.bps, 0)
+        };
+      } catch {
+        holders = null;
+      }
+      try {
+        const transfers = await bs.tokenTransfers(address);
+        activity = summariseActivity(transfers);
+      } catch {
+        activity = null;
+      }
+    }
+    const ownerBalance = owner && !owner.renounced ? await readBalance(rpc, address, owner.address, block).then((balance) => ({ balance, bps: bps(balance) })).catch(() => null) : null;
+    let pools = null;
+    if (options.dex) {
+      try {
+        pools = await readPools(rpc, address, options.dex, block);
+      } catch {
+        pools = null;
+      }
+    }
+    const probes = [];
+    const candidates = topHolders.filter((h) => !h.isContract && !BURN_ADDRESSES.has(h.address) && h.address !== address && h.value > 0n).map((h) => h.address);
+    if (!candidates.length && deployer && deployer.balance > 0n) candidates.push(deployer.address);
+    for (const from of candidates.slice(0, options.probeHolders ?? 3)) probes.push(await probeTransfer(rpc, address, from, block));
+    return { selectors: present.size, surfaceFrom, powers, ownable, owner, paused, tradingOpen, probes, verified, deployer, ownerBalance, explorer, pools, holders, activity };
+  }
+  async function readPools(rpc, token, dex, block) {
+    const asks = [];
+    const calls = [];
+    for (const f of dex.v3Factories) {
+      for (const fee of V3_FEE_TIERS) {
+        asks.push({ dex: f.name, fee });
+        calls.push({ to: f.address, data: encodeCall(V3_FACTORY_FUNCTIONS.getPool, [token, dex.weth, fee]) });
+      }
+    }
+    const raws = await rpc.callBatch(calls, block);
+    const found = [];
+    raws.forEach((raw, i) => {
+      try {
+        const [pool] = decodeOutputs(V3_FACTORY_FUNCTIONS.getPool, raw);
+        if (pool && pool !== ZERO_ADDRESS) found.push({ dex: asks[i].dex, address: pool, feeBps: Number(asks[i].fee) / 100, tokenReserve: 0n, quoteReserve: 0n });
+      } catch {
+      }
+    });
+    if (!found.length) return found;
+    const balances = await rpc.callBatch(found.flatMap((p) => [{ to: token, data: encodeCall(ERC20_FUNCTIONS.balanceOf, [p.address]) }, { to: dex.weth, data: encodeCall(ERC20_FUNCTIONS.balanceOf, [p.address]) }]), block);
+    found.forEach((p, i) => {
+      p.tokenReserve = decodeOutputs(ERC20_FUNCTIONS.balanceOf, balances[i * 2])[0];
+      p.quoteReserve = decodeOutputs(ERC20_FUNCTIONS.balanceOf, balances[i * 2 + 1])[0];
+    });
+    return found.sort((a, b) => b.quoteReserve > a.quoteReserve ? 1 : b.quoteReserve < a.quoteReserve ? -1 : 0);
+  }
+  async function readOwner(rpc, token, block, has) {
+    const fn = has("owner()") ? OWNER_FUNCTIONS.owner : has("getOwner()") ? OWNER_FUNCTIONS.getOwner : null;
+    if (!fn) return null;
+    try {
+      const [raw] = await rpc.callBatch([{ to: token, data: encodeCall(fn, []) }], block);
+      const [address] = decodeOutputs(fn, raw);
+      const renounced = address === ZERO_ADDRESS || BURN_ADDRESSES.has(address);
+      const isContract = renounced ? false : (await rpc.getCode(address, block)).length > 2;
+      return { address, renounced, isContract };
+    } catch {
+      return null;
+    }
+  }
+  async function readBool(rpc, token, fn, block) {
+    try {
+      const [raw] = await rpc.callBatch([{ to: token, data: encodeCall(fn, []) }], block);
+      const [value] = decodeOutputs(fn, raw);
+      return value;
+    } catch {
+      return null;
+    }
+  }
+  async function readBalance(rpc, token, who, block) {
+    const [raw] = await rpc.callBatch([{ to: token, data: encodeCall(ERC20_FUNCTIONS.balanceOf, [who]) }], block);
+    const [balance] = decodeOutputs(ERC20_FUNCTIONS.balanceOf, raw);
+    return balance;
+  }
+  async function probeTransfer(rpc, token, from, block) {
+    const data = encodeCall(OWNER_FUNCTIONS.transfer, [PROBE_RECIPIENT, 1n]);
+    try {
+      const raw = await rpc.send("eth_call", [{ from, to: token, data }, toTag(block)]);
+      const ok = raw === "0x" || raw.length < 66 || BigInt(raw.slice(0, 66)) !== 0n;
+      return { from, ok, reason: ok ? null : "transfer returned false" };
+    } catch (error) {
+      return { from, ok: false, reason: revertReason(error) };
+    }
+  }
+  function toTag(block) {
+    return `0x${block.toString(16)}`;
+  }
+  function revertReason(error) {
+    if (error instanceof RpcError) {
+      const data = typeof error.data === "string" ? error.data : "";
+      if (data.startsWith("0x08c379a0") && data.length >= 10 + 128) {
+        try {
+          const [text] = decodeOutputs({ name: "Error", inputs: [], outputs: ["string"] }, `0x${data.slice(10)}`);
+          if (text) return text;
+        } catch {
+        }
+      }
+      return error.message || null;
+    }
+    return error instanceof Error ? error.message : null;
+  }
+  function summariseActivity(transfers) {
+    if (!transfers.length) return { lastTransferAt: null, lastTransferBlock: null, recent: 0, recentWallets: 0 };
+    const newest = transfers.reduce((a, b) => b.block > a.block ? b : a, transfers[0]);
+    const wallets = /* @__PURE__ */ new Set();
+    for (const t of transfers) {
+      wallets.add(t.from);
+      wallets.add(t.to);
+    }
+    return { lastTransferAt: newest.timestamp, lastTransferBlock: newest.block || null, recent: transfers.length, recentWallets: wallets.size };
+  }
+  function powerKinds(o) {
+    const order = ["upgrade", "mint", "pause", "blacklist", "trading", "fees", "limits", "burn-others", "exempt", "sweep"];
+    const have = new Set(o.powers.map((p) => p.kind));
+    return order.filter((k) => have.has(k));
   }
 
   // src/bouncer/room.ts
@@ -2155,7 +2644,7 @@
     const headNumber = await rpc.blockNumber();
     const head = await rpc.getBlock(headNumber);
     const searchBlocks = options.launchSearchBlocks ?? Math.round(7 * 86400 * chain2.blocksPerSecond);
-    const id = await readIdCheck(rpc, input, head.number, factory, { factoryV1: chain2.factoryV1, native: chain2.native });
+    const id = await readIdCheck(rpc, input, head.number, factory, { factoryV1: chain2.factoryV1, olderFactoriesV1: chain2.olderFactoriesV1, native: chain2.native });
     const slip = {
       chain: { key: chain2.key, name: chain2.name, chainId: chain2.chainId, launchpad: chain2.launchpad, native: chain2.native },
       at: { block: head.number, timestamp: head.timestamp },
@@ -2170,15 +2659,11 @@
       crew: null,
       lookalikes: null,
       dev: null,
+      open: null,
       notes: [],
       skipped: [],
       known: chain2.known?.[id.input.toLowerCase()] ?? null
     };
-    if (!id.launch) {
-      slip.notes = doorNotes(slip);
-      return slip;
-    }
-    const launch = id.launch;
     const attempt = async (section, run) => {
       try {
         await run();
@@ -2186,6 +2671,23 @@
         slip.skipped.push({ section, reason: error instanceof Error ? error.message : String(error) });
       }
     };
+    if (!id.launch && !id.token.code.empty) {
+      if (!id.registered) slip.stamp = "NOT A LAUNCH";
+      await attempt("open door", async () => {
+        slip.open = await readOpenDoor(rpc, id.token, id.meta, head.number, { blockscout: options.blockscout ?? null, dex: chain2.dex });
+      });
+      if (!id.registered && options.blockscout && !options.skipLookalikes && id.meta?.symbol) {
+        await attempt("lookalikes", async () => {
+          slip.lookalikes = await readLookalikes(rpc, options.blockscout, id.input, id.meta.symbol, head.number, factory, searchBlocks, 8, false);
+          if (registeredLookalikes(slip.lookalikes).length) slip.stamp = "NOT ON THE LIST";
+        });
+      }
+    }
+    if (!id.launch) {
+      slip.notes = doorNotes(slip);
+      return slip;
+    }
+    const launch = id.launch;
     slip.launchBlock = await findLaunchBlock(rpc, launch.token, head.number, searchBlocks, factory, options.chunkSize);
     if (slip.launchBlock !== null) {
       await attempt("cover charge", async () => {
@@ -2254,24 +2756,10 @@
       if (v.restrictionBlocksLeft > 0 && v.config) notes.push({ level: "watch", code: "v1-caps", text: `Launch caps are still on for ${v.restrictionBlocksLeft} blocks: max ${formatBps(v.config.maxWalletBps)} of supply per wallet, ${formatBps(v.config.maxTxBps)} per trade. A buy above the cap reverts.` });
       if (!v.status.graduated) notes.push({ level: "info", code: "v1-not-graduated", text: `Not graduated: ${formatUnits(v.status.pairedPrincipal, v.quote.decimals)} of ${formatUnits(v.status.threshold, v.quote.decimals)} ${v.quote.symbol} in the pool.` });
       for (const f of findings) notes.push({ level: "watch", code: "code", text: `Unexpected for a launchpad token: ${f}.` });
+      if (slip.open) notes.push(...openDoorFactNotes(slip, slip.open));
       return notes;
     }
-    if (!slip.id.registered) {
-      if (slip.known) {
-        notes.push({ level: "info", code: "known-address", text: `This is ${slip.known}` });
-      } else if (t.code.empty) {
-        notes.push({ level: "stop", code: "not-registered", text: `No contract at this address on ${slip.chain.name}.` });
-      } else {
-        const named = slip.id.meta ? `"${slip.id.meta.name}" (${slip.id.meta.symbol})` : "this contract";
-        notes.push({
-          level: "stop",
-          code: "not-registered",
-          text: `Not a launchpad token: neither the ${slip.chain.launchpad} factory${slip.chain.key === "robinhood" ? " nor the Pons V1 factory" : ""} deployed ${named}. It may be an ordinary token on ${slip.chain.name} (a stock token, WETH, a project's own coin) or something launched elsewhere. The door check covers launchpad launches only; if someone is selling this as a Pons launch, it is not one.`
-        });
-      }
-      for (const f of findings) if (!f.startsWith("no bytecode")) notes.push({ level: "stop", code: "code", text: `Code can change or vanish: ${f}.` });
-      return notes;
-    }
+    if (!slip.id.registered) return openDoorNotes(slip, findings);
     if (slip.id.resolvedAs === "curve") notes.push({ level: "info", code: "curve-input", text: `You pasted the curve; the slip is for its token ${slip.subject}.` });
     for (const f of findings) notes.push({ level: "watch", code: "code", text: `Unexpected for a launchpad token: ${f}.` });
     const c = slip.cover;
@@ -2334,8 +2822,98 @@
     for (const s of slip.skipped) notes.push({ level: "info", code: "skipped", text: `${s.section} could not be read: ${s.reason}` });
     return notes;
   }
+  function openDoorNotes(slip, findings) {
+    const notes = [];
+    const t = slip.id.token;
+    const factories = `the ${slip.chain.launchpad} factory${slip.chain.key === "robinhood" ? " nor the Pons V1 factory" : ""}`;
+    if (t.code.empty) {
+      notes.push({ level: "stop", code: "not-registered", text: `No contract at this address on ${slip.chain.name}.` });
+      return notes;
+    }
+    const named = slip.id.meta ? `"${slip.id.meta.name}" (${slip.id.meta.symbol})` : "this contract";
+    if (slip.lookalikes) {
+      const real = registeredLookalikes(slip.lookalikes);
+      if (real.length) {
+        notes.push({ level: "stop", code: "lookalike-impostor", text: `A real ${slip.chain.launchpad} launch is called ${slip.lookalikes.query} (${shortAddress(real[0].address)}${real[0].launchBlock !== null ? `, block ${real[0].launchBlock}` : ""}); this address is not it. If someone is selling this as that launch, it is not one.` });
+      }
+    }
+    if (slip.id.claimedFactory) notes.push({ level: "watch", code: "claimed-factory", text: `The token names ${shortAddress(slip.id.claimedFactory)} as its launch factory (launchFactory()), but that factory is not one BOUNCER knows or its record does not confirm this token. A contract can claim any factory; only a known factory's record counts.` });
+    if (slip.known) notes.push({ level: "info", code: "known-address", text: `This is ${slip.known}` });
+    else notes.push({ level: "info", code: "not-registered", text: `Not a launchpad token: neither ${factories} deployed ${named}, so curves, door tax and locked pools do not apply. Checked instead as an ordinary token on ${slip.chain.name}: who can change its rules, whether holders can move it, who holds it.` });
+    const o = slip.open;
+    for (const f of findings) {
+      if (f.startsWith("SELFDESTRUCT") || f.startsWith("CALLCODE")) notes.push({ level: "stop", code: "code", text: `Code can vanish: ${f}.` });
+      else if (f.startsWith("upgradeable proxy") || f.startsWith("beacon proxy") || f.startsWith("minimal proxy")) notes.push({ level: "watch", code: "code", text: `Code can be replaced: ${f}. Whoever controls the proxy decides what this token does tomorrow${o?.surfaceFrom === "implementation" ? "; the functions below were read from the current implementation" : ""}.` });
+      else if (f.startsWith("DELEGATECALL")) notes.push({ level: "watch", code: "code", text: `Runs other contracts' code in its own storage: ${f}.` });
+      else notes.push({ level: "info", code: "code", text: `${f.charAt(0).toUpperCase()}${f.slice(1)}.` });
+    }
+    if (!o) return notes;
+    notes.push(...openDoorFactNotes(slip, o));
+    return notes;
+  }
+  function openDoorFactNotes(slip, o) {
+    const notes = [];
+    const kinds = powerKinds(o).filter((k) => k !== "exempt" && k !== "sweep");
+    const owner = o.owner;
+    if (o.paused === true) notes.push({ level: "stop", code: "paused", text: "Transfers are paused right now (paused() returns true): nobody can move this token until the owner unpauses it." });
+    if (o.tradingOpen && !o.tradingOpen.open) notes.push({ level: "stop", code: "trading-closed", text: `Trading is switched off (${o.tradingOpen.view} returns false): only wallets the owner exempts can trade until it is switched on.` });
+    if (kinds.length) {
+      const what = kinds.map((k) => `${k}: ${POWER_MEANING[k]}`).join("; ");
+      if (owner && !owner.renounced) notes.push({ level: "watch", code: "owner-powers", text: `The owner (${shortAddress(owner.address)}${owner.isContract ? ", a contract" : ""}) still holds the keys. The code lets its controller ${what}. Ownership is not renounced.` });
+      else if (owner && owner.renounced) notes.push({ level: "info", code: "renounced-with-powers", text: `Ownership is renounced, so the owner-only functions in the code (${kinds.join(", ")}) have no owner left to call them; a separate admin role, if the code has one, is not covered by this check.` });
+      else notes.push({ level: "watch", code: "powers-no-owner", text: `The code carries ${what}, and has no owner() function, so who may call them cannot be read off the chain.` });
+    } else if (owner && !owner.renounced) {
+      notes.push({ level: "info", code: "owner-plain", text: `Has an owner (${shortAddress(owner.address)}) but no mint, pause, blacklist, fee or trading switch was seen in the code.` });
+    } else if (owner?.renounced) {
+      notes.push({ level: "info", code: "renounced", text: "Ownership is renounced and no mint, pause, blacklist, fee or trading switch was seen in the code: the rules are what they are." });
+    }
+    if (o.verified === false) notes.push({ level: "watch", code: "unverified", text: "Source code is not verified on the explorer: nobody can read what the contract does beyond what its bytes show here." });
+    if (o.explorer?.isScam) notes.push({ level: "stop", code: "explorer-scam", text: "The explorer flags this address as a scam." });
+    if (o.probes.length) {
+      const failed2 = o.probes.filter((p) => !p.ok);
+      if (failed2.length === o.probes.length) {
+        notes.push({ level: "stop", code: "transfer-reverts", text: `A transfer from ${o.probes.length === 1 ? "the largest wallet holding it" : `each of the ${o.probes.length} largest wallets holding it`} reverts right now${failed2[0].reason ? ` ("${failed2[0].reason}")` : ""}. Simulated on the chain, nothing was sent. This is what a paused, closed or trapping token looks like from the outside.` });
+      } else if (failed2.length) {
+        notes.push({ level: "watch", code: "transfer-some-revert", text: `${failed2.length} of the ${o.probes.length} largest wallets cannot transfer right now${failed2[0].reason ? ` ("${failed2[0].reason}")` : ""}; the others can. A blacklist or a lock on specific wallets looks like this.` });
+      } else {
+        notes.push({ level: "info", code: "transfer-ok", text: `Transfers work: the ${o.probes.length === 1 ? "largest wallet" : `${o.probes.length} largest wallets`} holding it could move tokens right now (simulated on the chain, nothing sent).` });
+      }
+    }
+    const h = o.holders;
+    if (h) {
+      if (h.top10WalletsBps >= 5e3) notes.push({ level: "watch", code: "concentrated", text: `The 10 largest wallets hold ${(h.top10WalletsBps / 100).toFixed(1)}% of supply (contracts and burn addresses not counted).` });
+      else if (h.count !== null && h.count >= 100) notes.push({ level: "info", code: "spread", text: `${h.count} holders; the 10 largest wallets hold ${(h.top10WalletsBps / 100).toFixed(1)}% of supply.` });
+      if (h.contractsBps >= 1e3) notes.push({ level: "info", code: "in-contracts", text: `${(h.contractsBps / 100).toFixed(1)}% of supply sits in contracts (pools, lockers, vaults, the token itself).` });
+      if (h.burnedBps >= 100) notes.push({ level: "info", code: "burned", text: `${(h.burnedBps / 100).toFixed(1)}% of supply sits at a burn address.` });
+    }
+    if (o.deployer && o.deployer.bps >= 2e3) notes.push({ level: "watch", code: "deployer-holds", text: `The deployer (${shortAddress(o.deployer.address)}) holds ${(o.deployer.bps / 100).toFixed(1)}% of supply.` });
+    if (o.ownerBalance && o.ownerBalance.bps >= 2e3 && o.owner && o.owner.address !== o.deployer?.address) notes.push({ level: "watch", code: "owner-holds", text: `The owner holds ${(o.ownerBalance.bps / 100).toFixed(1)}% of supply.` });
+    if (o.pools) {
+      const live = o.pools.filter((p) => p.quoteReserve > 0n);
+      const q2 = slip.chain.native;
+      if (live.length) notes.push({ level: "info", code: "pools", text: `Trades in ${live.length} ${live[0].dex} pool${live.length === 1 ? "" : "s"} against W${q2.symbol}: the deepest (${live[0].feeBps.toFixed(2)}% fee) holds ${formatUnits(live[0].quoteReserve, q2.decimals, 3)} W${q2.symbol}. Whether that liquidity is locked is not read here.` });
+      else if (o.pools.length) notes.push({ level: "watch", code: "pools-empty", text: `A ${o.pools[0].dex} pool exists but holds no W${q2.symbol}: nothing to sell into there.` });
+      else notes.push({ level: "info", code: "no-pool", text: `No ${slip.chain.native.symbol} pool on the chain's known DEX factories; it may trade elsewhere (another DEX, another pair) or not at all.` });
+    }
+    if (o.explorer?.priceUsd !== null && o.explorer?.priceUsd !== void 0) notes.push({ level: "info", code: "price", text: `The explorer's price feed says $${o.explorer.priceUsd < 0.01 ? o.explorer.priceUsd.toPrecision(3) : o.explorer.priceUsd.toFixed(o.explorer.priceUsd < 1 ? 4 : 2)}${o.explorer.volume24hUsd !== null ? `, ${usd(o.explorer.volume24hUsd)} traded in 24 h` : ""}${o.explorer.marketCapUsd !== null ? `, ${usd(o.explorer.marketCapUsd)} market cap` : ""}. That feed is the explorer's, not the chain's.` });
+    if (o.deployer?.createdAt) notes.push({ level: "info", code: "deployed", text: `Deployed ${formatDuration(Math.max(0, slip.at.timestamp - o.deployer.createdAt))} ago by ${shortAddress(o.deployer.address)}.` });
+    if (o.activity) {
+      if (o.activity.lastTransferAt !== null) {
+        const ago = Math.max(0, slip.at.timestamp - o.activity.lastTransferAt);
+        if (ago > 7 * 86400) notes.push({ level: "watch", code: "quiet", text: `No transfer for ${formatDuration(ago)}: nothing is trading here.` });
+        else notes.push({ level: "info", code: "active", text: `Last transfer ${formatDuration(ago)} ago; ${o.activity.recentWallets} wallets in the last ${o.activity.recent} transfers.` });
+      } else if (o.activity.recent === 0) notes.push({ level: "watch", code: "quiet", text: "The explorer has indexed no transfers of this token at all." });
+    }
+    return notes;
+  }
+  function usd(value) {
+    if (value >= 1e9) return `$${(value / 1e9).toFixed(2)}B`;
+    if (value >= 1e6) return `$${(value / 1e6).toFixed(1)}M`;
+    if (value >= 1e3) return `$${(value / 1e3).toFixed(0)}K`;
+    return `$${value.toFixed(0)}`;
+  }
   function slipJson(value) {
-    return JSON.stringify(value, (_k, v) => typeof v === "bigint" ? v.toString() : v, 2);
+    return JSON.stringify(value, (_k, v) => typeof v === "bigint" ? v.toString() : v instanceof Set ? [...v] : v, 2);
   }
 
   // src/bouncer/mascot.ts
@@ -2743,6 +3321,7 @@
     { label: "A fresh launch", hint: "9 s old, door tax still open", hash: `#/demo/${DEMO.tokens.fresh.token}` },
     { label: "A graduated token", hint: "filled its curve in 212 s", hash: `#/demo/${DEMO.tokens.sprint.token}` },
     { label: "A fake copy", hint: "same name, not from the factory", hash: `#/demo/${DEMO_IMPOSTOR.token}` },
+    { label: "An ordinary token", hint: "not a launch: owner keeps mint, pause, blacklist", hash: `#/demo/${DEMO_PLAIN.token}` },
     { label: "A dev on the move", hint: "sold and moved tokens, watch on", hash: `#/demo/${DEMO.tokens.late.token}?watch=1` },
     { label: "A trade receipt", hint: "one buy, itemised", hash: `#/tx/0xdemoFRESH${DEMO.tokens.fresh.launched + 22}?chain=demo` },
     { label: "A Pons V1 token", hint: "the older launchpad, caps still on", hash: `#/demo/${DEMO_V1.token}` }
@@ -2798,7 +3377,7 @@
   }
   function isDemoAddress(address) {
     const a = address.toLowerCase();
-    return Object.values(DEMO.tokens).some((t) => t.token === a || t.curve === a || t.deployer === a) || a === DEMO_IMPOSTOR.token || a === DEMO_V1.token || a === DEMO_V1.deployer || a === "0x000000000000000000000000000000000000dead";
+    return Object.values(DEMO.tokens).some((t) => t.token === a || t.curve === a || t.deployer === a) || a === DEMO_IMPOSTOR.token || a === DEMO_PLAIN.token || a === DEMO_V1.token || a === DEMO_V1.deployer || a === "0x000000000000000000000000000000000000dead";
   }
   async function runDoor(address) {
     if (!ADDR.test(address)) return bad("Paste a 20-byte hex address: the token or its bonding curve, 0x followed by 40 hex characters.");
@@ -2984,17 +3563,7 @@
       parts2.push(v.status.graduated ? "graduated" : `${formatUnits(v.status.pairedPrincipal, v.quote.decimals)} of ${formatUnits(v.status.threshold, v.quote.decimals)} ${v.quote.symbol} towards graduation`);
       return parts2.map((x) => x.charAt(0).toUpperCase() + x.slice(1)).join(". ") + ".";
     }
-    if (!slip.id.registered) {
-      const t = slip.id.token;
-      if (slip.known) return `This is ${slip.known} Nothing here needs a bouncer.`;
-      if (t.code.empty) return `There is no contract at this address on ${slip.chain.name}.`;
-      const flags = [];
-      if (t.proxyImplementation || t.code.minimalProxyTarget) flags.push("its code can be swapped (proxy)");
-      if (t.code.opcodes.selfdestruct) flags.push("it can self-destruct");
-      if (t.code.opcodes.delegatecall) flags.push("it delegates calls");
-      const named = slip.id.meta ? `${slip.id.meta.name} (${slip.id.meta.symbol})` : "this contract";
-      return `Not a launchpad token: neither Pons factory deployed ${named}${flags.length ? `, and ${flags.join(", ")}` : ""}. It may be an ordinary token on ${slip.chain.name} or something launched elsewhere; the door check covers launchpad launches only.`;
-    }
+    if (!slip.id.registered) return openDoorSentence(slip);
     const parts = [`Real ${slip.chain.launchpad} launch`];
     const c = slip.cover;
     if (c?.status === "open") parts.push(`the door tax is still on for ${c.secondsLeft} s (up to ${formatBps(c.terms.startBps)} of a buy goes to the creator)`);
@@ -3006,12 +3575,42 @@
     if (slip.rules?.phase === 2 || slip.rules?.phase === 3) parts.push("graduated, pool locked");
     return parts.map((x) => x.charAt(0).toUpperCase() + x.slice(1)).join(". ") + ".";
   }
+  function openDoorSentence(slip) {
+    const t = slip.id.token;
+    if (t.code.empty) return `There is no contract at this address on ${slip.chain.name}.`;
+    const parts = [];
+    const real = slip.lookalikes ? registeredLookalikes(slip.lookalikes) : [];
+    if (real.length) parts.push(`a real ${slip.chain.launchpad} launch is called ${slip.lookalikes.query} and this is not it`);
+    if (slip.known) parts.push(`this is ${slip.known.replace(/\.$/, "")}`);
+    else parts.push(`not a ${slip.chain.launchpad} launch, checked as an ordinary token`);
+    if (t.proxyImplementation || t.code.minimalProxyTarget) parts.push("its code can be replaced (proxy)");
+    if (t.code.opcodes.selfdestruct) parts.push("it can self-destruct");
+    const o = slip.open;
+    if (o) {
+      const kinds = powerKinds(o).filter((k) => k !== "exempt" && k !== "sweep");
+      if (o.paused) parts.push("transfers are paused right now");
+      if (o.tradingOpen && !o.tradingOpen.open) parts.push("trading is switched off");
+      if (kinds.length && o.owner && !o.owner.renounced) parts.push(`the owner can still ${kinds.join(", ")}`);
+      else if (kinds.length && o.owner?.renounced) parts.push(`ownership renounced, so its ${kinds.join(", ")} functions have no owner left`);
+      else if (o.owner?.renounced) parts.push("ownership renounced, no special powers seen");
+      else if (kinds.length) parts.push(`the code can ${kinds.join(", ")} and has no owner() to tell who may`);
+      else if (o.owner) parts.push("has an owner but no mint, pause, blacklist or fee switch was seen");
+      if (o.probes.length) {
+        const failed2 = o.probes.filter((p) => !p.ok).length;
+        parts.push(failed2 === o.probes.length ? "the largest wallets cannot transfer right now" : failed2 ? `${failed2} of the ${o.probes.length} largest wallets cannot transfer` : "transfers work");
+      }
+      if (o.holders) parts.push(`the 10 largest wallets hold ${(o.holders.top10WalletsBps / 100).toFixed(0)}%`);
+      if (o.deployer?.createdAt) parts.push(`deployed ${formatDuration(Math.max(0, slip.at.timestamp - o.deployer.createdAt))} ago`);
+    }
+    return parts.map((x) => x.charAt(0).toUpperCase() + x.slice(1)).join(". ") + ".";
+  }
   function renderSlip(slip) {
     const meta = slip.id.meta;
     const c0 = chain();
     const explorer = c0.blockscout ? `${c0.blockscout}/address/${slip.subject}` : null;
     const sym = meta ? esc2(meta.symbol) : shortAddress(slip.subject);
     const name = meta ? esc2(meta.name) : slip.known ? "known contract, not a launch" : slip.id.token.code.empty ? "no contract at this address" : "contract without a name";
+    const o = slip.open;
     const qd = slip.rules?.quote ?? slip.chain.native;
     const amt = (v) => `${formatUnits(v, qd.decimals)} ${esc2(qd.symbol)}`;
     const c = slip.cover;
@@ -3034,7 +3633,7 @@
         <div class="tile"><div class="l">Fee per trade</div><div class="v ${r && r.totalTradeBps >= 1000n ? "bad" : ""}">${r ? formatBps(r.totalTradeBps) : "\u2014"}</div><div class="s">${r ? `${formatBps(r.creatorTaxBps)} of it to the creator` : ""}</div></div>
         <div class="tile"><div class="l">${room && room.buys > 0 ? "Creator funded" : "Curve full"}</div><div class="v ${room && room.devShareBps >= 5e3 ? "bad" : ""}">${room && room.buys > 0 ? `${(room.devShareBps / 100).toFixed(0)}%` : r?.fill ? `${(r.fill.bps / 100).toFixed(0)}%` : "\u2014"}</div><div class="s">${room && room.buys > 0 ? `of all buys \xB7 ${room.buyers} buyers` : r?.fill ? "of the way to graduation" : ""}</div></div>
         <div class="tile"><div class="l">This dev before</div><div class="v ${d && d.counts.launched >= 5 && d.counts.graduated === 0 ? "bad" : ""}">${d ? `${d.counts.launched}` : "\u2014"}</div><div class="s">${d ? `launch${d.counts.launched === 1 ? "" : "es"} in ${mode === "demo" ? "8" : "24"} h \xB7 ${d.counts.graduated} graduated` : ""}</div></div>
-      </div>` : "";
+      </div>` : o ? openDoorTiles(slip) : "";
     const notes = slip.notes.map((n) => `<div class="note"><span class="lvl ${n.level}">${LEVEL_WORD[n.level]}</span><span>${esc2(n.text)}</span></div>`).join("");
     const idFlags = (x) => {
       const f = [];
@@ -3050,7 +3649,7 @@
     const section = (id, title, what, body, open) => `<details class="sec" id="${id}"${open ? " open" : ""}><summary><h2>${title}</h2><span class="what">${what}</span><span class="chev">\u25B6</span></summary><div class="body">${body}</div></details>`;
     const idBody = `<dl class="kv">
     <dt>chain</dt><dd>${esc2(slip.chain.name)} \xB7 ${esc2(slip.chain.launchpad)}</dd>
-    <dt>factory record</dt><dd>${registered ? `<span class="flag ok">yes</span> ${v1 ? "the Pons V1 factory" : "the launchpad's own factory"} deployed this token${slip.id.resolvedAs === "curve" ? " (you pasted its curve)" : ""}` : `<span class="flag bad">none</span> neither the ${esc2(slip.chain.launchpad)} factory${slip.chain.key === "robinhood" ? " nor the Pons V1 factory" : ""} has seen this address`}</dd>
+    <dt>factory record</dt><dd>${registered ? `<span class="flag ok">yes</span> ${v1 ? "the Pons V1 factory" : "the launchpad's own factory"} deployed this token${slip.id.resolvedAs === "curve" ? " (you pasted its curve)" : ""}` : `<span class="flag ${o ? "" : "bad"}">none</span> neither the ${esc2(slip.chain.launchpad)} factory${slip.chain.key === "robinhood" ? " nor the Pons V1 factory" : ""} deployed this address${o ? "; checked as an ordinary token below" : ""}`}</dd>
     <dt>token code</dt><dd>${t.code.empty ? "empty (no contract)" : `${t.code.bytes} bytes`}<br>${idFlags(t)}</dd>
     ${slip.id.curve ? `<dt>curve code</dt><dd>${slip.id.curve.code.bytes} bytes<br>${idFlags(slip.id.curve)}</dd>` : ""}
     ${v1 ? `<dt>launchpad</dt><dd>Pons V1</dd><dt>deployer</dt><dd><span class="mono">${esc2(v1.record.deployer.toLowerCase())}</span></dd>` : ""}
@@ -3089,7 +3688,7 @@
     <div class="summary">
       <div class="top">
         <div class="who"><div class="sym">${sym}</div><div class="name">${name}</div><div class="addr">${esc2(slip.subject)}</div><div class="at">${mode === "demo" ? "DEMO \xB7 " : ""}${esc2(slip.chain.name)} \xB7 block ${slip.at.block} \xB7 ${isoUtc(slip.at.timestamp)}</div></div>
-        <div class="stamp ${slip.stamp === "ON THE LIST" ? "" : "no"}">${slip.known ? "NOT A LAUNCH" : slip.stamp}</div>
+        <div class="stamp ${slip.stamp === "ON THE LIST" ? "" : slip.stamp === "NOT A LAUNCH" ? "mid" : "no"}">${slip.stamp}</div>
       </div>
       <p class="lead">${esc2(summarySentence(slip))}</p>
       ${tiles}
@@ -3100,9 +3699,12 @@
       </div>
     </div>
     <div class="card-wrap" id="card"></div>
-    <div class="notes"><h2>What to know</h2>${notes || `<div class="note"><span class="lvl info">Note</span><span>Nothing stands out. The factory made this token and none of its terms needs a second look.</span></div>`}</div>
+    <div class="notes"><h2>What to know</h2>${notes || `<div class="note"><span class="lvl info">Note</span><span>Nothing stands out. ${registered ? "The factory made this token and none of its terms needs a second look." : "Nothing in the code or the holder list needs a second look."}</span></div>`}</div>
     <div class="stack">
-      ${section("s-id", "Is it real?", "Did the launchpad's factory deploy this token, and can its code change later?", idBody, true)}
+      ${section("s-id", "Is it real?", "Did the launchpad's factory deploy this token, and can its code change later?", idBody, !o)}
+      ${o ? section("s-control", "Who controls it", "Which switches the code has (mint, pause, blacklist, fees), who holds the keys, and whether holders can move tokens right now.", controlBody(slip), true) : ""}
+      ${o && (o.pools || o.explorer) ? section("s-trades", "Where it trades", "Pools on the chain's DEX factories and what they hold, plus the explorer's price feed.", tradesBody(slip), true) : ""}
+      ${o && (o.holders || o.deployer || o.activity) ? section("s-holders", "Who holds it", "The largest wallets, the deployer's share, what sits in pools and contracts, and when it last moved.", holdersBody(slip), true) : ""}
       ${registered && !v1 ? section("s-cover", "Door tax", `The anti-snipe tax in the first ${c?.terms.seconds ?? 15} seconds, and who paid it.`, coverBody, c?.status === "open") : ""}
       ${r ? section("s-rules", "Fees and rules", "What every trade costs, where the creator's cut goes, what buyback really does.", rulesBody, false) : ""}
       ${v1 ? section("s-v1", "Rules (Pons V1)", "How this older kind of launch works: pool from block one, launch caps, locked liquidity.", `<ol class="rules">${v1.rules.map((x) => `<li>${esc2(x)}</li>`).join("")}</ol>`, true) : ""}
@@ -3182,6 +3784,61 @@
         }
       }, 1e3);
     }
+  }
+  function openDoorTiles(slip) {
+    const o = slip.open;
+    const kinds = powerKinds(o).filter((k) => k !== "exempt" && k !== "sweep");
+    const failed2 = o.probes.filter((p) => !p.ok).length;
+    const ownerV = o.owner === null ? "NONE" : o.owner.renounced ? "GONE" : "KEYS";
+    const ownerS = o.owner === null ? "no owner() function" : o.owner.renounced ? "ownership renounced" : `owner ${shortAddress(o.owner.address)}${o.owner.isContract ? " (contract)" : ""}`;
+    const moveV = o.paused ? "PAUSED" : o.tradingOpen && !o.tradingOpen.open ? "CLOSED" : o.probes.length ? failed2 === o.probes.length ? "NO" : failed2 ? `${o.probes.length - failed2}/${o.probes.length}` : "YES" : "\u2014";
+    const moveS = o.paused ? "paused() is true" : o.tradingOpen && !o.tradingOpen.open ? `${o.tradingOpen.view} is false` : o.probes.length ? `of the ${o.probes.length} largest wallets can transfer now` : "no holder to simulate from";
+    const moveBad = o.paused || o.tradingOpen && !o.tradingOpen.open || o.probes.length > 0 && failed2 === o.probes.length;
+    const h = o.holders;
+    return `<div class="tiles">
+    <div class="tile"><div class="l">Owner</div><div class="v ${o.owner && !o.owner.renounced && kinds.length ? "bad" : ""}">${ownerV}</div><div class="s">${esc2(ownerS)}</div></div>
+    <div class="tile"><div class="l">Can still</div><div class="v ${kinds.length ? "bad" : ""}">${kinds.length ? kinds.length : "0"}</div><div class="s">${kinds.length ? esc2(kinds.join(", ")) : "no mint, pause, blacklist, fee or trading switch seen"}</div></div>
+    <div class="tile"><div class="l">Can holders sell?</div><div class="v ${moveBad ? "bad" : ""}">${moveV}</div><div class="s">${esc2(moveS)}</div></div>
+    <div class="tile"><div class="l">Top 10 wallets</div><div class="v ${h && h.top10WalletsBps >= 5e3 ? "bad" : ""}">${h ? `${(h.top10WalletsBps / 100).toFixed(0)}%` : "\u2014"}</div><div class="s">${h ? `of supply \xB7 ${h.count ?? "?"} holders` : "explorer not reachable"}</div></div>
+  </div>`;
+  }
+  function controlBody(slip) {
+    const o = slip.open;
+    const pct = (b) => `${(b / 100).toFixed(1)}%`;
+    const powers = o.powers.length ? `<div class="tbl"><table class="buys"><thead><tr><th>function in the code</th><th>lets its caller</th></tr></thead><tbody>${o.powers.map((p) => `<tr><td><span class="mono">${esc2(p.signature)}</span></td><td>${esc2(POWER_MEANING[p.kind])}</td></tr>`).join("")}</tbody></table></div>` : `<p style="color:var(--muted);font-size:13px;margin:8px 0 0">No mint, pause, blacklist, fee, limit, trading or upgrade function was seen among the ${o.selectors} functions in the code.</p>`;
+    const probes = o.probes.length ? `<div class="tbl"><table class="buys"><thead><tr><th>transfer from</th><th>result</th></tr></thead><tbody>${o.probes.map((p) => `<tr><td><span class="mono">${shortAddress(p.from)}</span></td><td>${p.ok ? '<span class="flag ok">works</span>' : `<span class="flag bad">reverts</span> ${p.reason ? esc2(p.reason) : ""}`}</td></tr>`).join("")}</tbody></table></div><p style="color:var(--dim);font-size:12px;margin:6px 0 0">Simulated on the chain with eth_call from the largest plain wallets holding it; nothing was sent.</p>` : "";
+    return `<dl class="kv">
+    <dt>owner</dt><dd>${o.owner === null ? "no owner() function in the code" : o.owner.renounced ? '<span class="flag ok">renounced</span> nobody can call owner-only functions' : `<span class="mono">${esc2(o.owner.address)}</span>${o.owner.isContract ? " (a contract)" : ""}${o.ownerBalance ? ` \xB7 holds ${pct(o.ownerBalance.bps)}` : ""}${o.ownable ? "" : " \xB7 no renounceOwnership()"}`}</dd>
+    ${o.paused !== null ? `<dt>paused</dt><dd>${o.paused ? '<span class="flag bad">yes</span>' : '<span class="flag ok">no</span>'}</dd>` : ""}
+    ${o.tradingOpen ? `<dt>${esc2(o.tradingOpen.view)}</dt><dd>${o.tradingOpen.open ? '<span class="flag ok">true</span> trading is open' : '<span class="flag bad">false</span> trading is switched off'}</dd>` : ""}
+    <dt>source</dt><dd>${o.verified === null ? "explorer not reachable" : o.verified ? '<span class="flag ok">verified</span> the code can be read on the explorer' : '<span class="flag bad">not verified</span> only the bytes can be read'}</dd>
+    <dt>read from</dt><dd>${o.surfaceFrom === "implementation" ? "the proxy's current implementation" : "the token's own bytecode"} \xB7 ${o.selectors} functions</dd>
+  </dl>${powers}${probes}`;
+  }
+  function tradesBody(slip) {
+    const o = slip.open;
+    const q2 = slip.chain.native;
+    const dec = slip.id.meta?.decimals ?? 18;
+    const explorer = chain().blockscout;
+    const usd2 = (v) => v >= 1e9 ? `$${(v / 1e9).toFixed(2)}B` : v >= 1e6 ? `$${(v / 1e6).toFixed(1)}M` : v >= 1e3 ? `$${(v / 1e3).toFixed(0)}K` : `$${v.toFixed(0)}`;
+    const pools = o.pools ? o.pools.length ? `<div class="tbl"><table class="buys"><thead><tr><th>pool</th><th>fee</th><th>W${esc2(q2.symbol)} inside</th><th>tokens inside</th></tr></thead><tbody>${o.pools.map((p) => `<tr><td>${explorer && mode !== "demo" ? `<a href="${explorer}/address/${p.address}" target="_blank" rel="noopener">${esc2(p.dex)} \xB7 ${shortAddress(p.address)}</a>` : `${esc2(p.dex)} \xB7 ${shortAddress(p.address)}`}</td><td>${p.feeBps.toFixed(2)}%</td><td>${formatUnits(p.quoteReserve, q2.decimals, 3)}</td><td>${formatUnits(p.tokenReserve, dec, 0)}</td></tr>`).join("")}</tbody></table></div><p style="color:var(--dim);font-size:12px;margin:6px 0 0">Reserves are the pool's balances at this block. Whether the liquidity is locked is not read here.</p>` : `<p style="color:var(--muted);font-size:13px;margin:0">No W${esc2(q2.symbol)} pool on the chain's known DEX factories. It may trade on another DEX, against another pair, or not at all.</p>` : "";
+    const feed = o.explorer && o.explorer.priceUsd !== null ? `<dl class="kv"><dt>explorer price</dt><dd>$${o.explorer.priceUsd < 0.01 ? o.explorer.priceUsd.toPrecision(3) : o.explorer.priceUsd.toFixed(o.explorer.priceUsd < 1 ? 4 : 2)}${o.explorer.volume24hUsd !== null ? ` \xB7 ${usd2(o.explorer.volume24hUsd)} in 24 h` : ""}${o.explorer.marketCapUsd !== null ? ` \xB7 ${usd2(o.explorer.marketCapUsd)} market cap` : ""} <small style="color:var(--dim)">the explorer's feed, not the chain's</small></dd></dl>` : "";
+    return `${feed}${pools}`;
+  }
+  function holdersBody(slip) {
+    const o = slip.open;
+    const h = o.holders;
+    const pct = (b) => `${(b / 100).toFixed(1)}%`;
+    const role = (x) => x.role === "deployer" ? '<span class="flag">deployer</span>' : x.role === "owner" ? '<span class="flag">owner</span>' : x.role === "burn" ? '<span class="flag ok">burn</span>' : x.role === "token" ? '<span class="flag">the token</span>' : x.isContract ? `<span class="flag">${esc2(x.name ?? "contract")}</span>` : "";
+    const explorer = chain().blockscout;
+    return `<dl class="kv">
+    ${o.deployer ? `<dt>deployer</dt><dd><span class="mono">${esc2(o.deployer.address)}</span> \xB7 holds ${pct(o.deployer.bps)}${o.deployer.createdAt ? ` \xB7 deployed ${isoUtc(o.deployer.createdAt)} (${formatDuration(Math.max(0, slip.at.timestamp - o.deployer.createdAt))} ago)` : ""}</dd>` : ""}
+    ${h ? `<dt>holders</dt><dd>${h.count ?? "unknown"}${h.transfers !== null ? ` \xB7 ${h.transfers} transfers indexed` : ""}</dd>
+    <dt>top 10 wallets</dt><dd>${pct(h.top10WalletsBps)} of supply (contracts and burn addresses not counted)</dd>
+    <dt>in contracts</dt><dd>${pct(h.contractsBps)} (pools, lockers, vaults, the token itself)${h.burnedBps ? ` \xB7 burned ${pct(h.burnedBps)}` : ""}</dd>` : ""}
+    ${o.activity ? `<dt>last transfer</dt><dd>${o.activity.lastTransferAt ? `${formatDuration(Math.max(0, slip.at.timestamp - o.activity.lastTransferAt))} ago \xB7 ${o.activity.recentWallets} wallets in the last ${o.activity.recent} transfers` : "none indexed by the explorer"}</dd>` : ""}
+  </dl>
+  ${h && h.top.length ? `<div class="tbl"><table class="buys"><thead><tr><th>#</th><th>holder</th><th>share</th></tr></thead><tbody>${h.top.slice(0, 15).map((x, i) => `<tr><td>${i + 1}</td><td>${explorer && mode !== "demo" ? `<a href="${explorer}/address/${x.address}" target="_blank" rel="noopener"><span class="mono">${shortAddress(x.address)}</span></a>` : `<span class="mono">${shortAddress(x.address)}</span>`} ${role(x)}</td><td>${pct(x.bps)}</td></tr>`).join("")}</tbody></table></div>` : ""}`;
   }
   function devSection(d, subject, standalone, bodyOnly = false) {
     const inner = `<dl class="kv"><dt>deployer</dt><dd><span class="mono">${esc2(d.deployer)}</span></dd><dt>in window</dt><dd>${esc2(devReportLine(d))}</dd>${standalone ? `<dt>blocks</dt><dd>${d.window.fromBlock}\u2013${d.window.toBlock}</dd>` : ""}</dl>

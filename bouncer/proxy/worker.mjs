@@ -7,7 +7,7 @@
  * on the read allow-list, batches are capped, and nothing is signed here.
  *
  *   POST /rpc/<chain>          JSON-RPC to that chain's RPC
- *   GET  /api/<chain>/<path>   Blockscout v2 GET, same path (funding sources, token search)
+ *   GET  /api/<chain>/<path>   Blockscout v2 GET, same path (funding sources, token search, holders, creator)
  *   GET  /                     health: the chains this proxy serves
  */
 export const UPSTREAMS = {
@@ -30,7 +30,7 @@ export const READ_ONLY_METHODS = new Set([
 
 const MAX_BATCH = 50;
 const MAX_BODY = 256 * 1024;
-const ALLOWED_API = /^\/api\/v2\/(addresses\/0x[0-9a-fA-F]{40}\/transactions|search|smart-contracts\/0x[0-9a-fA-F]{40})$/;
+const ALLOWED_API = /^\/api\/v2\/(addresses\/0x[0-9a-fA-F]{40}(\/transactions)?|search|smart-contracts\/0x[0-9a-fA-F]{40}|tokens\/0x[0-9a-fA-F]{40}(\/holders|\/counters|\/transfers)?)$/;
 
 function cors(extra = {}) {
   return {
@@ -85,7 +85,7 @@ export async function handle(request, upstreams = UPSTREAMS, fetchImpl = (i, o) 
     if (!up || !up.api) return json({ error: `no explorer for ${api[1]}` }, 404);
     if (request.method !== "GET") return json({ error: "GET only" }, 405);
     if (!ALLOWED_API.test(api[2])) return json({ error: "path not allowed through bouncer-proxy" }, 403);
-    const upstream = await fetchImpl(`${up.api}${api[2]}${url.search}`, { headers: { accept: "application/json" } });
+    const upstream = await fetchImpl(`${up.api}${api[2]}${url.search}`, { headers: { accept: "application/json", "user-agent": "Mozilla/5.0 (compatible; bouncer-proxy/0.3; +https://github.com/Kepochnik/bouncer)" } });
     const body = await upstream.text();
     return new Response(body, { status: upstream.status, headers: cors({ "content-type": "application/json" }) });
   }
