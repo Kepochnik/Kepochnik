@@ -8,9 +8,12 @@
  */
 import { BlockscoutClient } from "../chain/blockscout.js";
 import { CHAINS, chainByKey, type ChainConfig } from "../chain/chains.js";
-import { PonsReader } from "../chain/reader.js";
+import { NotAPonsLaunch, PonsReader, readTokenMeta } from "../chain/reader.js";
 import { RpcClient } from "../chain/rpc.js";
 import { findBlockByTimestamp } from "../chain/tape.js";
+import { readMarket, readPools } from "../chain/market.js";
+import { decodeOutputs, encodeCall } from "../chain/abi.js";
+import { ERC20_FUNCTIONS } from "../chain/pons.js";
 import { renderReceipt } from "../receipt.js";
 import { SolanaRpc } from "../chain/solana.js";
 import { readSplDoor, splReceipt } from "../bouncer/spl.js";
@@ -21,6 +24,7 @@ import { readExitDoor } from "../bouncer/exitDoor.js";
 import { readBoard } from "../bouncer/leaderboard.js";
 import { readOneCrew } from "../bouncer/oneCrew.js";
 import { readLaunchPlan } from "../bouncer/planner.js";
+import { readPosition } from "../bouncer/position.js";
 import { readRoom } from "../bouncer/room.js";
 import { readTradeReceipt } from "../bouncer/txReceipt.js";
 
@@ -77,6 +81,26 @@ export function createMcpServer(deps: McpDeps): { tools: ToolDef[]; handle: (mes
     throw new Error(chain.launchpad ? `${chain.name}: the ${chain.launchpad} factory address is not published yet` : `${chain.name}: no launchpad runs here, so there is no launch to read. Use bouncer_check, which answers for any token.`);
   };
   const demoWindow = deps.demo ? { chunkSize: 100_000, launchSearchBlocks: 400_000 } : {};
+  /**
+   * The launch behind an address, or null when the chain has no launchpad or
+   * the address is an ordinary token. The market tools answer either way, so
+   * they ask this rather than refusing.
+   */
+  const launchOrNull = async (rpc: RpcClient, factory: string, token: string, block: number) => {
+    if (!factory) return null;
+    try {
+      return await new PonsReader(rpc, factory).launchedToken(token, block);
+    } catch (error) {
+      if (error instanceof NotAPonsLaunch) return null;
+      throw error;
+    }
+  };
+
+  const erc20 = async (rpc: RpcClient, token: string, fn: (typeof ERC20_FUNCTIONS)[keyof typeof ERC20_FUNCTIONS], args: unknown[], block: number): Promise<bigint> => {
+    const [raw] = await rpc.callBatch([{ to: token, data: encodeCall(fn, args) }], block);
+    return decodeOutputs(fn, raw)[0] as bigint;
+  };
+
   const str = (v: unknown, name: string): string => {
     if (typeof v !== "string" || !v) throw new Error(`${name} is required`);
     return v;
@@ -161,17 +185,77 @@ export function createMcpServer(deps: McpDeps): { tools: ToolDef[]; handle: (mes
     },
     {
       name: "bouncer_exit",
-      description: "The exit door: what selling 10 / 25 / 50 / 100% of a token amount pays right now, on the bonding curve (its own sell arithmetic) or in the graduated pool (an estimate from PoolManager storage).",
-      inputSchema: { type: "object", properties: { address: ADDRESS_PROP, amount: { type: "number", description: "Token amount in whole tokens (default 1% of a 1B supply)." }, chain: CHAIN_PROP }, required: ["address"] },
+      description: "The exit door: what selling 10 / 25 / 50 / 100% of a holding pays right now. On a launchpad launch that is the curve's own sell arithmetic or the graduated pool; on any other token it is the deepest DEX pool the chain's table can find. Answers on every chain BOUNCER reads.",
+      inputSchema: { type: "object", properties: { address: ADDRESS_PROP, amount: { type: "number", description: "Token amount in whole tokens (default 1% of supply)." }, chain: CHAIN_PROP }, required: ["address"] },
       run: async (args) => {
         const { factory, rpc, chain } = ctx(args);
-        needFactory(chain, factory);
+        const token = str(args.address, "address");
         const head = await rpc.blockNumber();
-        const launch = await new PonsReader(rpc, factory).launchedToken(str(args.address, "address"), head);
-        const position = typeof args.amount === "number" ? BigInt(Math.round(args.amount)) * 10n ** 18n : 10n ** 25n;
-        const e = await readExitDoor(rpc, launch, { position, block: head, factory });
+        const launch = await launchOrNull(rpc, factory, token, head);
         const q = chain.native;
-        return { text: [`venue: ${e.venue}`, ...e.quotes.map((x) => `sell ${x.shareBps / 100}%: ${Number(x.net) / 10 ** q.decimals} ${q.symbol} net (${(x.realisedBps / 100).toFixed(1)}% of spot)`), e.note].join("\n"), structured: JSON.parse(slipJson(e)) };
+        if (launch) {
+          const position = typeof args.amount === "number" ? BigInt(Math.round(args.amount)) * 10n ** 18n : 10n ** 25n;
+          const e = await readExitDoor(rpc, launch, { position, block: head, factory });
+          return { text: [`venue: ${e.venue}`, ...e.quotes.map((x) => `sell ${x.shareBps / 100}%: ${Number(x.net) / 10 ** q.decimals} ${q.symbol} net (${(x.realisedBps / 100).toFixed(1)}% of spot)`), e.note].join("\n"), structured: JSON.parse(slipJson(e)) };
+        }
+        // Not a launch, or a chain with no launchpad at all. Refusing here would
+        // be the wrong answer to the question a holder actually asked.
+        const dex = chain.dex;
+        if (!dex) throw new Error(`${chain.name} has no DEX table, so a sale cannot be priced there`);
+        const meta = await readTokenMeta(rpc, token, head).catch(() => null);
+        const decimals = meta?.decimals ?? 18;
+        const supply = await erc20(rpc, token, ERC20_FUNCTIONS.totalSupply, [], head).catch(() => 0n);
+        const position = typeof args.amount === "number" ? BigInt(Math.round(args.amount)) * 10n ** BigInt(decimals) : supply / 100n;
+        const pools = await readPools(rpc, token.toLowerCase(), dex, head, decimals);
+        const market = readMarket(pools, position, decimals, dex.wethSymbol);
+        const lines = [
+          `venue: ${market.best ? `${market.best.dex} ${market.best.kind}` : "no pool found"}`,
+          `position: ${Number(position) / 10 ** decimals} ${meta?.symbol ?? "tokens"}`,
+          ...market.quotes.map((x) => `sell ${x.shareBps / 100}%: ${Number(x.out) / 10 ** q.decimals} ${dex.wethSymbol} (${(x.realisedBps / 100).toFixed(1)}% of spot)${x.beyondTick ? " · leaves the current tick" : ""}`),
+          market.note,
+        ];
+        return { text: lines.join("\n"), structured: JSON.parse(slipJson({ token: token.toLowerCase(), block: head, position: position.toString(), market })) };
+      },
+    },
+    {
+      name: "bouncer_wallet",
+      description: "What one wallet holds of one token and what that holding would fetch if sold now. On a launchpad launch it also totals the wallet's own buys and sells: spent, received, fees, taxes, cost basis and unrealised.",
+      inputSchema: { type: "object", properties: { address: ADDRESS_PROP, wallet: ADDRESS_PROP, chain: CHAIN_PROP }, required: ["address", "wallet"] },
+      run: async (args) => {
+        const { factory, rpc, chain } = ctx(args);
+        const token = str(args.address, "address");
+        const wallet = str(args.wallet, "wallet");
+        const head = await rpc.blockNumber();
+        const q = chain.native;
+        const launch = await launchOrNull(rpc, factory, token, head);
+        if (launch) {
+          const launchBlock = await findLaunchBlock(rpc, launch.token, head, deps.demo ? 400_000 : Math.round(30 * 86_400 * chain.blocksPerSecond), factory, deps.demo ? 100_000 : undefined);
+          const p = await readPosition(rpc, launch, wallet, launchBlock ?? 0, head, factory, deps.demo ? 100_000 : undefined);
+          const whole = p.exit.quotes.find((x) => x.shareBps === 10_000);
+          const f = (v: bigint) => `${Number(v) / 10 ** q.decimals} ${q.symbol}`;
+          const lines = [
+            `balance: ${Number(p.balance) / 1e18} tokens`,
+            `spent: ${f(p.spentQuote)} · received: ${f(p.receivedQuote)}`,
+            `fees: ${f(p.feesPaid)} · taxes: ${f(p.taxesPaid)}`,
+            `cost basis: ${f(p.costBasis)}`,
+            `exit now: ${whole ? f(whole.net) : "n/a"} (${p.exit.venue})`,
+            `unrealised: ${p.unrealised < 0n ? "-" : "+"}${f(p.unrealised < 0n ? -p.unrealised : p.unrealised)}`,
+          ];
+          return { text: lines.join("\n"), structured: JSON.parse(slipJson(p)) };
+        }
+        const meta = await readTokenMeta(rpc, token, head).catch(() => null);
+        const decimals = meta?.decimals ?? 18;
+        const balance = await erc20(rpc, token, ERC20_FUNCTIONS.balanceOf, [wallet], head);
+        const pools = chain.dex ? await readPools(rpc, token.toLowerCase(), chain.dex, head, decimals) : [];
+        const market = chain.dex ? readMarket(pools, balance, decimals, chain.dex.wethSymbol) : null;
+        const whole = market?.quotes.find((x) => x.shareBps === 10_000) ?? null;
+        const lines = [
+          `balance: ${Number(balance) / 10 ** decimals} ${meta?.symbol ?? "tokens"}`,
+          `worth now: ${whole ? `${Number(whole.out) / 10 ** q.decimals} ${chain.dex?.wethSymbol}` : "not priced"}`,
+          "cost basis: not read — this token has no launchpad curve, so there is no trade history to total up",
+          market?.note ?? `${chain.name} has no DEX table, so nothing could be priced.`,
+        ];
+        return { text: lines.join("\n"), structured: JSON.parse(slipJson({ token: token.toLowerCase(), wallet: wallet.toLowerCase(), block: head, balance: balance.toString(), market })) };
       },
     },
     {

@@ -109,7 +109,7 @@ node bin/bouncer-mcp.mjs                                    # stdio; BOUNCER_DEM
 { "mcpServers": { "bouncer": { "command": "node", "args": ["/path/to/bouncer/bin/bouncer-mcp.mjs"] } } }
 ```
 
-Eight read-only tools, every one annotated `readOnlyHint`: `bouncer_check` (the slip), `bouncer_tax_now` (the cover charge right now), `bouncer_crew` (the room and the crew), `bouncer_dev` (the report card), `bouncer_receipt` (one trade itemised), `bouncer_exit` (the exit door), `bouncer_plan` (the launch planner) and `bouncer_board` (the board). Each returns a text block and `structuredContent`. No dependencies: the server speaks the stdio transport itself, one JSON-RPC message per line. An agent trading through Robinhood's rails, or anyone else's, can ask the door before it buys; nothing here can sign.
+Nine read-only tools, every one annotated `readOnlyHint`: `bouncer_check` (the slip), `bouncer_tax_now` (the cover charge right now), `bouncer_crew` (the room and the crew), `bouncer_dev` (the report card), `bouncer_receipt` (one trade itemised), `bouncer_exit` (the exit door), `bouncer_wallet` (what a wallet holds and what it would fetch), `bouncer_plan` (the launch planner) and `bouncer_board` (the board). `bouncer_check`, `bouncer_exit` and `bouncer_wallet` answer on every chain BOUNCER reads; the other six read a launchpad and say so, by name, on a chain that has none. Each returns a text block and `structuredContent`. No dependencies: the server speaks the stdio transport itself, one JSON-RPC message per line. An agent trading through Robinhood's rails, or anyone else's, can ask the door before it buys; nothing here can sign.
 
 ## The site
 

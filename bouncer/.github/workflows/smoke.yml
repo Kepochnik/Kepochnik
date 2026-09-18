@@ -130,10 +130,43 @@ jobs:
           # no contract behind it.
           run "door (an empty address)" $B door 0x000000000000000000000000000000000000dEaD --chain "$CHAIN"
 
+          # The tape and the itemised receipt. Both read the launchpad's own logs,
+          # so they only exist where a launchpad does; watch is bounded to one
+          # round so it is a check rather than a stream.
+          if [ "$HAS_PAD" = "yes" ]; then
+            run "watch (one round)" $B watch "$TOKEN" --chain "$CHAIN" --rounds 1 --quiet
+            HASH=$(timeout 240 $B watch "$TOKEN" --chain "$CHAIN" --rounds 1 --quiet 2>/dev/null \
+              | grep -o '0x[0-9a-fA-F]\{64\}' | tail -1 || true)
+            if [ -n "$HASH" ]; then
+              run "receipt" $B receipt "$HASH" --chain "$CHAIN"
+            else
+              echo "::warning::no trade in the watch window, receipt not exercised"
+            fi
+          fi
+
           exit $fail
       - name: The MCP server answers over stdio
+        env:
+          CHAIN: ${{ inputs.chain || 'robinhood' }}
         run: |
+          set -o pipefail
+          # Listing the tools proves the process starts. Calling one proves the
+          # handler behind the name actually reads the chain, which is what an
+          # agent asking BOUNCER a question depends on.
+          SUBJECT=$(node -e 'const{CHAINS}=require("./dist/src/chain/chains.js");const c=CHAINS[process.argv[1]];console.log(c.family==="solana"?"EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v":({robinhood:"0x39dbed3a2bd333467115de45665cc57f813c4571",base:"0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",bnb:"0x0E09FaBB73Bd3Ade0a17ECC321fD13a19e81cE82"})[process.argv[1]]||"")' "$CHAIN")
           printf '%s\n' \
             '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}' \
             '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}' \
-            | timeout 60 node bin/bouncer-mcp.mjs | head -c 2000
+            "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{\"name\":\"bouncer_check\",\"arguments\":{\"address\":\"$SUBJECT\",\"chain\":\"$CHAIN\"}}}" \
+            | timeout 180 node bin/bouncer-mcp.mjs > /tmp/mcp.txt
+          head -c 3000 /tmp/mcp.txt
+          node -e '
+            const lines = require("fs").readFileSync("/tmp/mcp.txt","utf8").trim().split("\n").map(l=>JSON.parse(l));
+            const call = lines.find(l=>l.id===3);
+            if (!call) { console.error("::error::no answer to tools/call"); process.exit(1); }
+            if (call.error) { console.error("::error::bouncer_check failed: "+JSON.stringify(call.error)); process.exit(1); }
+            if (call.result && call.result.isError) { console.error("::error::bouncer_check answered with an error result"); process.exit(1); }
+            const text = JSON.stringify(call.result);
+            if (text.length < 80) { console.error("::error::bouncer_check answered with nothing: "+text); process.exit(1); }
+            console.log("PASS bouncer_check over stdio ("+text.length+" bytes)");
+          '
