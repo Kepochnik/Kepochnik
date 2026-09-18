@@ -22,3 +22,21 @@
 - **EIP-7702 wallets.** Blockscout reports an account that signed a delegation as a contract. BOUNCER reads its `proxy_type` and counts it as a wallet, so concentration among real holders is not understated and such a wallet can be sampled for the simulation. An explorer that does not return that field would put those wallets back in the contract bucket.
 - **Demo mode and real addresses.** The demo chain knows only its invented addresses. The site switches to live by itself when a real address is pasted in demo mode; the CLI needs `--demo` dropped.
 - **Not an audit, not advice.** The slip says what is true at the block on the stamp. It does not say what happens next.
+
+## Solana
+
+- **Pools, prices and LP locks are not read.** Raydium, Orca and Meteora each keep their pools in their own account layout, and several of the calls that would find them (`getProgramAccounts` with a memcmp filter) are disabled on most public endpoints. Guessing at a layout would be worse than saying nothing, so the slip says nothing and says that it says nothing. Until that lands, "can they stop you selling" is answered from the mint's own rules, and "what would a sale pay" is not answered at all.
+- **The freeze authority is the honeypot.** A live freeze authority means one address can freeze any holder's account, and a frozen account cannot send, so it cannot sell. That is a STOP note, and it fires for honest tokens too: Circle can freeze USDC, and BOUNCER says so. The note is a fact about power, not an accusation.
+- **Authorities can be given up, and cannot be taken back.** A null mint or freeze authority is permanent, which is why the absence of one is worth as much as the presence.
+- **Token-2022 extensions BOUNCER does not read** are listed by their type number rather than dropped, so a slip never implies a mint carries nothing unusual when it carries something unrecognised.
+- **A transfer fee is read from the mint, and both rates are shown**: the one in force and the one scheduled to replace it at a named epoch, because a token can be launched at 0% with 99% already queued.
+- **The name comes from a derived address.** The Metaplex account's address is computed locally (SHA-256 over the seeds, bump counted down until the result is off the ed25519 curve). It is verified end to end against mainnet in the smoke run: the account found must name the same mint that was asked about.
+- **Holders are token accounts, not people.** `getTokenLargestAccounts` returns the 20 largest accounts; their owners are a second read, and when that read is refused the accounts are still listed with the owner column empty. Concentration is computed over those 20 and says so; a token with 100 000 holders has a long tail this never sees.
+- **No launchpad.** There is no Pons on Solana, so nothing here is checked against a factory record, and pump.fun, Believe and the rest are not read as launchpads.
+
+## Base and BNB Chain
+
+- **No launchpad either**, so every address is the ordinary-token check. The slip says which chain has none rather than printing a sentence about a factory that does not exist.
+- **BNB Chain has no public Blockscout**, so holders, the deployer, the explorer's scam flag and the price feed are all missing there, and the slip says so instead of showing empty sections. The code, the owner, the switches, the pools and the sale simulation all still run.
+- **Public endpoints rate-limit.** Several are listed per chain and the client moves to the next on a rate limit rather than retrying the same one, but a burst can still exhaust them; the slip reports what it could not read.
+- **Pools are only those in the chain's table.** On Base that is Uniswap V3, Uniswap V2 and Aerodrome; on BNB Chain, PancakeSwap V3 and V2 and Uniswap V3. A token whose liquidity lives anywhere else reads as having no pool, which is a fact about the table and not about the token, and the note says which.
