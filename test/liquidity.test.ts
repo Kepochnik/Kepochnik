@@ -143,3 +143,48 @@ test("the zero address counts as burned wherever it turns up", async () => {
   const lock = await readV2Lock(lpRpc(100n * E18, { [ZERO]: 100n * E18 }), v2Pool, undefined, 1);
   assert.equal(lock.burnedBps, 10_000);
 });
+
+test("a partial read is never phrased as a fact about the pool", async () => {
+  // The live case that prompted this: 106 positions in the pool, twelve read,
+  // none of those twelve burned or locked. "100% withdrawable" was true of the
+  // sample and false of the pool, whose launch position is locked.
+  const many = Array.from({ length: 30 }, (_, i) => i);
+  const mintTopic = eventTopic({
+    name: "Mint",
+    inputs: [
+      { name: "sender", type: "address", indexed: false },
+      { name: "owner", type: "address", indexed: true },
+      { name: "tickLower", type: "int24", indexed: true },
+      { name: "tickUpper", type: "int24", indexed: true },
+      { name: "amount", type: "uint128", indexed: false },
+      { name: "amount0", type: "uint256", indexed: false },
+      { name: "amount1", type: "uint256", indexed: false },
+    ],
+  });
+  const rpc = {
+    getLogs: async () =>
+      many.map((i) => ({
+        address: POOL,
+        topics: [mintTopic, addressWord(WALLET), word(BigInt(i)), word(BigInt(i + 60))],
+        data: `0x${addressWord(WALLET).slice(2)}${word(1000n).slice(2)}${word(1n).slice(2)}${word(1n).slice(2)}`,
+        blockNumber: `0x${(10 + i).toString(16)}`,
+        transactionHash: `0x${i.toString(16).padStart(64, "0")}`,
+        logIndex: "0x0",
+      })),
+    sendBatchSettled: async (requests: { method: string }[]) => requests.map(() => "0x60806040"),
+    callBatchSettled: async () => [],
+  } as unknown as RpcClient;
+
+  const lock = await readV3Lock(rpc, v3Pool, undefined, MANAGER, 100, { fromBlock: 0, maxPositions: 5 });
+  assert.equal(lock.partial, true);
+  assert.equal(lock.positionsFound, 30);
+  assert.equal(lock.positionsRead, 5);
+  const words = lockInWords(lock);
+  assert.match(words, /of the 5 positions read \(of 30\)/, "the sentence must say what it covered");
+  assert.match(lock.unread, /not of the pool/);
+
+  // And when everything was read, no such hedge appears.
+  const full = await readV3Lock(rpc, v3Pool, undefined, MANAGER, 100, { fromBlock: 0, maxPositions: 100 });
+  assert.equal(full.partial, false);
+  assert.doesNotMatch(lockInWords(full), /positions read/);
+});
