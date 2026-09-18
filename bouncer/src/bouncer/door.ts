@@ -525,11 +525,21 @@ function openDoorFactNotes(slip: DoorSlip, o: OpenDoor): DoorNote[] {
   if (o.liquidity) {
     const l = o.liquidity;
     const held = l.holders.filter((h) => h.kind === "wallet" || h.kind === "contract");
-    if (l.burnedBps + l.lockedBps === 0 && l.freeBps > 0) {
+    const heldBy = held.length ? `Held by ${held.slice(0, 3).map((h) => shortAddress(h.address)).join(", ")}${held.length > 3 ? ` and ${held.length - 3} more` : ""}.` : "";
+    if (l.partial) {
+      // A share of what was sampled is not a share of the pool. Saying "all of
+      // it can be withdrawn" after reading a tenth of the positions would be
+      // the most confident wrong sentence on the slip.
+      notes.push({
+        level: "watch",
+        code: "liquidity-partial",
+        text: `Of the ${l.positionsRead} largest liquidity positions in the ${l.dex} pool (${l.positionsFound} were found), ${pct(l.freeBps)} can be withdrawn${l.burnedBps ? `, ${pct(l.burnedBps)} is burned` : ""}${l.lockedBps ? `, ${pct(l.lockedBps)} is locked` : ""}. ${heldBy} The rest of the pool's positions were not read, so this is not a statement about the whole pool.`,
+      });
+    } else if (l.burnedBps + l.lockedBps === 0 && l.freeBps > 0) {
       notes.push({
         level: "stop",
         code: "liquidity-free",
-        text: `Every bit of the ${l.dex} pool's liquidity can be withdrawn: none of it is burned and none sits in a locker BOUNCER knows. ${held.length ? `It is held by ${held.slice(0, 3).map((h) => shortAddress(h.address)).join(", ")}${held.length > 3 ? ` and ${held.length - 3} more` : ""}.` : ""} Whoever holds it can take the pool away, and then there is nothing to sell into.`,
+        text: `Every bit of the ${l.dex} pool's liquidity can be withdrawn: none of it is burned and none sits in a locker BOUNCER knows. ${heldBy} Whoever holds it can take the pool away, and then there is nothing to sell into.`,
       });
     } else if (l.freeBps >= 2_000) {
       notes.push({
@@ -751,7 +761,7 @@ export function doorReceipt(slip: DoorSlip): Receipt {
           ...(o.liquidity
             ? [
                 {
-                  label: "liquidity held by",
+                  label: o.liquidity.partial ? `liquidity (${o.liquidity.positionsRead} of ${o.liquidity.positionsFound} positions)` : "liquidity held by",
                   value:
                     o.liquidity.holders.length === 0
                       ? o.liquidity.unread || "not read"

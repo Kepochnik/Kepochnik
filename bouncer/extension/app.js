@@ -3800,7 +3800,7 @@
   }
   var bps = (part, whole) => whole > 0n ? Number(part * 10000n / whole) : 0;
   async function readV2Lock(rpc, pool, lockers, block) {
-    const base = { pool: pool.address, dex: pool.dex, kind: pool.kind, burnedBps: 0, lockedBps: 0, freeBps: 0, holders: [], unread: "" };
+    const base = { pool: pool.address, dex: pool.dex, kind: pool.kind, burnedBps: 0, lockedBps: 0, freeBps: 0, partial: false, positionsFound: 0, positionsRead: 0, holders: [], unread: "" };
     const lockerAddresses = Object.keys(lockers ?? {});
     const asked = [ZERO2, DEAD, ...lockerAddresses];
     const calls = [
@@ -3853,8 +3853,8 @@
     };
   }
   async function readV3Lock(rpc, pool, lockers, positionManager, block, options) {
-    const base = { pool: pool.address, dex: pool.dex, kind: pool.kind, burnedBps: 0, lockedBps: 0, freeBps: 0, holders: [], unread: "" };
-    const maxPositions = options.maxPositions ?? 12;
+    const base = { pool: pool.address, dex: pool.dex, kind: pool.kind, burnedBps: 0, lockedBps: 0, freeBps: 0, partial: false, positionsFound: 0, positionsRead: 0, holders: [], unread: "" };
+    const maxPositions = options.maxPositions ?? 60;
     let logs;
     try {
       const { readTapeAdaptive: readTapeAdaptive2 } = await Promise.resolve().then(() => (init_tape(), tape_exports));
@@ -3877,6 +3877,8 @@
     const positions = [...byPosition.values()].sort((a, b) => b.amount > a.amount ? 1 : b.amount < a.amount ? -1 : 0);
     const partial = positions.length > maxPositions;
     const considered = positions.slice(0, maxPositions);
+    base.positionsFound = positions.length;
+    base.positionsRead = considered.length;
     const manager = positionManager?.toLowerCase();
     const realOwners = /* @__PURE__ */ new Map();
     const managed = considered.filter((p) => manager && p.owner === manager);
@@ -3931,11 +3933,11 @@
     const lockedBps = holders.filter((h) => h.kind === "locked").reduce((a, h) => a + h.shareBps, 0);
     const freeBps = Math.max(0, 1e4 - burnedBps - lockedBps);
     const notes = [];
-    if (partial) notes.push(`only the ${maxPositions} largest of ${positions.length} positions were resolved`);
+    if (partial) notes.push(`only the ${maxPositions} largest of ${positions.length} positions in the window were resolved, so the shares above are of those and not of the pool`);
     if (!manager) notes.push("this DEX's position manager is not in BOUNCER's table, so an NFT position is reported under the manager rather than its holder");
     const unresolved = holders.filter((h) => manager && h.address === manager);
     if (unresolved.length) notes.push("some positions could not be traced to an NFT holder and are counted as withdrawable");
-    return { ...base, burnedBps, lockedBps, freeBps, holders: holders.sort((a, b) => b.shareBps - a.shareBps), unread: notes.join("; ") };
+    return { ...base, burnedBps, lockedBps, freeBps, partial, holders: holders.sort((a, b) => b.shareBps - a.shareBps), unread: notes.join("; ") };
   }
   async function readPoolLock(rpc, pool, lockers, positionManager, block, options) {
     return pool.kind === "v3" ? readV3Lock(rpc, pool, lockers, positionManager, block, options) : readV2Lock(rpc, pool, lockers, block);
@@ -4811,11 +4813,18 @@
     if (o.liquidity) {
       const l = o.liquidity;
       const held = l.holders.filter((h2) => h2.kind === "wallet" || h2.kind === "contract");
-      if (l.burnedBps + l.lockedBps === 0 && l.freeBps > 0) {
+      const heldBy = held.length ? `Held by ${held.slice(0, 3).map((h2) => shortAddress(h2.address)).join(", ")}${held.length > 3 ? ` and ${held.length - 3} more` : ""}.` : "";
+      if (l.partial) {
+        notes.push({
+          level: "watch",
+          code: "liquidity-partial",
+          text: `Of the ${l.positionsRead} largest liquidity positions in the ${l.dex} pool (${l.positionsFound} were found), ${pct2(l.freeBps)} can be withdrawn${l.burnedBps ? `, ${pct2(l.burnedBps)} is burned` : ""}${l.lockedBps ? `, ${pct2(l.lockedBps)} is locked` : ""}. ${heldBy} The rest of the pool's positions were not read, so this is not a statement about the whole pool.`
+        });
+      } else if (l.burnedBps + l.lockedBps === 0 && l.freeBps > 0) {
         notes.push({
           level: "stop",
           code: "liquidity-free",
-          text: `Every bit of the ${l.dex} pool's liquidity can be withdrawn: none of it is burned and none sits in a locker BOUNCER knows. ${held.length ? `It is held by ${held.slice(0, 3).map((h2) => shortAddress(h2.address)).join(", ")}${held.length > 3 ? ` and ${held.length - 3} more` : ""}.` : ""} Whoever holds it can take the pool away, and then there is nothing to sell into.`
+          text: `Every bit of the ${l.dex} pool's liquidity can be withdrawn: none of it is burned and none sits in a locker BOUNCER knows. ${heldBy} Whoever holds it can take the pool away, and then there is nothing to sell into.`
         });
       } else if (l.freeBps >= 2e3) {
         notes.push({

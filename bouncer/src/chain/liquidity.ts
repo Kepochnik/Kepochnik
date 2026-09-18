@@ -87,12 +87,19 @@ export interface PoolLock {
   pool: string;
   dex: string;
   kind: MarketPool["kind"];
-  /** Share of the pool's liquidity that can never come back out. */
+  /**
+   * The shares below are of what this read actually accounted for, which for a
+   * V2 pool is the whole LP supply and for a V3 pool is the positions it
+   * resolved. When `partial` is true they are NOT a statement about the pool.
+   */
   burnedBps: number;
-  /** Share held by a locker BOUNCER knows by name. */
   lockedBps: number;
-  /** Share somebody can withdraw right now, as far as this read can tell. */
   freeBps: number;
+  /** True when the read covered only some of the pool's liquidity. */
+  partial: boolean;
+  /** V3 only: how many positions exist in the window, and how many were resolved. */
+  positionsFound: number;
+  positionsRead: number;
   holders: LiquidityHolder[];
   /**
    * Why the numbers above are missing or partial, when they are. An empty
@@ -121,7 +128,7 @@ const bps = (part: bigint, whole: bigint): number => (whole > 0n ? Number((part 
  * explorer and no log scan; what is left over is held by somebody.
  */
 export async function readV2Lock(rpc: RpcClient, pool: MarketPool, lockers: LockerTable | undefined, block: number): Promise<PoolLock> {
-  const base: PoolLock = { pool: pool.address, dex: pool.dex, kind: pool.kind, burnedBps: 0, lockedBps: 0, freeBps: 0, holders: [], unread: "" };
+  const base: PoolLock = { pool: pool.address, dex: pool.dex, kind: pool.kind, burnedBps: 0, lockedBps: 0, freeBps: 0, partial: false, positionsFound: 0, positionsRead: 0, holders: [], unread: "" };
   const lockerAddresses = Object.keys(lockers ?? {});
   const asked = [ZERO, DEAD, ...lockerAddresses];
   const calls = [
@@ -199,8 +206,10 @@ export async function readV3Lock(
   block: number,
   options: V3LockOptions,
 ): Promise<PoolLock> {
-  const base: PoolLock = { pool: pool.address, dex: pool.dex, kind: pool.kind, burnedBps: 0, lockedBps: 0, freeBps: 0, holders: [], unread: "" };
-  const maxPositions = options.maxPositions ?? 12;
+  const base: PoolLock = { pool: pool.address, dex: pool.dex, kind: pool.kind, burnedBps: 0, lockedBps: 0, freeBps: 0, partial: false, positionsFound: 0, positionsRead: 0, holders: [], unread: "" };
+  // Twelve was too few: a live pool can carry a hundred positions, and the one
+  // that matters — the locked launch position — is rarely among the newest.
+  const maxPositions = options.maxPositions ?? 60;
 
   let logs;
   try {
@@ -228,6 +237,8 @@ export async function readV3Lock(
   const positions = [...byPosition.values()].sort((a, b) => (b.amount > a.amount ? 1 : b.amount < a.amount ? -1 : 0));
   const partial = positions.length > maxPositions;
   const considered = positions.slice(0, maxPositions);
+  base.positionsFound = positions.length;
+  base.positionsRead = considered.length;
 
   // For a position the manager owns, the real owner holds the NFT. The token id
   // is in the manager's own log from the same transaction.
@@ -292,12 +303,12 @@ export async function readV3Lock(
   const lockedBps = holders.filter((h) => h.kind === "locked").reduce((a, h) => a + h.shareBps, 0);
   const freeBps = Math.max(0, 10_000 - burnedBps - lockedBps);
   const notes: string[] = [];
-  if (partial) notes.push(`only the ${maxPositions} largest of ${positions.length} positions were resolved`);
+  if (partial) notes.push(`only the ${maxPositions} largest of ${positions.length} positions in the window were resolved, so the shares above are of those and not of the pool`);
   if (!manager) notes.push("this DEX's position manager is not in BOUNCER's table, so an NFT position is reported under the manager rather than its holder");
   const unresolved = holders.filter((h) => manager && h.address === manager);
   if (unresolved.length) notes.push("some positions could not be traced to an NFT holder and are counted as withdrawable");
 
-  return { ...base, burnedBps, lockedBps, freeBps, holders: holders.sort((a, b) => b.shareBps - a.shareBps), unread: notes.join("; ") };
+  return { ...base, burnedBps, lockedBps, freeBps, partial, holders: holders.sort((a, b) => b.shareBps - a.shareBps), unread: notes.join("; ") };
 }
 
 /** Whichever read this pool's shape calls for. */
@@ -321,6 +332,10 @@ export function lockInWords(lock: PoolLock): string {
   if (lock.lockedBps > 0) parts.push(`${pct(lock.lockedBps)} in ${named.length === 1 && named[0].name ? named[0].name : "a locker"}`);
   if (lock.freeBps > 0) parts.push(`${pct(lock.freeBps)} withdrawable`);
   if (!parts.length) return lock.unread || "the liquidity could not be read";
-  const head = `${lock.dex}: ${parts.join(", ")}`;
+  // A partial read must never read as a statement about the pool. "100%
+  // withdrawable" over a tenth of the positions is true of what was looked at
+  // and false of the thing the reader is asking about.
+  const of = lock.partial ? ` of the ${lock.positionsRead} positions read (of ${lock.positionsFound})` : "";
+  const head = `${lock.dex}: ${parts.join(", ")}${of}`;
   return lock.unread ? `${head} — ${lock.unread}` : head;
 }
