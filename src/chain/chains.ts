@@ -190,7 +190,7 @@ export const CHAINS: Record<string, ChainConfig> = {
     launchpad: null,
     native: { symbol: "SOL", decimals: 9 },
     blocksPerSecond: 2.5,
-    notes: "Read as SPL: the mint account says outright whether anyone can print more tokens or freeze yours, and Token-2022 extensions say whether a transfer costs a fee, runs someone's code, or can be reversed by a permanent delegate. Pools and prices are not read here yet.",
+    notes: "Read as SPL: the mint account says outright whether anyone can print more tokens or freeze yours, and Token-2022 extensions say whether a transfer costs a fee, runs someone's code, or can be reversed by a permanent delegate. Where it trades is read too: the pump.fun bonding curve exactly, and Raydium, Orca, Meteora and pump.fun AMM pools against SOL or USDC. A ranged pool is shown but not priced, because its vault balances are not what a trade moves through.",
   },
   "arc-testnet": {
     key: "arc-testnet",

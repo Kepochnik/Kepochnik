@@ -49,6 +49,7 @@ export const SOLANA_READ_ONLY_METHODS = new Set([
   "getMultipleAccounts",
   "getTokenSupply",
   "getTokenLargestAccounts",
+  "getTokenAccountsByOwner",
   "getSlot",
   "getBlockTime",
   "getHealth",
