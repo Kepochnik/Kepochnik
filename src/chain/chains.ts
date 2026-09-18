@@ -22,6 +22,8 @@ export interface ChainConfig {
   /** Roughly how many blocks per second, for "the last N hours" estimates before pinning to headers. */
   blocksPerSecond: number;
   notes?: string;
+  /** Well-known contracts that are not launchpad tokens, so the door can say what they are instead of just "not on the list". */
+  known?: Record<string, string>;
 }
 
 export const CHAINS: Record<string, ChainConfig> = {
@@ -36,6 +38,11 @@ export const CHAINS: Record<string, ChainConfig> = {
     launchpad: "Pons V2",
     native: { symbol: "ETH", decimals: 18 },
     blocksPerSecond: 10,
+    known: {
+      "0x39dbed3a2bd333467115de45665cc57f813c4571": "$PONS, the launchpad's own platform token. It was not launched through the Pons factory, so curves, door tax and creator tax do not apply; it trades on the DEX.",
+      "0x7ed598bcef8bd9edd8c97a195c6d13f40801ec7e": "the Pons V2 launch factory itself, not a token.",
+      "0xa5aab3f0c6eeadf30ef1d3eb997108e976351feb": "the Pons V1 launch factory itself, not a token.",
+    },
   },
   "arc-testnet": {
     key: "arc-testnet",

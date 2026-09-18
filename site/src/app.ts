@@ -408,12 +408,14 @@ function summarySentence(slip: DoorSlip): string {
   }
   if (!slip.id.registered) {
     const t = slip.id.token;
+    if (slip.known) return `This is ${slip.known} Nothing here needs a bouncer.`;
     if (t.code.empty) return `There is no contract at this address on ${slip.chain.name}.`;
     const flags: string[] = [];
     if (t.proxyImplementation || t.code.minimalProxyTarget) flags.push("its code can be swapped (proxy)");
     if (t.code.opcodes.selfdestruct) flags.push("it can self-destruct");
     if (t.code.opcodes.delegatecall) flags.push("it delegates calls");
-    return `Not a ${slip.chain.launchpad} launch: the factory never deployed this contract${flags.length ? `, and ${flags.join(", ")}` : ""}. Anything sold under this name is not the token.`;
+    const named = slip.id.meta ? `${slip.id.meta.name} (${slip.id.meta.symbol})` : "this contract";
+    return `Not a launchpad token: neither Pons factory deployed ${named}${flags.length ? `, and ${flags.join(", ")}` : ""}. It may be an ordinary token on ${slip.chain.name} or something launched elsewhere; the door check covers launchpad launches only.`;
   }
   const parts: string[] = [`Real ${slip.chain.launchpad} launch`];
   const c = slip.cover;
@@ -432,7 +434,7 @@ function renderSlip(slip: DoorSlip): void {
   const c0 = chain();
   const explorer = c0.blockscout ? `${c0.blockscout}/address/${slip.subject}` : null;
   const sym = meta ? esc(meta.symbol) : shortAddress(slip.subject);
-  const name = meta ? esc(meta.name) : slip.id.token.code.empty ? "no contract at this address" : "unregistered contract";
+  const name = meta ? esc(meta.name) : slip.known ? "known contract, not a launch" : slip.id.token.code.empty ? "no contract at this address" : "contract without a name";
   const qd = slip.rules?.quote ?? slip.chain.native;
   const amt = (v: bigint) => `${formatUnits(v, qd.decimals)} ${esc(qd.symbol)}`;
   const c = slip.cover;
@@ -539,7 +541,7 @@ function renderSlip(slip: DoorSlip): void {
     <div class="summary">
       <div class="top">
         <div class="who"><div class="sym">${sym}</div><div class="name">${name}</div><div class="addr">${esc(slip.subject)}</div><div class="at">${mode === "demo" ? "DEMO · " : ""}${esc(slip.chain.name)} · block ${slip.at.block} · ${isoUtc(slip.at.timestamp)}</div></div>
-        <div class="stamp ${slip.stamp === "ON THE LIST" ? "" : "no"}">${slip.stamp}</div>
+        <div class="stamp ${slip.stamp === "ON THE LIST" ? "" : "no"}">${slip.known ? "NOT A LAUNCH" : slip.stamp}</div>
       </div>
       <p class="lead">${esc(summarySentence(slip))}</p>
       ${tiles}

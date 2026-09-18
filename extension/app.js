@@ -73,7 +73,12 @@
       factoryV1: "0xA5aAb3F0c6EeadF30Ef1D3Eb997108E976351feB".toLowerCase(),
       launchpad: "Pons V2",
       native: { symbol: "ETH", decimals: 18 },
-      blocksPerSecond: 10
+      blocksPerSecond: 10,
+      known: {
+        "0x39dbed3a2bd333467115de45665cc57f813c4571": "$PONS, the launchpad's own platform token. It was not launched through the Pons factory, so curves, door tax and creator tax do not apply; it trades on the DEX.",
+        "0x7ed598bcef8bd9edd8c97a195c6d13f40801ec7e": "the Pons V2 launch factory itself, not a token.",
+        "0xa5aab3f0c6eeadf30ef1d3eb997108e976351feb": "the Pons V1 launch factory itself, not a token."
+      }
     },
     "arc-testnet": {
       key: "arc-testnet",
@@ -1956,6 +1961,7 @@
     }
   }
   async function readMetaSafely(rpc, token, block) {
+    const one = async (fn) => (await rpc.callBatch([{ to: token, data: encodeCall(fn, []) }], block))[0];
     try {
       const results = await rpc.callBatch(
         [
@@ -1972,7 +1978,15 @@
       const [totalSupply] = decodeOutputs(ERC20_FUNCTIONS.totalSupply, results[3]);
       return { name, symbol, decimals: Number(decimals), totalSupply };
     } catch {
-      return null;
+      try {
+        const [name] = decodeOutputs(ERC20_FUNCTIONS.name, await one(ERC20_FUNCTIONS.name));
+        const [symbol] = decodeOutputs(ERC20_FUNCTIONS.symbol, await one(ERC20_FUNCTIONS.symbol));
+        const [decimals] = decodeOutputs(ERC20_FUNCTIONS.decimals, await one(ERC20_FUNCTIONS.decimals));
+        const [totalSupply] = decodeOutputs(ERC20_FUNCTIONS.totalSupply, await one(ERC20_FUNCTIONS.totalSupply));
+        return { name, symbol, decimals: Number(decimals), totalSupply };
+      } catch {
+        return null;
+      }
     }
   }
   function idFindings(id) {
@@ -2157,7 +2171,8 @@
       lookalikes: null,
       dev: null,
       notes: [],
-      skipped: []
+      skipped: [],
+      known: chain2.known?.[id.input.toLowerCase()] ?? null
     };
     if (!id.launch) {
       slip.notes = doorNotes(slip);
@@ -2242,11 +2257,18 @@
       return notes;
     }
     if (!slip.id.registered) {
-      notes.push({
-        level: "stop",
-        code: "not-registered",
-        text: t.code.empty ? `No contract at this address on ${slip.chain.name}.` : `Not a ${slip.chain.launchpad} launch: neither the ${slip.chain.launchpad} factory${slip.chain.key === "robinhood" ? " nor the Pons V1 factory" : ""} has a record of this address. If it was launched elsewhere (another launchpad, or by hand), it is not a Pons token, whatever its name says.`
-      });
+      if (slip.known) {
+        notes.push({ level: "info", code: "known-address", text: `This is ${slip.known}` });
+      } else if (t.code.empty) {
+        notes.push({ level: "stop", code: "not-registered", text: `No contract at this address on ${slip.chain.name}.` });
+      } else {
+        const named = slip.id.meta ? `"${slip.id.meta.name}" (${slip.id.meta.symbol})` : "this contract";
+        notes.push({
+          level: "stop",
+          code: "not-registered",
+          text: `Not a launchpad token: neither the ${slip.chain.launchpad} factory${slip.chain.key === "robinhood" ? " nor the Pons V1 factory" : ""} deployed ${named}. It may be an ordinary token on ${slip.chain.name} (a stock token, WETH, a project's own coin) or something launched elsewhere. The door check covers launchpad launches only; if someone is selling this as a Pons launch, it is not one.`
+        });
+      }
       for (const f of findings) if (!f.startsWith("no bytecode")) notes.push({ level: "stop", code: "code", text: `Code can change or vanish: ${f}.` });
       return notes;
     }
@@ -2964,12 +2986,14 @@
     }
     if (!slip.id.registered) {
       const t = slip.id.token;
+      if (slip.known) return `This is ${slip.known} Nothing here needs a bouncer.`;
       if (t.code.empty) return `There is no contract at this address on ${slip.chain.name}.`;
       const flags = [];
       if (t.proxyImplementation || t.code.minimalProxyTarget) flags.push("its code can be swapped (proxy)");
       if (t.code.opcodes.selfdestruct) flags.push("it can self-destruct");
       if (t.code.opcodes.delegatecall) flags.push("it delegates calls");
-      return `Not a ${slip.chain.launchpad} launch: the factory never deployed this contract${flags.length ? `, and ${flags.join(", ")}` : ""}. Anything sold under this name is not the token.`;
+      const named = slip.id.meta ? `${slip.id.meta.name} (${slip.id.meta.symbol})` : "this contract";
+      return `Not a launchpad token: neither Pons factory deployed ${named}${flags.length ? `, and ${flags.join(", ")}` : ""}. It may be an ordinary token on ${slip.chain.name} or something launched elsewhere; the door check covers launchpad launches only.`;
     }
     const parts = [`Real ${slip.chain.launchpad} launch`];
     const c = slip.cover;
@@ -2987,7 +3011,7 @@
     const c0 = chain();
     const explorer = c0.blockscout ? `${c0.blockscout}/address/${slip.subject}` : null;
     const sym = meta ? esc2(meta.symbol) : shortAddress(slip.subject);
-    const name = meta ? esc2(meta.name) : slip.id.token.code.empty ? "no contract at this address" : "unregistered contract";
+    const name = meta ? esc2(meta.name) : slip.known ? "known contract, not a launch" : slip.id.token.code.empty ? "no contract at this address" : "contract without a name";
     const qd = slip.rules?.quote ?? slip.chain.native;
     const amt = (v) => `${formatUnits(v, qd.decimals)} ${esc2(qd.symbol)}`;
     const c = slip.cover;
@@ -3065,7 +3089,7 @@
     <div class="summary">
       <div class="top">
         <div class="who"><div class="sym">${sym}</div><div class="name">${name}</div><div class="addr">${esc2(slip.subject)}</div><div class="at">${mode === "demo" ? "DEMO \xB7 " : ""}${esc2(slip.chain.name)} \xB7 block ${slip.at.block} \xB7 ${isoUtc(slip.at.timestamp)}</div></div>
-        <div class="stamp ${slip.stamp === "ON THE LIST" ? "" : "no"}">${slip.stamp}</div>
+        <div class="stamp ${slip.stamp === "ON THE LIST" ? "" : "no"}">${slip.known ? "NOT A LAUNCH" : slip.stamp}</div>
       </div>
       <p class="lead">${esc2(summarySentence(slip))}</p>
       ${tiles}

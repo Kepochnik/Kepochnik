@@ -51,6 +51,8 @@ export interface DoorSlip {
   notes: DoorNote[];
   /** Sections that were asked for but could not be read, with the reason. */
   skipped: { section: string; reason: string }[];
+  /** What the chain table says this address is, when it is a well-known non-launch contract. */
+  known: string | null;
 }
 
 export interface DoorOptions {
@@ -98,6 +100,7 @@ export async function readDoor(rpc: RpcClient, input: string, options: DoorOptio
     dev: null,
     notes: [],
     skipped: [],
+    known: chain.known?.[id.input.toLowerCase()] ?? null,
   };
   if (!id.launch) {
     // A V1 token is on the list with its own rules; the V2 sections do not apply.
@@ -190,13 +193,18 @@ export function doorNotes(slip: DoorSlip): DoorNote[] {
     return notes;
   }
   if (!slip.id.registered) {
-    notes.push({
-      level: "stop",
-      code: "not-registered",
-      text: t.code.empty
-        ? `No contract at this address on ${slip.chain.name}.`
-        : `Not a ${slip.chain.launchpad} launch: neither the ${slip.chain.launchpad} factory${slip.chain.key === "robinhood" ? " nor the Pons V1 factory" : ""} has a record of this address. If it was launched elsewhere (another launchpad, or by hand), it is not a Pons token, whatever its name says.`,
-    });
+    if (slip.known) {
+      notes.push({ level: "info", code: "known-address", text: `This is ${slip.known}` });
+    } else if (t.code.empty) {
+      notes.push({ level: "stop", code: "not-registered", text: `No contract at this address on ${slip.chain.name}.` });
+    } else {
+      const named = slip.id.meta ? `"${slip.id.meta.name}" (${slip.id.meta.symbol})` : "this contract";
+      notes.push({
+        level: "stop",
+        code: "not-registered",
+        text: `Not a launchpad token: neither the ${slip.chain.launchpad} factory${slip.chain.key === "robinhood" ? " nor the Pons V1 factory" : ""} deployed ${named}. It may be an ordinary token on ${slip.chain.name} (a stock token, WETH, a project's own coin) or something launched elsewhere. The door check covers launchpad launches only; if someone is selling this as a Pons launch, it is not one.`,
+      });
+    }
     for (const f of findings) if (!f.startsWith("no bytecode")) notes.push({ level: "stop", code: "code", text: `Code can change or vanish: ${f}.` });
     return notes;
   }
