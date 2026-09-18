@@ -60,6 +60,8 @@ export interface SplSlip {
 export interface SplOptions {
   /** How many of the largest accounts to resolve to owners; 20 is what the node returns. */
   topHolders?: number;
+  /** How long one optional section may take before it is reported unread. */
+  deadlineMs?: number;
 }
 
 export async function readSplDoor(rpc: SolanaRpc, input: string, chain: ChainConfig, options: SplOptions = {}): Promise<SplSlip> {
@@ -94,30 +96,40 @@ export async function readSplDoor(rpc: SolanaRpc, input: string, chain: ChainCon
     return slip;
   }
 
-  const attempt = async (section: string, run: () => Promise<void>) => {
+  const attempt = async (section: string, run: () => Promise<void>, deadlineMs?: number) => {
     try {
-      await run();
+      await (deadlineMs ? withDeadline(run(), deadlineMs, section) : run());
     } catch (error) {
       slip.skipped.push({ section, reason: error instanceof Error ? error.message : String(error) });
     }
   };
 
+  // The name and the holder list do not depend on each other, and the holder
+  // list is the slow one: a public endpoint can take ten seconds over the
+  // largest accounts of a big mint. Run them together, and cap each, so one
+  // slow read cannot decide how long the whole slip takes.
   // ---- the name, from the extension when there is one and Metaplex otherwise
   const inline = slip.mint.extensions.find((e) => e.kind === "token-metadata");
   if (inline && inline.kind === "token-metadata") {
     slip.metadataInline = true;
     slip.metadata = { updateAuthority: inline.updateAuthority ?? "", mint: input, name: inline.name, symbol: inline.symbol, uri: inline.uri, sellerFeeBasisPoints: 0, primarySaleHappened: false, isMutable: inline.updateAuthority !== null };
-  } else {
-    await attempt("metadata", async () => {
-      const pda = metadataAddress(input);
-      if (!pda) return;
-      const metaAccount = await rpc.accountInfo(pda);
-      if (metaAccount && metaAccount.owner === METADATA_PROGRAM) slip.metadata = parseMetadata(metaAccount);
-    });
   }
 
+  const readName = slip.metadata
+    ? Promise.resolve()
+    : attempt(
+        "metadata",
+        async () => {
+          const pda = metadataAddress(input);
+          if (!pda) return;
+          const metaAccount = await rpc.accountInfo(pda);
+          if (metaAccount && metaAccount.owner === METADATA_PROGRAM) slip.metadata = parseMetadata(metaAccount);
+        },
+        options.deadlineMs ?? 8_000,
+      );
+
   // ---- who holds it, resolved from token accounts to the people behind them
-  await attempt("holders", async () => {
+  const readHolders = attempt("holders", async () => {
     const largest = (await rpc.largestAccounts(input)).slice(0, options.topHolders ?? 20);
     if (!largest.length) {
       slip.holders = { top: [], top10Bps: null, distinctOwners: null };
@@ -150,10 +162,26 @@ export async function readSplDoor(rpc: SolanaRpc, input: string, chain: ChainCon
       top10Bps: supply > 0n ? ranked.slice(0, 10).reduce((a, b) => a + b, 0) : null,
       distinctOwners: byOwner.size,
     };
-  });
+  }, options.deadlineMs ?? 8_000);
 
+  await Promise.all([readName, readHolders]);
   slip.notes = splNotes(slip);
   return slip;
+}
+
+/** Caps one read so a slow endpoint costs that section, not the whole slip. */
+async function withDeadline<T>(work: Promise<T>, ms: number, section: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      work,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`the endpoint did not answer within ${ms / 1000}s`)), ms);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }
 
 function describeAccount(owner: string, executable: boolean, size: number): string {

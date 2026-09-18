@@ -72,7 +72,7 @@ export function doorCard(slip: DoorSlip, options: CardOptions): string {
   <rect x="40" y="40" width="1120" height="550" rx="18" fill="${c.panel}" stroke="${c.line}"/>
   <rect x="40" y="40" width="1120" height="6" fill="${c.rope}"/>
   <text x="60" y="96" font-size="22" font-weight="700" letter-spacing="6" fill="${c.brass}">BOUNCER</text>
-  <text x="60" y="122" font-size="15" fill="${c.muted}">read-only door check · Pons V2 · Robinhood Chain 4663 · block ${slip.at.block} · ${isoUtc(slip.at.timestamp)}</text>
+  <text x="60" y="122" font-size="15" fill="${c.muted}">read-only check · ${esc(slip.chain.launchpad ? `${slip.chain.launchpad} · ` : "")}${esc(slip.chain.name)}${slip.chain.chainId ? ` ${slip.chain.chainId}` : ""} · block ${slip.at.block} · ${isoUtc(slip.at.timestamp)}</text>
   <text x="60" y="176" font-size="44" font-weight="700" fill="${c.text}">${title}</text>
   <text x="${60 + Math.min(title.length, 14) * 27 + 24}" y="176" font-size="20" fill="${c.muted}">${sub}</text>
   ${factRows}

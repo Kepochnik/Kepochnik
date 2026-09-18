@@ -237,14 +237,16 @@ export function demoFetch(): typeof fetch {
           const to = Number(BigInt(f.toBlock));
           const address = f.address ? String(f.address).toLowerCase() : undefined;
           const all = !address
-            ? [...factoryLogs(from, to), ...Object.values(DEMO.tokens).flatMap((t) => [...curveLogs(t, from, to), ...tokenLogs(t, from, to)])]
+            ? [...factoryLogs(from, to), ...plainTokenLogs(from, to), ...Object.values(DEMO.tokens).flatMap((t) => [...curveLogs(t, from, to), ...tokenLogs(t, from, to)])]
             : address === PONS_V2_FACTORY
               ? factoryLogs(from, to)
-              : byCurve.has(address)
-                ? curveLogs(byCurve.get(address)!, from, to)
-                : byToken.has(address)
-                  ? tokenLogs(byToken.get(address)!, from, to)
-                  : [];
+              : address === DEMO_PLAIN.token
+                ? plainTokenLogs(from, to)
+                : byCurve.has(address)
+                  ? curveLogs(byCurve.get(address)!, from, to)
+                  : byToken.has(address)
+                    ? tokenLogs(byToken.get(address)!, from, to)
+                    : [];
           return ok((all as { topics: string[] }[]).filter((log) => matchesTopics(log.topics, f.topics)));
         }
         case "eth_getCode": {
@@ -483,6 +485,29 @@ export function demoBlockscoutFetch(): typeof fetch {
     }
     return new Response("not found", { status: 404 });
   }) as typeof fetch;
+}
+
+/**
+ * Transfers of the plain token, so the explorer-less path has something to read.
+ * On a chain with no Blockscout this is the only way a holder is found, and
+ * without it the sale simulation would not run at all.
+ */
+function plainTokenLogs(from: number, to: number) {
+  const logs: unknown[] = [];
+  const recipients = DEMO_PLAIN.holders.filter(([, , isContract]) => !isContract).map(([hash]) => hash);
+  recipients.forEach((who, i) => {
+    const b = DEMO.head - 40 + i;
+    if (b < from || b > to) return;
+    logs.push({
+      address: DEMO_PLAIN.token,
+      topics: [eventTopic(ERC20_EVENTS.Transfer), addressTopic(DEMO_PLAIN.pool), addressTopic(who)],
+      data: `0x${encodeWord("uint256", 10n ** 21n)}`,
+      blockNumber: `0x${b.toString(16)}`,
+      transactionHash: `0xdemoplainxfer${i}`,
+      logIndex: `0x${i.toString(16)}`,
+    });
+  });
+  return logs;
 }
 
 function tokenLogs(t: DemoToken, from: number, to: number) {
