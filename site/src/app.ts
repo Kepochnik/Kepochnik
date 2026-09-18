@@ -12,6 +12,9 @@ import { CHAINS, chainByKey, type ChainConfig } from "../../src/chain/chains.js"
 import { PHASE_LABEL } from "../../src/chain/pons.js";
 import { PonsReader } from "../../src/chain/reader.js";
 import { RpcClient } from "../../src/chain/rpc.js";
+import { SolanaRpc } from "../../src/chain/solana.js";
+import { isSolanaAddress } from "../../src/chain/base58.js";
+import { readSplDoor, type SplSlip } from "../../src/bouncer/spl.js";
 import { findBlockByTimestamp } from "../../src/chain/tape.js";
 import { doorCard } from "../../src/bouncer/card.js";
 import { coverChargeLine } from "../../src/bouncer/coverCharge.js";
@@ -109,6 +112,8 @@ function setView(next: View): void {
 /** One box, any input: a token or curve, a transaction hash, or "token wallet". */
 function detect(raw: string): { view: View; parts: string[] } | null {
   const parts = raw.trim().split(/[\s,]+/).filter(Boolean);
+  // A Solana mint is base58 and has no 0x, so it can only be a door subject.
+  if (parts.length === 1 && chain().family === "solana" && mode === "live" && isSolanaAddress(parts[0])) return { view: "door", parts };
   if (parts.length === 2 && ADDR.test(parts[0]) && ADDR.test(parts[1])) return { view: "wallet", parts };
   if (parts.length === 1 && ADDR.test(parts[0])) return { view: "door", parts };
   if (parts.length === 1 && /^0x[0-9a-fA-F]{64}$/.test(parts[0])) return { view: "tx", parts };
@@ -137,11 +142,21 @@ function blockscoutFor(): BlockscoutClient | null {
   return new BlockscoutClient({ baseUrl: proxy ? `${proxy}/api/${c.key}` : c.blockscout });
 }
 
-function factoryFor(): string {
+function factoryFor(): string | undefined {
   const c = chain();
+  // A chain with no launchpad still has tokens on it. Refusing every address
+  // because there is no factory to check against would throw away every answer
+  // that needs no factory, which on Base and BNB Chain is all of them.
   const f = (mode === "live" ? factoryInput.value.trim() : "") || c.factory || "";
-  if (!f) throw new Error(`${c.name}: ${c.notes ?? "no factory known; paste it under live settings"}`);
-  return f.toLowerCase();
+  return f ? f.toLowerCase() : undefined;
+}
+
+function solanaRpcFor(): SolanaRpc {
+  const c = chain();
+  const url = rpcInput.value.trim();
+  const proxy = proxyBase();
+  const urls = url ? [url] : proxy ? [`${proxy}/rpc/${c.key}`, ...c.rpc] : c.rpc;
+  return new SolanaRpc({ urls, minSpacingMs: 120 });
 }
 
 const EXAMPLES: { label: string; hint: string; hash: string }[] = [
@@ -218,6 +233,7 @@ function isDemoAddress(address: string): boolean {
 }
 
 async function runDoor(address: string): Promise<void> {
+  if (chain().family === "solana" && mode === "live") return await runSolanaDoor(address);
   if (!ADDR.test(address)) return bad("Paste a 20-byte hex address: the token or its bonding curve, 0x followed by 40 hex characters.");
   if (mode === "demo" && !isDemoAddress(address)) {
     // A real address pasted into the demo: the demo chain would call it an impostor. Go live instead.
@@ -419,6 +435,130 @@ function summarySentence(slip: DoorSlip): string {
   if (slip.dev) parts.push(slip.dev.counts.launched <= 1 ? "first launch from this dev" : `this dev launched ${slip.dev.counts.launched} tokens, ${slip.dev.counts.graduated} graduated`);
   if (slip.rules?.phase === 2 || slip.rules?.phase === 3) parts.push("graduated, pool locked");
   return parts.map((x) => x.charAt(0).toUpperCase() + x.slice(1)).join(". ") + ".";
+}
+
+async function runSolanaDoor(address: string): Promise<void> {
+  if (!isSolanaAddress(address)) return bad("Paste a Solana mint address: 32 bytes written in base58, which looks like EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v.");
+  busy("reading the mint account…");
+  try {
+    const slip = await readSplDoor(solanaRpcFor(), address, chain());
+    done(`slot ${slip.at.slot}${slip.at.timestamp ? ` · ${isoUtc(slip.at.timestamp)}` : ""} · ${slip.notes.length} thing${slip.notes.length === 1 ? "" : "s"} to know`);
+    renderSplSlip(slip);
+  } catch (error) {
+    failed(error, address);
+  } finally {
+    go.disabled = false;
+  }
+}
+
+function renderSplSlip(slip: SplSlip): void {
+  const m = slip.mint;
+  const sym = slip.metadata?.symbol ? esc(slip.metadata.symbol) : shortSol(slip.subject);
+  const name = slip.metadata?.name ? esc(slip.metadata.name) : slip.whatItIs ? esc(slip.whatItIs) : "no on-chain name";
+  const ext = (kind: string) => m?.extensions.find((e) => e.kind === kind);
+  const fee = ext("transfer-fee");
+  const frozenByDefault = ext("default-account-state");
+  const blocked = Boolean(m?.freezeAuthority) || Boolean(ext("non-transferable")) || (frozenByDefault?.kind === "default-account-state" && frozenByDefault.frozen);
+  const tiles = m
+    ? `<div class="tiles">
+        <div class="tile"><div class="l">Can they freeze you?</div><div class="v ${m.freezeAuthority ? "bad" : ""}">${m.freezeAuthority ? "YES" : "NO"}</div><div class="s">${m.freezeAuthority ? `${esc(shortSol(m.freezeAuthority))} can stop any holder selling` : "the freeze authority is not set and cannot come back"}</div></div>
+        <div class="tile"><div class="l">Can they print more?</div><div class="v ${m.mintAuthority ? "bad" : ""}">${m.mintAuthority ? "YES" : "NO"}</div><div class="s">${m.mintAuthority ? `${esc(shortSol(m.mintAuthority))} holds the mint authority` : "the supply is fixed for good"}</div></div>
+        <div class="tile"><div class="l">Tax per transfer</div><div class="v ${fee?.kind === "transfer-fee" && fee.feeBps >= 500 ? "bad" : ""}">${fee?.kind === "transfer-fee" ? `${(fee.feeBps / 100).toFixed(2)}%` : "0%"}</div><div class="s">${fee?.kind === "transfer-fee" ? (fee.nextFeeBps !== fee.feeBps ? `changing to ${(fee.nextFeeBps / 100).toFixed(2)}% at epoch ${fee.nextFeeEpoch}` : fee.feeAuthority ? "and it can still be changed" : "fixed for good") : "no Token-2022 transfer fee"}</div></div>
+        <div class="tile"><div class="l">Top 10 holders</div><div class="v ${slip.holders && slip.holders.top10Bps !== null && slip.holders.top10Bps >= 5_000 ? "bad" : ""}">${slip.holders && slip.holders.top10Bps !== null ? `${(slip.holders.top10Bps / 100).toFixed(0)}%` : "—"}</div><div class="s">${slip.holders?.distinctOwners ? `of supply · ${slip.holders.distinctOwners} distinct wallets` : "not read"}</div></div>
+      </div>`
+    : "";
+  const notes = slip.notes.map((n) => `<div class="note"><span class="lvl ${n.level}">${LEVEL_WORD[n.level as Level]}</span><span>${esc(n.text)}</span></div>`).join("");
+  const explorer = chain().explorerUrl;
+  const link = (addr: string) => (explorer ? `<a href="${esc(explorer)}/account/${esc(addr)}" target="_blank" rel="noopener"><span class="mono">${esc(shortSol(addr))}</span></a>` : `<span class="mono">${esc(shortSol(addr))}</span>`);
+  const idBody = m
+    ? `<dl class="kv">
+        <dt>chain</dt><dd>${esc(slip.chain.name)} · no launchpad known here, so this is the ordinary-token check</dd>
+        <dt>program</dt><dd>${m.token2022 ? "Token-2022, which is where fees, hooks and delegates live" : "SPL Token, the classic program with no extensions"}</dd>
+        <dt>supply</dt><dd>${esc(formatSupply(m.supply, m.decimals))} · ${m.decimals} decimals</dd>
+        <dt>mint authority</dt><dd>${m.mintAuthority ? `${link(m.mintAuthority)} <span class="flag bad">can print more</span>` : '<span class="flag ok">none</span> the supply is fixed'}</dd>
+        <dt>freeze authority</dt><dd>${m.freezeAuthority ? `${link(m.freezeAuthority)} <span class="flag bad">can stop a holder selling</span>` : '<span class="flag ok">none</span> holders cannot be frozen'}</dd>
+        ${slip.metadata ? `<dt>name</dt><dd>${esc(slip.metadata.name)} (${esc(slip.metadata.symbol)}) · ${slip.metadata.isMutable ? '<span class="flag bad">can be renamed</span>' : '<span class="flag ok">frozen</span>'} · ${slip.metadataInline ? "from the Token-2022 extension" : "from Metaplex"}</dd>` : ""}
+      </dl>`
+    : `<dl class="kv"><dt>what it is</dt><dd>${esc(slip.whatItIs ?? "not an SPL mint")}</dd></dl>`;
+  const extBody = m && m.extensions.length
+    ? `<div class="tbl"><table class="buys"><thead><tr><th>extension</th><th>what it means for a holder</th></tr></thead><tbody>${m.extensions
+        .map((e) => `<tr><td><span class="mono">${esc(e.kind)}</span></td><td>${esc(SPL_EXTENSION_MEANING[e.kind] ?? "not read here")}</td></tr>`)
+        .join("")}</tbody></table></div>`
+    : "";
+  const holdersBodyText = slip.holders && slip.holders.top.length
+    ? `<dl class="kv"><dt>distinct wallets</dt><dd>${slip.holders.distinctOwners ?? "unknown"} among the ${slip.holders.top.length} largest accounts</dd>
+        <dt>top 10</dt><dd>${slip.holders.top10Bps === null ? "unknown" : `${(slip.holders.top10Bps / 100).toFixed(1)}% of supply`}</dd></dl>
+      <div class="tbl"><table class="buys"><thead><tr><th>#</th><th>wallet</th><th>share</th></tr></thead><tbody>${slip.holders.top
+        .slice(0, 15)
+        .map((h, i) => `<tr><td>${i + 1}</td><td>${h.owner ? link(h.owner) : `${link(h.account)} <span class="flag">account</span>`}</td><td>${h.bps === null ? "unknown" : `${(h.bps / 100).toFixed(2)}%`}</td></tr>`)
+        .join("")}</tbody></table></div>`
+    : "";
+
+  out.innerHTML = `<div class="slip">
+    <div class="summary">
+      <div class="top">
+        <div class="who"><div class="sym">${sym}</div><div class="name">${name}</div><div class="addr">${esc(slip.subject)}</div><div class="at">${esc(slip.chain.name)} · slot ${slip.at.slot}${slip.at.timestamp ? ` · ${isoUtc(slip.at.timestamp)}` : ""}</div></div>
+        <div class="stamp ${slip.stamp === "NOT A LAUNCH" ? "mid" : "no"}">${slip.stamp}</div>
+      </div>
+      <p class="lead">${esc(splSentence(slip, blocked))}</p>
+      ${tiles}
+      <div class="actions" style="margin-top:16px">
+        <button class="ghost" id="act-json" type="button">Copy JSON</button>
+        <button class="ghost" id="act-link" type="button">Copy link</button>
+      </div>
+    </div>
+    <div class="notes"><h2>What to know</h2>${notes}</div>
+    <div class="stack">
+      ${section("s-id", "Is it real?", "What this address actually is, who can print more of it, and who can freeze what you hold.", idBody, true)}
+      ${extBody ? section("s-ext", "Token-2022 extensions", "The rules the token program itself enforces on every transfer.", extBody, true) : ""}
+      ${holdersBodyText ? section("s-holders", "Who holds it", "The largest token accounts and the wallets behind them.", holdersBodyText, true) : ""}
+    </div>
+  </div>`;
+  $("act-json").addEventListener("click", async () => {
+    try { await navigator.clipboard.writeText(slipJson(slip)); showToast("JSON copied"); } catch { showToast("Clipboard blocked; use the CLI --format json"); }
+  });
+  $("act-link").addEventListener("click", async () => {
+    const url = `${location.origin}${location.pathname}#/t/${slip.subject}?chain=${chain().key}`;
+    try { await navigator.clipboard.writeText(url); showToast("Link copied"); } catch { showToast(url); }
+  });
+}
+
+const SPL_EXTENSION_MEANING: Record<string, string> = {
+  "transfer-fee": "every transfer pays a percentage to the token, and someone may be able to raise it",
+  "permanent-delegate": "one address can move or burn your tokens without your signature",
+  "transfer-hook": "someone's program runs on every transfer and can make it fail",
+  "mint-close-authority": "the mint account can be closed once the supply is zero",
+  "default-account-state": "new holders may start frozen, unable to sell until unfrozen",
+  "non-transferable": "the token cannot be sent to anyone at all",
+  pausable: "every transfer can be paused",
+  "interest-bearing": "the displayed balance grows by rule; the real amount does not",
+  "metadata-pointer": "where the name and symbol live",
+  "token-metadata": "the name and symbol, stored on the mint itself",
+};
+
+function splSentence(slip: SplSlip, blocked: boolean): string {
+  const m = slip.mint;
+  if (!m) return `This address is not a token: it is ${slip.whatItIs ?? "not an SPL mint"}.`;
+  const parts: string[] = [];
+  if (m.freezeAuthority) parts.push("somebody can freeze your account, which is how a holder is stopped from selling");
+  else parts.push("nobody can freeze your account");
+  parts.push(m.mintAuthority ? "somebody can print more" : "the supply is fixed");
+  const fee = m.extensions.find((e) => e.kind === "transfer-fee");
+  if (fee?.kind === "transfer-fee") parts.push(`every transfer pays ${(fee.feeBps / 100).toFixed(2)}%${fee.nextFeeBps !== fee.feeBps ? `, rising to ${(fee.nextFeeBps / 100).toFixed(2)}%` : ""}`);
+  if (m.extensions.some((e) => e.kind === "permanent-delegate")) parts.push("a permanent delegate can take your tokens");
+  if (m.extensions.some((e) => e.kind === "transfer-hook")) parts.push("someone's program runs on every transfer");
+  if (blocked && !m.freezeAuthority) parts.push("transfers are blocked by the token's own rules");
+  if (slip.holders?.top10Bps != null) parts.push(`the 10 largest wallets hold ${(slip.holders.top10Bps / 100).toFixed(0)}%`);
+  return parts.map((x) => x.charAt(0).toUpperCase() + x.slice(1)).join(". ") + ".";
+}
+
+function shortSol(address: string): string {
+  return address.length > 12 ? `${address.slice(0, 4)}…${address.slice(-4)}` : address;
+}
+
+function formatSupply(value: bigint, decimals: number): string {
+  const whole = value / 10n ** BigInt(decimals);
+  return whole.toLocaleString("en-US");
 }
 
 function openDoorSentence(slip: DoorSlip): string {
@@ -959,10 +1099,11 @@ function submit(): void {
   else if (view === "dev" && ADDR.test(v)) hash = `#/dev/${v.toLowerCase()}?chain=${c}`;
   else {
     const found = detect(v);
-    if (!found) return bad("Paste a token or curve address (0x + 40 hex characters), a transaction hash (0x + 64), or a token and a wallet address separated by a space.");
+    if (!found) return bad(chain().family === "solana" && mode === "live" ? "Paste a Solana mint address: 32 bytes in base58, like EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v." : "Paste a token or curve address (0x + 40 hex characters), a transaction hash (0x + 64), or a token and a wallet address separated by a space.");
     if (found.view === "wallet") hash = `#/wallet/${found.parts[0].toLowerCase()}/${found.parts[1].toLowerCase()}?chain=${c}`;
     else if (found.view === "tx") hash = `#/tx/${found.parts[0]}?chain=${c}`;
-    else hash = `#/${mode === "demo" ? "demo" : "t"}/${found.parts[0].toLowerCase()}${mode === "demo" ? "" : `?chain=${c}`}`;
+    // base58 is case-sensitive: lower-casing a Solana mint makes it a different account.
+    else hash = `#/${mode === "demo" ? "demo" : "t"}/${chain().family === "solana" && mode === "live" ? found.parts[0] : found.parts[0].toLowerCase()}${mode === "demo" ? "" : `?chain=${c}`}`;
   }
   if (location.hash === hash) route();
   else location.hash = hash;
@@ -980,6 +1121,8 @@ function boot(): void {
   chainSelect.addEventListener("change", () => {
     storage("bouncer.chain", chainSelect.value);
     const c = chainByKey(chainSelect.value);
+    // The box asks for a different thing on a chain that does not use hex addresses.
+    q.placeholder = c.family === "solana" ? "a Solana mint address (base58, like EPjFWdd5…yTDt1v)" : "0x… (a token, its curve, a wallet or a transaction hash)";
     $("chain-hint").textContent = `${c.name}${c.chainId ? ` (${c.chainId})` : ""}${c.launchpad ? ` · ${c.launchpad}` : " · no launchpad known here"} · RPC ${c.rpc[0]}${c.blockscout ? ` · explorer ${c.blockscout}` : " · no explorer known, the funder check and same-name search are off"}${c.notes ? ` · ${c.notes}` : ""}`;
     if (mode === "live") setMode("live", true);
     renderChips();
