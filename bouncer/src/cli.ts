@@ -38,6 +38,7 @@ import { readSplDoor, splReceipt } from "./bouncer/spl.js";
 import { readBoard } from "./bouncer/leaderboard.js";
 import { readOneCrew } from "./bouncer/oneCrew.js";
 import { readRoom } from "./bouncer/room.js";
+import { watchToken } from "./bouncer/tokenWatch.js";
 import { watchLaunch } from "./bouncer/watch.js";
 import { formatBps, formatDuration, formatUnits, isoUtc, shortAddress } from "./format.js";
 
@@ -369,11 +370,19 @@ export async function main(argv: string[], write: (text: string) => void = (t) =
       }
 
       case "watch": {
-        requireFactory();
         const token = args.positionals[0] ?? (demo ? DEMO.tokens.late.token : undefined);
         if (!token) throw new Error("usage: bouncer watch <token> [--interval 5] [--crew] [--rounds n]");
         const head = await rpc.blockNumber();
-        const launch = await new PonsReader(rpc, requireFactory()).launchedToken(token, head);
+        const maybeLaunch = await launchOrNull(rpc, token, head, chain, args);
+        if (!maybeLaunch) {
+          // A Pons V1 launch, an ordinary ERC-20, a token on a chain with no
+          // launchpad at all. There is no curve tape, but the token's own
+          // Transfer log and the addresses of its pools say the same thing:
+          // who is moving, and which way. Refusing here would mean the
+          // launchpad's own $PONS could not be watched.
+          return await watchMarketToken(rpc, token, head, chain, args, write);
+        }
+        const launch = maybeLaunch;
         const backfill = demo ? 300_000 : flagNumber(args.flags, "backfill", Math.round(3600 * chain.blocksPerSecond));
         let crew: string[] = [];
         if (args.flags.crew === true && blockscout) {
@@ -552,6 +561,48 @@ async function marketBag(rpc: RpcClient, token: string, wallet: string, head: nu
       asReceiptFormat(format),
     ),
   );
+  return 0;
+}
+
+/**
+ * The tape for a token with no V2 curve: its own transfers, with the pools
+ * named so a transfer into one reads as a sale.
+ */
+async function watchMarketToken(
+  rpc: RpcClient,
+  token: string,
+  head: number,
+  chain: ChainConfig,
+  args: ParsedArgs,
+  write: (text: string) => void,
+): Promise<number> {
+  const demo = args.flags.demo === true;
+  const meta = await readTokenMeta(rpc, token, head).catch(() => null);
+  const decimals = meta?.decimals ?? 18;
+  const supply = await readSupply(rpc, token, head).catch(() => 0n);
+  const pools = chain.dex ? await readPools(rpc, token.toLowerCase(), chain.dex, head, decimals) : [];
+  const watch = (flagString(args.flags, "wallet") ?? "").split(",").map((w) => w.trim()).filter(Boolean);
+  const minShareBps = Math.round(flagNumber(args.flags, "min", 0.25) * 100);
+  const backfill = flagNumber(args.flags, "backfill", Math.round(3600 * chain.blocksPerSecond));
+  write(
+    `watching ${token.toLowerCase()}${meta ? ` (${meta.symbol})` : ""} on ${chain.name} from block ${Math.max(0, head - backfill)}\n` +
+      `${pools.length ? `${pools.length} pool${pools.length > 1 ? "s" : ""}: ${pools.map((p) => `${p.dex} ${p.kind} ${shortAddress(p.address)}`).join(", ")}` : "no pool found, so every line below is a move between wallets"}\n` +
+      `${supply > 0n ? `reporting moves of ${(minShareBps / 100).toFixed(2)}% of supply or more` : "total supply could not be read, so every transfer is reported"}${watch.length ? `, and anything at all touching ${watch.map(shortAddress).join(", ")}` : ""}\n`,
+  );
+  await watchToken(rpc, token, {
+    fromBlock: Math.max(0, head - backfill),
+    intervalMs: flagNumber(args.flags, "interval", demo ? 0 : 5) * 1000,
+    maxRounds: demo ? 1 : flagNumber(args.flags, "rounds", 0) || undefined,
+    pools: pools.map((p) => p.address),
+    watch,
+    supply,
+    decimals,
+    minShareBps,
+    chunkSize: flagNumber(args.flags, "chunk", 0) || undefined,
+    onEvent: (e) => write(`${String(e.block).padStart(10)}  ${e.kind.padEnd(19)} ${e.text}  ${e.tx}\n`),
+    onRound: (h) => { if (args.flags.quiet !== true) write(`  · block ${h}\n`); },
+    sleep: demo ? async () => {} : undefined,
+  });
   return 0;
 }
 

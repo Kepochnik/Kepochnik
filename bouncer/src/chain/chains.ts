@@ -150,7 +150,7 @@ export const CHAINS: Record<string, ChainConfig> = {
     name: "Solana",
     family: "solana",
     chainId: 0,
-    rpc: ["https://api.mainnet-beta.solana.com", "https://solana-rpc.publicnode.com"],
+    rpc: ["https://api.mainnet-beta.solana.com", "https://solana-rpc.publicnode.com", "https://solana.drpc.org"],
     blockscout: null,
     explorerUrl: "https://solscan.io",
     factory: null,
