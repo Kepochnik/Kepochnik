@@ -28,9 +28,9 @@
  */
 import { base58Decode, base58Encode } from "./base58.js";
 import { findProgramAddress, type AccountInfo, type SolanaRpc } from "./solana.js";
+import { readDerivedPools, USDC, WSOL } from "./solanaDerived.js";
 
-export const WSOL = "So11111111111111111111111111111111111111112";
-export const USDC = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
+export { WSOL, USDC } from "./solanaDerived.js";
 export const PUMP_PROGRAM = "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P";
 
 /** Pool programs whose vaults are owned by the pool account itself. */
@@ -286,10 +286,32 @@ export async function readSolanaMarket(rpc: SolanaRpc, mint: string, position: b
     };
   }
 
+  // Derived first: the addresses are worked out locally and read with
+  // getMultipleAccounts, which answers. The holder walk needs
+  // getTokenLargestAccounts, which free endpoints refuse, so it is an extra
+  // rather than the foundation — it catches venues that have no derivable
+  // address, and costs nothing when it has already been done for the holders.
   let pools: SolanaPool[] = [];
+  let derivedFailed = false;
   try {
-    pools = await readSolanaPools(rpc, mint, scan);
+    pools = await readDerivedPools(rpc, mint);
   } catch {
+    derivedFailed = true;
+  }
+  // The walk is worth its cost in two cases: when the scan it needs has
+  // already been paid for by the holder list, and when derivation found
+  // nothing at all. Paying twenty-six seconds for extra venues on top of ones
+  // already in hand is not a trade worth making for the reader.
+  if (scan || !pools.length) {
+    try {
+      const walked = await readSolanaPools(rpc, mint, scan);
+      for (const p of walked) if (!pools.some((seen) => seen.address === p.address)) pools.push(p);
+      pools.sort((a, b) => (b.quoteReserve > a.quoteReserve ? 1 : b.quoteReserve < a.quoteReserve ? -1 : 0));
+    } catch {
+      // the walk is the optional half; losing it costs the venues only it finds
+    }
+  }
+  if (!pools.length && derivedFailed) {
     return { ...empty, curve, note: "The pools could not be read from this endpoint." };
   }
   if (!pools.length) {
@@ -299,7 +321,7 @@ export async function readSolanaMarket(rpc: SolanaRpc, mint: string, position: b
     // of a memecoin, and false of a token like USDC whose largest accounts are
     // all exchanges. "No pool found" here is a statement about this search, not
     // about the token.
-    const how = "Pools are found by walking the twenty largest accounts holding this mint and asking which of them belong to a DEX. For a token whose biggest holders are exchanges or treasuries rather than pools, that search comes up empty even though pools exist.";
+    const how = "Pools are found two ways: the address an Orca Whirlpool or Raydium CPMM pool for this pair would live at is worked out locally and read directly, and — when the endpoint serves it — the twenty largest accounts holding the mint are walked for vaults belonging to any other DEX. A venue with neither a derivable address nor a vault among the largest holders is not seen.";
     return { ...empty, curve, note: `${curve?.complete ? "The bonding curve has graduated, but no" : "No"} pool against SOL or USDC turned up. ${how}` };
   }
 

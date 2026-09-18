@@ -195,14 +195,11 @@ export async function readSplDoor(rpc: SolanaRpc, input: string, chain: ChainCon
     };
   })();
 
-  // Where it trades. The pool search walks the same largest-accounts scan, so
-  // when that did not answer there is nothing here to try again — repeating a
-  // call that has just failed on every endpoint only spends the reader's time
-  // to reach the same conclusion.
-  if (!options.skipMarket && !scan) {
-    slip.skipped.push({ section: "market", reason: "it is found from the largest accounts holding the mint, and that read did not answer" });
-  }
-  const readMarket = options.skipMarket || !scan
+  // Where it trades. This no longer depends on the scan above: the pools whose
+  // address can be derived are read directly, and the scan only adds the ones
+  // that cannot. So a refused getTokenLargestAccounts costs the holder list
+  // and some venues, not the prices.
+  const readMarket = options.skipMarket
     ? Promise.resolve()
     : attempt(
         "market",
