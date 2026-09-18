@@ -74,3 +74,36 @@ jobs:
         run: node bin/bouncer.mjs door "$ADDR" --chain "$CHAIN" --no-dev --no-crew --format json | head -c 12000 || true
       - name: bouncer doctor
         run: node bin/bouncer.mjs doctor --chain "${{ inputs.chain }}" || true
+      - name: Which Solana endpoints serve the heavy reads
+        if: inputs.chain == 'solana'
+        run: |
+          # getTokenLargestAccounts is what the holder list rests on, and the
+          # live profile showed it refused by every endpoint in the table at a
+          # cost of twenty-six seconds. This asks each candidate directly, so
+          # the table can be chosen from evidence rather than from reputation.
+          MINT=EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v
+          for URL in \
+            https://api.mainnet-beta.solana.com \
+            https://solana-rpc.publicnode.com \
+            https://solana.drpc.org \
+            https://rpc.ankr.com/solana \
+            https://solana.public-rpc.com \
+            https://endpoints.omniatech.io/v1/sol/mainnet/public \
+            https://solana.api.onfinality.io/public \
+            https://api.blockeden.xyz/solana/67nCBdZQSH9z3YqDDjdm ; do
+            for METHOD in getTokenLargestAccounts getTokenAccountsByOwner getMultipleAccounts ; do
+              case "$METHOD" in
+                getTokenLargestAccounts) BODY="{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"$METHOD\",\"params\":[\"$MINT\"]}" ;;
+                getTokenAccountsByOwner) BODY="{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"$METHOD\",\"params\":[\"$MINT\",{\"programId\":\"TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA\"},{\"encoding\":\"base64\"}]}" ;;
+                *) BODY="{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"$METHOD\",\"params\":[[\"$MINT\"],{\"encoding\":\"base64\"}]}" ;;
+              esac
+              START=$(date +%s%3N)
+              CODE=$(curl -sS -m 20 -o /tmp/p.json -w '%{http_code}' -X POST "$URL" -H 'content-type: application/json' -d "$BODY" 2>/dev/null || echo 000)
+              MS=$(( $(date +%s%3N) - START ))
+              if [ "$CODE" = "200" ] && grep -q '"result"' /tmp/p.json; then
+                echo "OK    $METHOD  ${MS}ms  $URL"
+              else
+                echo "NO    $METHOD  ${MS}ms  http $CODE  $URL  $(head -c 120 /tmp/p.json | tr -d '\n')"
+              fi
+            done
+          done
