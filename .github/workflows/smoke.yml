@@ -76,7 +76,11 @@ jobs:
               REQUIRE_VENUE=$([ "$SUBJECT" = "$MINT" ] && echo no || echo yes) node -e '
                 const j = JSON.parse(require("fs").readFileSync("/tmp/m.json","utf8"));
                 const m = j.market;
-                if (!m) { console.error("::error::no market section on the slip at all (the read was skipped or timed out)"); process.exit(1); }
+                if (!m) {
+                  console.error("::error::no market section on the slip at all");
+                  for (const sk of j.skipped || []) console.error("  skipped:", sk.section, "-", sk.reason);
+                  process.exit(1);
+                }
                 console.log("venue:", m.best ? m.best.name : "none", "| pools:", m.pools.length, "| curve:", m.curve ? (m.curve.complete ? "graduated" : "live") : "no");
                 for (const p of m.pools) console.log("  ", p.name, p.concentrated ? "(ranged)" : "", String(p.quoteReserve), p.quoteSymbol);
                 for (const q of m.quotes) console.log("   sell", q.shareBps/100 + "%:", String(q.out), m.quoteSymbol, "(" + (q.realisedBps/100).toFixed(1) + "% of spot)");
