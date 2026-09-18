@@ -1,18 +1,28 @@
 name: probe
 
-# A read-only look at one address from a runner with internet access:
-# what Blockscout knows about it, and what the CLI says. Handy when the
-# machine driving the repo cannot reach the chain itself.
+# A read-only look at the chain from a runner with internet access: what
+# Blockscout knows about one address, what the CLI says, and any extra
+# GET urls or raw JSON-RPC bodies the caller passes. Handy when the machine
+# driving the repo cannot reach the chain itself.
 on:
   workflow_dispatch:
     inputs:
       address:
         description: "Address to look at"
-        required: true
+        required: false
+        default: ""
       chain:
         description: "Chain key"
         required: false
         default: "robinhood"
+      urls:
+        description: "Extra GET urls, one per line"
+        required: false
+        default: ""
+      rpc:
+        description: "Raw JSON-RPC request bodies, one per line"
+        required: false
+        default: ""
 
 jobs:
   probe:
@@ -24,18 +34,40 @@ jobs:
           node-version: 22
       - run: npm ci && npm run build
       - name: Blockscout
+        if: inputs.address != ''
         env:
           ADDR: ${{ inputs.address }}
         run: |
           B=https://robinhoodchain.blockscout.com
           echo "=== address"; curl -sS "$B/api/v2/addresses/$ADDR" | head -c 1500; echo
           echo "=== contract"; curl -sS "$B/api/v2/smart-contracts/$ADDR" | head -c 1500; echo
-          echo "=== tokens"; curl -sS "$B/api/v2/tokens/$ADDR" | head -c 800; echo
-          echo "=== creation tx"; curl -sS "$B/api/v2/addresses/$ADDR/transactions?filter=to" | head -c 400; echo
+          echo "=== token"; curl -sS "$B/api/v2/tokens/$ADDR" | head -c 800; echo
+          echo "=== counters"; curl -sS "$B/api/v2/tokens/$ADDR/counters" | head -c 400; echo
+          echo "=== holders"; curl -sS "$B/api/v2/tokens/$ADDR/holders" | head -c 3000; echo
+          echo "=== transfers"; curl -sS "$B/api/v2/tokens/$ADDR/transfers" | head -c 1500; echo
+      - name: Extra urls
+        if: inputs.urls != ''
+        env:
+          URLS: ${{ inputs.urls }}
+        run: |
+          printf '%s\n' "$URLS" | while IFS= read -r u; do
+            [ -z "$u" ] && continue
+            echo "=== GET $u"; curl -sS "$u" | head -c 4000; echo
+          done
+      - name: Raw JSON-RPC
+        if: inputs.rpc != ''
+        env:
+          RPC: ${{ inputs.rpc }}
+        run: |
+          printf '%s\n' "$RPC" | while IFS= read -r body; do
+            [ -z "$body" ] && continue
+            echo "=== RPC $body"; curl -sS -H 'content-type: application/json' --data "$body" https://rpc.mainnet.chain.robinhood.com | head -c 4000; echo
+          done
       - name: bouncer door
+        if: inputs.address != ''
         env:
           ADDR: ${{ inputs.address }}
           CHAIN: ${{ inputs.chain }}
-        run: node bin/bouncer.mjs door "$ADDR" --chain "$CHAIN" --no-dev --no-crew --no-lookalikes --format json | head -c 6000 || true
+        run: node bin/bouncer.mjs door "$ADDR" --chain "$CHAIN" --no-dev --no-crew --format json | head -c 12000 || true
       - name: bouncer doctor
         run: node bin/bouncer.mjs doctor --chain "${{ inputs.chain }}" || true
