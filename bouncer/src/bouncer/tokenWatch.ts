@@ -16,7 +16,7 @@
  */
 import { ERC20_EVENTS } from "../chain/pons.js";
 import type { RpcClient } from "../chain/rpc.js";
-import { addressTopic, readTape } from "../chain/tape.js";
+import { readTapeAdaptive } from "../chain/tape.js";
 import { formatUnits, shortAddress } from "../format.js";
 
 export type TokenWatchKind = "sold-into-pool" | "bought-from-pool" | "moved" | "minted" | "burned";
@@ -46,6 +46,7 @@ export interface TokenWatchOptions {
   decimals?: number;
   /** Smallest move worth a line, in basis points of supply. Default 25 (0.25%). */
   minShareBps?: number;
+  /** First block span to ask for. It halves on refusal and grows on success. */
   chunkSize?: number;
 }
 
@@ -59,13 +60,17 @@ export async function readTokenWatchEvents(rpc: RpcClient, token: string, option
   const pools = new Set((options.pools ?? []).map((p) => p.toLowerCase()));
   const watched = new Set((options.watch ?? []).map((w) => w.toLowerCase()));
 
-  const tape = await readTape(rpc, {
-    address: token.toLowerCase(),
-    events: [ERC20_EVENTS.Transfer],
-    fromBlock: options.fromBlock,
-    toBlock: options.toBlock,
-    chunkSize: options.chunkSize ?? 2_000,
-  });
+  // A fixed chunk size cannot work here. This reads every Transfer of one
+  // token, and a busy one — USDC on Base — puts more logs in a few hundred
+  // blocks than any public endpoint will return, which comes back as a flat
+  // 400 rather than as a partial answer. So the span adapts, and its floor is
+  // a single block: one block always fits, and stopping at a thousand would
+  // mean the busiest tokens are exactly the ones that cannot be watched.
+  const tape = await readTapeAdaptive(
+    rpc,
+    { address: token.toLowerCase(), events: [ERC20_EVENTS.Transfer], fromBlock: options.fromBlock, toBlock: options.toBlock },
+    { minChunk: 1, startChunk: options.chunkSize ?? 200, maxChunk: 5_000 },
+  );
 
   const events: TokenWatchEvent[] = [];
   for (const log of tape.logs) {

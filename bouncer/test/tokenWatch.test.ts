@@ -104,3 +104,38 @@ test("the loop advances its cursor past the head it already read", async () => {
   assert.deepEqual(seen, [10]);
   assert.equal(cursor, 43, "the next round must start after the block already scanned");
 });
+
+test("a busy token is read by narrowing the span, down to a single block", async () => {
+  // USDC on Base is the real case: the endpoint answers 400 rather than
+  // returning a partial page, and a floor of a thousand blocks would mean the
+  // busiest tokens are the ones that cannot be watched at all.
+  const MAX_SPAN = 1;
+  const spans: number[] = [];
+  const rpc = {
+    blockNumber: async () => 100,
+    getLogs: async ({ fromBlock, toBlock }: { fromBlock: number; toBlock: number }) => {
+      const span = toBlock - fromBlock + 1;
+      spans.push(span);
+      if (span > MAX_SPAN) throw new Error("query returned more than 10000 results");
+      return fromBlock === 10 ? [transfer(10, WHALE, POOL, SUPPLY / 50n)] : [];
+    },
+  } as unknown as RpcClient;
+
+  const events = await readTokenWatchEvents(rpc, TOKEN, { fromBlock: 0, toBlock: 20, pools: [POOL], supply: SUPPLY });
+  assert.equal(events.length, 1, "the transfer must still be found once the span is small enough");
+  assert.equal(events[0].kind, "sold-into-pool");
+  assert.ok(spans.some((s) => s > MAX_SPAN), "it should start wide rather than crawling from block one");
+  assert.ok(spans.includes(1), "and narrow all the way to a single block when that is what the endpoint takes");
+});
+
+test("an endpoint that refuses even a single block is an error, never a quietly empty tape", async () => {
+  const rpc = {
+    blockNumber: async () => 100,
+    getLogs: async () => { throw new Error("upstream unavailable"); },
+  } as unknown as RpcClient;
+  await assert.rejects(
+    () => readTokenWatchEvents(rpc, TOKEN, { fromBlock: 0, toBlock: 20, supply: SUPPLY }),
+    /upstream unavailable/,
+    "a failed read must not look like a quiet token",
+  );
+});
