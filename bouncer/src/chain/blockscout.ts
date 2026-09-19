@@ -86,9 +86,36 @@ export class BlockscoutClient {
   /** Browsers drop the user-agent header silently; Node and workers send it, which keeps bot challenges away. */
   static readonly USER_AGENT = "Mozilla/5.0 (compatible; bouncer/0.3; +https://github.com/Kepochnik/bouncer)";
 
+  /**
+   * Calls and milliseconds per endpoint, the same way the RPC clients count.
+   *
+   * Added after a profile that did not add up: a door's fast half took 8.7
+   * seconds and every RPC call in it summed to 4.6. The missing 4.1 seconds
+   * were here and invisible, which is the same blind spot that cost an
+   * afternoon of wrong guesses on the Solana side. A client this slip waits
+   * on has to be countable.
+   */
+  private readonly counters = new Map<string, { calls: number; ms: number; failures: number }>();
+
+  stats(): { path: string; calls: number; ms: number; failures: number }[] {
+    return [...this.counters.entries()].map(([path, v]) => ({ path, ...v })).sort((a, b) => b.ms - a.ms);
+  }
+
+  private record(path: string, ms: number, failed: boolean): void {
+    // By endpoint shape, not by URL: "/tokens/0x…/holders" and the next
+    // token's are the same call and belong in one row.
+    const key = path.replace(/0x[0-9a-fA-F]{40,}/g, "{address}").replace(/\?.*$/, "").replace(/\/[1-9A-HJ-NP-Za-km-z]{32,44}(?=\/|$)/g, "/{mint}");
+    const entry = this.counters.get(key) ?? { calls: 0, ms: 0, failures: 0 };
+    entry.calls += 1;
+    entry.ms += ms;
+    if (failed) entry.failures += 1;
+    this.counters.set(key, entry);
+  }
+
   async get<T>(path: string): Promise<T> {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.timeoutMs);
+    const startedAt = Date.now();
     try {
       const headers: Record<string, string> = { accept: "application/json" };
       // Browsers drop a user-agent set on fetch, so setting it there is at best
@@ -96,7 +123,15 @@ export class BlockscoutClient {
       if (typeof globalThis.window === "undefined") headers["user-agent"] = BlockscoutClient.USER_AGENT;
       const response = await this.fetchImpl(`${this.baseUrl}${path}`, { method: "GET", headers, signal: controller.signal });
       if (!response.ok) throw new Error(`blockscout ${response.status} for ${path}`);
-      return (await response.json()) as T;
+      const body = (await response.json()) as T;
+      this.record(path, Date.now() - startedAt, false);
+      return body;
+    } catch (error) {
+      // Recorded after the body, not before the request: a call that failed
+      // parsing is a failure, and counting it as a success was exactly the
+      // bug that made the EVM profiler lie about retries earlier today.
+      this.record(path, Date.now() - startedAt, true);
+      throw error;
     } finally {
       clearTimeout(timer);
     }

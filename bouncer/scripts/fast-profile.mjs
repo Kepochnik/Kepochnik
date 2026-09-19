@@ -17,16 +17,15 @@ import { readDoor } from "../dist/src/bouncer/door.js";
 
 const [, , key = "base", token = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"] = process.argv;
 const chain = CHAINS[key];
-const blockscout = chain.blockscout ? new BlockscoutClient({ baseUrl: chain.blockscout }) : null;
 
 /** The same flags the site uses for its first render. */
 const SLOW = { skipLiquidity: true, skipDev: true, skipRoom: true, skipCrew: true, skipLookalikes: true };
 
-for (const [label, options] of [
-  ["fast pass (what the reader waits for)", { chain, factory: chain.factory || undefined, blockscout, ...SLOW }],
-  ["full pass", { chain, factory: chain.factory || undefined, blockscout }],
-]) {
+for (const [label, slow] of [["fast pass (what the reader waits for)", true], ["full pass", false]]) {
   const rpc = new RpcClient({ urls: chain.rpc, expectedChainId: chain.chainId });
+  // A fresh explorer client per pass, so its counters measure that pass.
+  const blockscout = chain.blockscout ? new BlockscoutClient({ baseUrl: chain.blockscout }) : null;
+  const options = { chain, factory: chain.factory || undefined, blockscout, ...(slow ? SLOW : {}) };
   const started = Date.now();
   try {
     const slip = await readDoor(rpc, token, options);
@@ -34,5 +33,18 @@ for (const [label, options] of [
   } catch (error) {
     console.log(`\n${label}: threw after ${Date.now() - started} ms — ${error instanceof Error ? error.message : error}`);
   }
-  for (const r of rpc.stats()) console.log(`  ${r.method}: ${r.calls} calls, ${r.ms} ms, ${r.failures} failed`);
+  let rpcMs = 0;
+  for (const r of rpc.stats()) {
+    rpcMs += r.ms;
+    console.log(`  rpc ${r.method}: ${r.calls} calls, ${r.ms} ms, ${r.failures} failed`);
+  }
+  let bsMs = 0;
+  for (const r of blockscout?.stats() ?? []) {
+    bsMs += r.ms;
+    console.log(`  explorer ${r.path}: ${r.calls} calls, ${r.ms} ms, ${r.failures} failed`);
+  }
+  // The line that matters. A wall time far above the sum of the calls means
+  // the cost is somewhere nobody is counting, which is how the last four
+  // wrong guesses happened.
+  console.log(`  == rpc ${rpcMs} ms + explorer ${bsMs} ms = ${rpcMs + bsMs} ms of calls`);
 }
