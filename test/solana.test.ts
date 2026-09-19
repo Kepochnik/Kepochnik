@@ -371,3 +371,24 @@ test("one refused read does not take the whole slip down", async () => {
   assert.ok(slip.skipped.some((s) => /rate-limited/i.test(s.reason)), `a 429 should read as a rate limit; got ${JSON.stringify(slip.skipped)}`);
   assert.ok(calls > 3);
 });
+
+test("a throttled endpoint is left behind, not asked again", async () => {
+  // The live failure: getSlot — the lightest call there is — failed once and
+  // took the whole slip with it, because a 429 retried in place. Three
+  // refusals from the same address, and the second endpoint never asked.
+  const tried: string[] = [];
+  const rpc = new SolanaRpc({
+    urls: ["https://throttled.invalid", "https://fine.invalid"],
+    minSpacingMs: 0,
+    fetchImpl: (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      tried.push(url);
+      if (url.startsWith("https://throttled")) return new Response("{}", { status: 429 });
+      return new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, result: 99 }), { status: 200, headers: { "content-type": "application/json" } });
+    }) as unknown as typeof fetch,
+  });
+
+  assert.equal(await rpc.slot(), 99, "the second endpoint must be reached");
+  assert.ok(tried.includes("https://fine.invalid"));
+  assert.ok(tried.filter((u) => u.startsWith("https://throttled")).length <= 2, `the throttled endpoint should not be hammered; got ${tried.length} attempts: ${tried.join(", ")}`);
+});

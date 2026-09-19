@@ -148,6 +148,13 @@ export class SolanaRpc {
           // transient 429. Three tries at 300/600/1200ms rides out a brief
           // throttle in about two seconds and cannot eat a section.
           if (rateLimited >= RATE_LIMIT_RETRIES) throw error;
+          // Move on as well as wait. Retrying in place was the whole bug: an
+          // endpoint that is throttling this caller now will still be
+          // throttling it in a second, while a sibling sits idle, so three
+          // retries were three refusals from the same address and the second
+          // endpoint was never asked. The EVM client has always rotated here;
+          // this one did not, and a list of two behaved like a list of one.
+          if (this.urls.length > 1) this.activeIndex = (this.activeIndex + 1) % this.urls.length;
           await new Promise((resolve) => setTimeout(resolve, 300 * 2 ** rateLimited));
           rateLimited++;
           continue;

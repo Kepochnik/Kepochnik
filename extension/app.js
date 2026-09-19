@@ -1552,6 +1552,7 @@
           lastError = error;
           if (error instanceof SolanaRpcError && error.code === 429) {
             if (rateLimited >= RATE_LIMIT_RETRIES) throw error;
+            if (this.urls.length > 1) this.activeIndex = (this.activeIndex + 1) % this.urls.length;
             await new Promise((resolve) => setTimeout(resolve, 300 * 2 ** rateLimited));
             rateLimited++;
             continue;
