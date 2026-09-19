@@ -4439,8 +4439,11 @@
     const total = considered.reduce((a, p) => a + p.amount, 0n);
     if (total === 0n) return { ...base, unread: "every position found has been withdrawn" };
     const merged = /* @__PURE__ */ new Map();
+    const unresolvedAt = /* @__PURE__ */ new Set();
     for (const p of considered) {
-      const resolved = realOwners.get(`${p.owner}:${p.tx}`) ?? p.owner;
+      const owner = realOwners.get(`${p.owner}:${p.tx}`);
+      const resolved = owner ?? p.owner;
+      if (!owner) unresolvedAt.add(resolved);
       merged.set(resolved, (merged.get(resolved) ?? 0n) + p.amount);
     }
     const addresses = [...merged.keys()];
@@ -4454,7 +4457,9 @@
       const code = codes[i];
       const hasCode = code instanceof Error ? null : typeof code === "string" && code.length > 2;
       const { kind, name } = classify2(address, lockers, hasCode);
-      return { address, kind, name, shareBps: bps2(merged.get(address) ?? 0n, total) };
+      const holder = { address, kind, name, shareBps: bps2(merged.get(address) ?? 0n, total) };
+      if (unresolvedAt.has(address)) holder.unresolved = true;
+      return holder;
     });
     const burnedBps = holders.filter((h) => h.kind === "burned").reduce((a, h) => a + h.shareBps, 0);
     const lockedBps = holders.filter((h) => h.kind === "locked").reduce((a, h) => a + h.shareBps, 0);
@@ -5445,13 +5450,21 @@
           text: `Of the ${l.positionsRead} largest liquidity positions in the ${l.dex} pool (${l.positionsFound} were found), ${pct2(l.freeBps)} can be withdrawn${l.burnedBps ? `, ${pct2(l.burnedBps)} is burned` : ""}${l.lockedBps ? `, ${pct2(l.lockedBps)} is locked` : ""}. ${heldBy} The rest of the pool's positions were not read, so this is not a statement about the whole pool.`
         });
       } else if (l.burnedBps + l.lockedBps === 0 && l.freeBps > 0) {
-        const biggest = held.length ? Math.max(...held.map((h2) => h2.shareBps)) : 0;
-        const enumerated = held.length > 0;
+        const parties = held.filter((h2) => !h2.unresolved);
+        const untraced = held.filter((h2) => h2.unresolved).reduce((a, h2) => a + h2.shareBps, 0);
+        const biggest = parties.length ? Math.max(...parties.map((h2) => h2.shareBps)) : 0;
+        const enumerated = parties.length > 0;
         const concentrated = enumerated && biggest >= 5e3;
+        const untracedNote = untraced > 0 ? ` A further ${pct2(untraced)} sits in positions whose owner could not be traced; that is withdrawable too, and it is not known to be one address.` : "";
         notes.push({
           level: sliver ? "info" : concentrated || !enumerated ? "stop" : "watch",
           code: "liquidity-free",
-          text: enumerated ? concentrated ? `None of the ${l.dex} pool's liquidity is burned or in a locker BOUNCER knows, and one address holds ${pct2(biggest)} of it. ${heldBy} That one address can take most of the pool away on its own, and then there is nothing to sell into.${size}` : `None of the ${l.dex} pool's liquidity is burned or in a locker BOUNCER knows, so all of it can be withdrawn \u2014 but it is spread across ${held.length} holders and the largest has ${pct2(biggest)}, so no single one can empty the pool. ${heldBy} That is the ordinary shape of an unlocked pool, not by itself a trap.${size}` : `Every bit of the ${l.dex} pool's liquidity can be withdrawn: none of it is burned and none sits in a locker BOUNCER knows. Who holds the rest was not enumerated \u2014 this read asks the burn addresses and the lockers it knows, and everything else is the remainder \u2014 so whether that is one address or ten thousand is unknown, and one address would be enough.${size}`
+          text: enumerated ? concentrated ? `None of the ${l.dex} pool's liquidity is burned or in a locker BOUNCER knows, and one address holds ${pct2(biggest)} of it. ${heldBy} That one address can take most of the pool away on its own, and then there is nothing to sell into.${untracedNote}${size}` : `None of the ${l.dex} pool's liquidity is burned or in a locker BOUNCER knows, so all of it can be withdrawn \u2014 but it is spread across ${parties.length} holders and the largest has ${pct2(biggest)}, so no single one can empty the pool. ${heldBy} That is the ordinary shape of an unlocked pool, not by itself a trap.${untracedNote}${size}` : held.length ? (
+            // Positions were found and none of their owners could be traced.
+            // Different from never having looked, and the words have to be
+            // different too: the size is known, the owner is not.
+            `Every bit of the ${l.dex} pool's liquidity can be withdrawn, and none of the positions holding it could be traced to an owner. ${heldBy} How many addresses that is \u2014 one or a hundred \u2014 is unknown, and one would be enough to empty the pool.${size}`
+          ) : `Every bit of the ${l.dex} pool's liquidity can be withdrawn: none of it is burned and none sits in a locker BOUNCER knows. Who holds the rest was not enumerated \u2014 this read asks the burn addresses and the lockers it knows, and everything else is the remainder \u2014 so whether that is one address or ten thousand is unknown, and one address would be enough.${size}`
         });
       } else if (l.freeBps >= 2e3) {
         notes.push({
