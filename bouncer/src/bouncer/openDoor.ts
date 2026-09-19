@@ -245,7 +245,22 @@ export async function readOpenDoor(rpc: RpcClient, token: ContractId, meta: Toke
   // the market read needs it: a DEX the chain's table does not list is found
   // by asking the token's largest contract holders whether they are pools.
   // Started, not awaited — the calls above it have nothing to do with it.
-  const holderList = options.blockscout ? options.blockscout.tokenHolders(address, 50).catch(() => null) : Promise.resolve(null);
+  // Every explorer read, started here and awaited where it is used.
+  //
+  // Measured on Robinhood Chain: the explorer costs more than the chain
+  // does — one /addresses call takes about four seconds, transfers 1.6,
+  // holders 1.1 — and none of it overlapped the RPC work, because the
+  // market was read first and the explorer section ran after it. Two
+  // unrelated servers were being waited on one after the other.
+  //
+  // Started, not awaited: each keeps its own .catch so one slow or refused
+  // read cannot take the others, and nothing below blocks until it needs
+  // the answer.
+  const bsEarly = options.blockscout;
+  const holderList = bsEarly ? bsEarly.tokenHolders(address, 50).catch(() => null) : Promise.resolve(null);
+  const addressInfoP = bsEarly ? bsEarly.addressInfo(address) : null;
+  const tokenInfoP = bsEarly ? bsEarly.tokenInfo(address).catch(() => ({ holders: null, transfers: null, type: null, priceUsd: null, volume24hUsd: null, marketCapUsd: null })) : null;
+  const transfersP = bsEarly ? bsEarly.tokenTransfers(address) : null;
 
   // ---- where it trades, read before the probes so a sale can be simulated into the pool
   let pools: MarketPool[] | null = null;
@@ -375,7 +390,7 @@ export async function readOpenDoor(rpc: RpcClient, token: ContractId, meta: Toke
   if (bs) {
     let info: { isScam: boolean; isVerified: boolean; creator: string | null; creationTx: string | null } | null = null;
     try {
-      const read = await bs.addressInfo(address);
+      const read = await (addressInfoP ?? bs.addressInfo(address));
       info = read;
       verified = read.isVerified;
       if (read.creator) {
@@ -401,7 +416,7 @@ export async function readOpenDoor(rpc: RpcClient, token: ContractId, meta: Toke
     try {
       const [listed, tokenInfo] = await Promise.all([
         holderList,
-        bs.tokenInfo(address).catch(() => ({ holders: null, transfers: null, type: null, priceUsd: null, volume24hUsd: null, marketCapUsd: null })),
+        tokenInfoP ?? bs.tokenInfo(address).catch(() => ({ holders: null, transfers: null, type: null, priceUsd: null, volume24hUsd: null, marketCapUsd: null })),
       ]);
       // The same read the market section used, not a second one. It was
       // started before that section and is long since resolved.
@@ -444,7 +459,7 @@ export async function readOpenDoor(rpc: RpcClient, token: ContractId, meta: Toke
     }
     if (explorer === null && info) explorer = { isScam: info.isScam, priceUsd: null, volume24hUsd: null, marketCapUsd: null, tokenType: null };
     try {
-      activity = summariseActivity(await bs.tokenTransfers(address));
+      activity = summariseActivity(await (transfersP ?? bs.tokenTransfers(address)));
     } catch (error) {
       note(error);
       activity = null;
