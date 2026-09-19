@@ -111,9 +111,16 @@ export interface PoolsOptions {
    * Contracts that hold a lot of this token, to be asked whether they are
    * pools. This is how a DEX that is not in the chain's table gets found —
    * see `discoverPools`. Each candidate costs two calls in one batch.
+   *
+   * A promise is accepted and is the right thing to pass: the list comes
+   * from the explorer, the factories do not need it, and awaiting it up
+   * front would put an explorer round trip in front of every pool read that
+   * could have been running meanwhile.
    */
-  candidates?: { address: string; name?: string | null }[];
+  candidates?: PoolCandidates | Promise<PoolCandidates>;
 }
+
+export type PoolCandidates = { address: string; name?: string | null }[];
 
 /**
  * A DEX table is a list of factories somebody wrote down, which means every
@@ -284,7 +291,8 @@ export async function readPools(rpc: RpcClient, token: string, dex: DexTable, bl
 
   if (!calls.length) {
     const only = await v4;
-    const extra = options.candidates?.length ? await discoverPools(rpc, token, dex.weth, options.candidates, block, new Set(only.map((p) => p.address))).catch(() => []) : [];
+    const candidates = await resolveCandidates(options.candidates);
+    const extra = candidates.length ? await discoverPools(rpc, token, dex.weth, candidates, block, new Set(only.map((p) => p.address))).catch(() => []) : [];
     return [...only, ...extra].sort(byDepth);
   }
 
@@ -308,12 +316,23 @@ export async function readPools(rpc: RpcClient, token: string, dex: DexTable, bl
   // Last: the venues nobody wrote down. Only after the factories have had
   // their say, so a pool already found is not asked about twice, and only
   // when the caller supplied candidates — this costs a batch.
-  if (options.candidates?.length) {
+  const candidates = await resolveCandidates(options.candidates);
+  if (candidates.length) {
     const known = new Set(all.map((p) => p.address));
-    const extra = await discoverPools(rpc, token, dex.weth, options.candidates, block, known).catch(() => []);
+    const extra = await discoverPools(rpc, token, dex.weth, candidates, block, known).catch(() => []);
     all.push(...extra);
   }
   return all.sort(byDepth);
+}
+
+/** The candidate list, whether it arrived as a list or as a read still in flight. A failed read is no candidates, never a thrown market. */
+async function resolveCandidates(candidates: PoolsOptions["candidates"]): Promise<PoolCandidates> {
+  if (!candidates) return [];
+  try {
+    return await candidates;
+  } catch {
+    return [];
+  }
 }
 
 /** Reads each pool's direction, reserves and, for a V3 pool, its price and liquidity. */

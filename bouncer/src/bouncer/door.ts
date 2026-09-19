@@ -12,7 +12,7 @@
 import type { BlockscoutClient } from "../chain/blockscout.js";
 import { DEFAULT_CHAIN, type ChainConfig } from "../chain/chains.js";
 import { decodeOutputs, encodeCall } from "../chain/abi.js";
-import { FACTORY_EVENTS, FACTORY_FUNCTIONS, GraduationPhase, PHASE_LABEL, ZERO_ADDRESS, type LaunchedToken } from "../chain/pons.js";
+import { FACTORY_EVENTS, FACTORY_FUNCTIONS, GraduationPhase, PHASE_LABEL, V1_FACTORY_FUNCTIONS, ZERO_ADDRESS, type LaunchedToken } from "../chain/pons.js";
 import type { RpcClient } from "../chain/rpc.js";
 import { addressTopic, findBlockByTimestamp, readTapeAdaptive } from "../chain/tape.js";
 import { formatBps, formatDuration, formatUnits, isoUtc, shortAddress } from "../format.js";
@@ -150,7 +150,7 @@ export async function readDoor(rpc: RpcClient, input: string, options: DoorOptio
       slip.open = await readOpenDoor(rpc, id.token, id.meta, head.number, {
         blockscout: options.blockscout ?? null,
         dex: chain.dex,
-        lockers: chain.lockers,
+        lockers: await resolveLockers(rpc, chain, factory, id.v1?.factory, head.number),
         liquidity: options.skipLiquidity !== true,
         // A day, not a week. This is read before a trade, and the measured
         // cost of a week on Base was the better part of a minute for a section
@@ -433,6 +433,53 @@ async function resolveV4Manager(rpc: RpcClient, chain: ChainConfig, factory: str
   } catch {
     return undefined; // V4 simply goes unread, which the pools note already covers
   }
+}
+
+/**
+ * The lockers on this chain that BOUNCER can actually verify.
+ *
+ * A table of locker addresses written from memory is the one thing this
+ * codebase refuses to ship, because a wrong entry tells somebody their money
+ * is safe. But a launchpad publishes its own locker: both the V1 and the V2
+ * factory answer `locker()`, and that answer is read from the chain at this
+ * block. It is the same kind of fact as the factory record itself.
+ *
+ * It matters on exactly the token the tool was built for. $PONS keeps its
+ * liquidity position in the launchpad's locker, and the liquidity section
+ * reported "100% withdrawable" because it had no way to know the name of the
+ * contract holding it. That is the most reassuring wrong sentence available,
+ * printed on the chain's own flagship token.
+ */
+export async function resolveLockers(rpc: RpcClient, chain: ChainConfig, factory: string | undefined, v1Factory: string | undefined, block: number): Promise<ChainConfig["lockers"]> {
+  const family = chain.launchpad ? chain.launchpad.replace(/ V\d+$/, "") : "launchpad";
+  const factories = [
+    { address: factory, name: `the ${chain.launchpad ?? "launchpad"} locker` },
+    // The V1 factory that registered THIS token where the identify step found
+    // one, because a chain can have had more than one, and a locker read off
+    // the wrong factory is exactly the kind of near-miss this file exists to
+    // avoid. The configured address is the fallback.
+    { address: v1Factory ?? chain.factoryV1, name: `the ${family} V1 locker` },
+  ].filter((f): f is { address: string; name: string } => Boolean(f.address));
+  if (!factories.length) return chain.lockers;
+
+  const table: Record<string, string> = { ...(chain.lockers ?? {}) };
+  try {
+    const raws = await rpc.callBatchSettled(factories.map((f) => ({ to: f.address, data: encodeCall(V1_FACTORY_FUNCTIONS.locker, []) })), block);
+    raws.forEach((raw, i) => {
+      if (raw instanceof Error) return;
+      try {
+        const address = (decodeOutputs(V1_FACTORY_FUNCTIONS.locker, raw)[0] as string).toLowerCase();
+        if (address && address !== ZERO_ADDRESS) table[address] = factories[i].name;
+      } catch {
+        // a factory without this view; the others are unaffected
+      }
+    });
+  } catch {
+    // No locker is verified, so none is claimed. The liquidity read then says
+    // "withdrawable", which is the safe direction to be wrong in.
+    return chain.lockers;
+  }
+  return Object.keys(table).length ? table : chain.lockers;
 }
 
 /** What the open-door read found, as notes: control, transfers, holders, pools, age. Shared by ordinary and V1 tokens. */
