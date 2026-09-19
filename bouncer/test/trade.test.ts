@@ -5,7 +5,7 @@
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { REFERRAL, TRADE_SLUGS, tradeVenues } from "../src/bouncer/trade.js";
+import { PROVEN, REFERRAL, TRADE_SLUGS, tradeVenues } from "../src/bouncer/trade.js";
 
 const PONS = "0x39dbed3a2bd333467115de45665cc57f813c4571";
 
@@ -51,5 +51,16 @@ test("every venue says what it is, for somebody who has not used it", () => {
   for (const v of tradeVenues("robinhood", PONS)) {
     assert.ok(v.what.length > 15, `${v.name} needs a line explaining it`);
     assert.ok(v.url.startsWith("https://"));
+  }
+});
+
+test("the table says which slugs were proven and which are recall", () => {
+  // The comment above the table used to claim every entry was proven. It
+  // was not, and a false claim in a comment is the same defect as a false
+  // claim on a slip — it is just read later.
+  assert.deepEqual(PROVEN.robinhood, ["gmgn", "basedbot"]);
+  for (const chain of ["base", "bnb", "solana"]) {
+    assert.equal(PROVEN[chain], undefined, `${chain} has no proven slug and must not claim one`);
+    assert.ok(tradeVenues(chain, PONS).length > 0, `${chain} still ships its recalled slug`);
   }
 });
