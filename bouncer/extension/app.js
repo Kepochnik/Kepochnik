@@ -4007,7 +4007,7 @@
     });
     if (!found.length) return [];
     await classify(rpc, found, block);
-    await hydrate(rpc, token, { weth: quote }, found, block);
+    await hydrate(rpc, token, quote, found, block);
     return found;
   }
   async function classify(rpc, pools, block) {
@@ -4086,7 +4086,7 @@
       }
     });
     const v4Pools = await v4;
-    if (found.length) await hydrate(rpc, token, dex, found, block);
+    if (found.length) await hydrate(rpc, token, dex.weth, found, block);
     const all = [...found, ...v4Pools];
     if (options.candidates?.length) {
       const known = new Set(all.map((p) => p.address));
@@ -4095,7 +4095,7 @@
     }
     return all.sort(byDepth);
   }
-  async function hydrate(rpc, token, dex, pools, block) {
+  async function hydrate(rpc, token, quote, pools, block) {
     const calls = [];
     const plan = [];
     const want = (pool, field, to, data) => {
@@ -4105,7 +4105,7 @@
     for (const p of pools) {
       want(p, "token0", p.address, encodeCall(POOL_FUNCTIONS.token0, []));
       want(p, "tokenReserve", token, encodeCall(ERC20_FUNCTIONS.balanceOf, [p.address]));
-      want(p, "quoteReserve", dex.weth, encodeCall(ERC20_FUNCTIONS.balanceOf, [p.address]));
+      want(p, "quoteReserve", quote, encodeCall(ERC20_FUNCTIONS.balanceOf, [p.address]));
       if (p.kind === "v3") {
         want(p, "slot0", p.address, encodeCall(POOL_FUNCTIONS.slot0, []));
         want(p, "liquidity", p.address, encodeCall(POOL_FUNCTIONS.liquidity, []));

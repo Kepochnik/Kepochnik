@@ -203,7 +203,7 @@ export async function discoverPools(
   });
   if (!found.length) return [];
   await classify(rpc, found, block);
-  await hydrate(rpc, token, { weth: quote } as DexTable, found, block);
+  await hydrate(rpc, token, quote, found, block);
   return found;
 }
 
@@ -302,7 +302,7 @@ export async function readPools(rpc: RpcClient, token: string, dex: DexTable, bl
     }
   });
   const v4Pools = await v4;
-  if (found.length) await hydrate(rpc, token, dex, found, block);
+  if (found.length) await hydrate(rpc, token, dex.weth, found, block);
   const all = [...found, ...v4Pools];
 
   // Last: the venues nobody wrote down. Only after the factories have had
@@ -317,7 +317,7 @@ export async function readPools(rpc: RpcClient, token: string, dex: DexTable, bl
 }
 
 /** Reads each pool's direction, reserves and, for a V3 pool, its price and liquidity. */
-async function hydrate(rpc: RpcClient, token: string, dex: DexTable, pools: MarketPool[], block: number): Promise<void> {
+async function hydrate(rpc: RpcClient, token: string, quote: string, pools: MarketPool[], block: number): Promise<void> {
   const calls: { to: string; data: Hex }[] = [];
   const plan: { pool: MarketPool; field: string }[] = [];
   const want = (pool: MarketPool, field: string, to: string, data: Hex) => {
@@ -327,7 +327,7 @@ async function hydrate(rpc: RpcClient, token: string, dex: DexTable, pools: Mark
   for (const p of pools) {
     want(p, "token0", p.address, encodeCall(POOL_FUNCTIONS.token0, []));
     want(p, "tokenReserve", token, encodeCall(ERC20_FUNCTIONS.balanceOf, [p.address]));
-    want(p, "quoteReserve", dex.weth, encodeCall(ERC20_FUNCTIONS.balanceOf, [p.address]));
+    want(p, "quoteReserve", quote, encodeCall(ERC20_FUNCTIONS.balanceOf, [p.address]));
     if (p.kind === "v3") {
       want(p, "slot0", p.address, encodeCall(POOL_FUNCTIONS.slot0, []));
       want(p, "liquidity", p.address, encodeCall(POOL_FUNCTIONS.liquidity, []));
