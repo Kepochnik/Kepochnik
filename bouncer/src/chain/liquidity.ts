@@ -87,6 +87,18 @@ export interface LiquidityHolder {
   name?: string;
   /** True when the name came from the explorer rather than from the locker table. */
   namedByExplorer?: boolean;
+  /**
+   * True when this entry is positions whose NFT owner could not be traced,
+   * booked under the position manager because that is where the pool's own
+   * Mint log points.
+   *
+   * It is not one party. A live Robinhood run made that matter: the manager
+   * came back holding 100% of a pool and the slip said one address could take
+   * it away, naming the Uniswap position manager — a contract that holds
+   * nothing on its own behalf. Unresolved is still withdrawable, and it is
+   * still not somebody.
+   */
+  unresolved?: boolean;
   /** Share of this pool's liquidity, in basis points. */
   shareBps: number;
 }
@@ -381,8 +393,15 @@ export async function readV3Lock(
   if (total === 0n) return { ...base, unread: "every position found has been withdrawn" };
 
   const merged = new Map<string, bigint>();
+  // Which entries are positions nobody could trace to an owner. They are
+  // booked under the manager because that is where the Mint log points, and
+  // an entry that is really "several positions we could not resolve" must not
+  // be read later as one address holding that much.
+  const unresolvedAt = new Set<string>();
   for (const p of considered) {
-    const resolved = realOwners.get(`${p.owner}:${p.tx}`) ?? p.owner;
+    const owner = realOwners.get(`${p.owner}:${p.tx}`);
+    const resolved = owner ?? p.owner;
+    if (!owner) unresolvedAt.add(resolved);
     merged.set(resolved, (merged.get(resolved) ?? 0n) + p.amount);
   }
 
@@ -401,7 +420,9 @@ export async function readV3Lock(
     const code = codes[i];
     const hasCode = code instanceof Error ? null : typeof code === "string" && code.length > 2;
     const { kind, name } = classify(address, lockers, hasCode);
-    return { address, kind, name, shareBps: bps(merged.get(address) ?? 0n, total) };
+    const holder: LiquidityHolder = { address, kind, name, shareBps: bps(merged.get(address) ?? 0n, total) };
+    if (unresolvedAt.has(address)) holder.unresolved = true;
+    return holder;
   });
 
   const burnedBps = holders.filter((h) => h.kind === "burned").reduce((a, h) => a + h.shareBps, 0);

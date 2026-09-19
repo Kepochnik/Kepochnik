@@ -156,3 +156,29 @@ test("an unlocked pool with nothing to list still shows its shares", async () =>
   assert.ok(row);
   assert.match(String(row.value), /100\.0% withdrawable/);
 });
+
+test("positions nobody could trace are not one address, however large they are", async () => {
+  // Found live on Robinhood. NVDA got a STOP reading "one address holds
+  // 100.0% of it. Held by NonfungiblePositionManager" — the Uniswap position
+  // manager, a contract that holds nothing on its own behalf. Those are
+  // positions whose NFT owner could not be traced, booked under the manager
+  // because that is where the pool's Mint log points.
+  const manager: LiquidityHolder = { address: "0x7399000000000000000000000000000000000000", kind: "contract", name: "NonfungiblePositionManager", shareBps: 10_000, unresolved: true };
+  const n = noteOf(lock([manager]));
+  assert.ok(n);
+  assert.doesNotMatch(n.text, /one address holds/, "an untraced entry is not one address");
+  assert.doesNotMatch(n.text, /can take most of the pool away on its own/);
+  assert.match(n.text, /none of the positions holding it could be traced to an owner/);
+  assert.match(n.text, /one or a hundred — is unknown/);
+});
+
+test("an untraced remainder is said alongside a real concentration, not instead of it", async () => {
+  const n = noteOf(lock([
+    { address: "0x1111111111111111111111111111111111111111", kind: "wallet", shareBps: 6_000 },
+    { address: "0x7399000000000000000000000000000000000000", kind: "contract", shareBps: 4_000, unresolved: true },
+  ]));
+  assert.ok(n);
+  assert.equal(n.level, "stop", "a real holder with a majority is still a STOP");
+  assert.match(n.text, /one address holds 60/);
+  assert.match(n.text, /A further 40\.0% sits in positions whose owner could not be traced/);
+});
