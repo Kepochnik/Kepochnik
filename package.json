@@ -20,6 +20,7 @@
     "readonly-check": "node scripts/readonly-check.mjs",
     "workflow-check": "node scripts/workflow-check.mjs",
     "layout-check": "node scripts/layout-check.mjs",
+    "trade-check": "node scripts/trade-check.mjs",
     "check": "npm run readonly-check && npm run workflow-check && npm test && npm run site && npm run layout-check",
     "site": "npm run build --silent && node scripts/build-site.mjs",
     "demo": "npm run build --silent && node bin/bouncer.mjs demo",

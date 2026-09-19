@@ -50,6 +50,13 @@ jobs:
         run: |
           mkdir -p "$BOUNCER_SHOTS"
           node scripts/layout-check.mjs "${{ inputs.url || 'https://kepochnik.github.io/bouncer/' }}"
+      - name: Do the buy links actually go anywhere
+        env:
+          PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/.pw
+        # Referral links are the one thing on the page that can be broken
+        # and look perfect: a dead one earns nothing and renders the same.
+        # Both venues sit behind a bot check, so this asks with a browser.
+        run: npm run build --silent && node scripts/trade-check.mjs
       - uses: actions/upload-artifact@v4
         if: always()
         with:

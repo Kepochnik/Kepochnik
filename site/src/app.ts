@@ -9,6 +9,7 @@
  */
 import { BlockscoutClient } from "../../src/chain/blockscout.js";
 import { TOPIC_BLURB, TOPIC_ORDER, TOPIC_QUESTION, topicOf } from "../../src/bouncer/topics.js";
+import { tradeVenues } from "../../src/bouncer/trade.js";
 import { CHAINS, chainByKey, type ChainConfig } from "../../src/chain/chains.js";
 import { PHASE_LABEL } from "../../src/chain/pons.js";
 import { PonsReader } from "../../src/chain/reader.js";
@@ -578,6 +579,38 @@ function unreadStrip(notes: DoorNote[], skipped: { section: string; reason: stri
 }
 
 /**
+ * Where to buy it, if the slip has not put you off.
+ *
+ * These are referral links and they say so. The tool's only asset is that
+ * it does not sell you anything, so: below the verdict and below the
+ * answers, never beside them; the same quiet treatment whatever the
+ * verdict says, because a buy button that gets louder on a CLEAR is an
+ * opinion; and nothing reorders for a venue.
+ */
+function buyStrip(chainKey: string, address: string): string {
+  const venues = tradeVenues(chainKey, address);
+  if (!venues.length) return "";
+  const links = venues
+    .map(
+      (v) =>
+        `<a class="buy-link" href="${esc(v.url)}" target="_blank" rel="noopener nofollow sponsored">
+          <span class="buy-name">${esc(v.name)}</span>
+          <span class="buy-what">${esc(v.what)}</span>
+          <span class="buy-go" aria-hidden="true">↗</span>
+        </a>`,
+    )
+    .join("");
+  return `<section class="buy">
+    <div class="buy-head">
+      <h2>Buy it</h2>
+      <span class="buy-tag">referral links</span>
+    </div>
+    <p class="qblurb">BOUNCER cannot trade and holds no key. These open the token on someone else's venue, and they carry this project's referral code — which is how it is paid for. Read the slip above first; nothing here changes what it says.</p>
+    <div class="buy-links">${links}</div>
+  </section>`;
+}
+
+/**
  * One collapsible section of a slip. Shared by every renderer: it used to be a
  * local inside renderSlip, which meant the Solana slip referred to a name that
  * did not exist there and threw for every visitor.
@@ -656,6 +689,7 @@ function renderSplSlip(slip: SplSlip): void {
     ${tiles}
     ${answerCards(slip.notes as DoorNote[])}
     ${unreadStrip(slip.notes as DoorNote[], slip.skipped)}
+    ${buyStrip(slip.chain.key, slip.subject)}
     <div class="stack">
       ${section("s-id", "Is it real?", "What this address actually is, who can print more of it, and who can freeze what you hold.", idBody, true)}
       ${extBody ? section("s-ext", "Token-2022 extensions", "The rules the token program itself enforces on every transfer.", extBody, true) : ""}
@@ -882,6 +916,7 @@ function renderSlip(slip: DoorSlip): void {
     ${tiles}
     ${answerCards(slip.notes)}
     ${unreadStrip(slip.notes, slip.skipped)}
+    ${buyStrip(mode === "demo" ? "" : slip.chain.key, slip.subject)}
     <div class="stack">
       ${section("s-id", "Is it real?", "Did the launchpad's factory deploy this token, and can its code change later?", idBody, !o)}
       ${o ? section("s-control", "Who controls it", "Which switches the code has (mint, pause, blacklist, fees), who holds the keys, and whether holders can move tokens right now.", controlBody(slip), true) : ""}
