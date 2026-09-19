@@ -159,10 +159,13 @@ test("a pool of an unknown shape keeps its reserves and is never priced", async 
   assert.equal(canPrice(found[0]), false, "and the invariant is not guessed");
 });
 
-test("an unnamed venue says it is unidentified rather than borrowing a name", async () => {
+test("an unnamed venue says so rather than borrowing a name, and carries no article", async () => {
   const rpc = rpcOf({ [POOL]: { ...pair(TOKEN, WETH), ...reserves(1n, 1n) }, [TOKEN]: balances(1n), [WETH]: balances(1n) });
   const found = await discoverPools(rpc, TOKEN, WETH, [{ address: POOL, name: null }], 100);
-  assert.match(found[0].dex, /unidentified/);
+  assert.match(found[0].dex, /unnamed venue/);
+  // Every sentence that prints this says "the ${dex} pool", and a live run
+  // produced "the an unidentified venue pool's liquidity".
+  assert.doesNotMatch(found[0].dex, /^(a|an|the) /, "the label is interpolated after an article and must not carry one");
 });
 
 test("an endpoint that refuses the whole batch finds nothing rather than throwing", async () => {

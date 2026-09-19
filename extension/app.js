@@ -4001,7 +4001,10 @@
         // "unknown" until the pool says otherwise, below. Defaulting to V2 here
         // would mean a concentrated pool got priced by constant product over its
         // raw balances, which overstates a sale worst on the large one.
-        dex: candidate.name || "an unidentified venue",
+        // No article in the label. Every sentence that prints it says "the
+        // ${dex} pool", and a live run produced "the an unidentified venue
+        // pool's liquidity".
+        dex: candidate.name || "unnamed venue",
         kind: "unknown",
         address: candidate.address.toLowerCase(),
         feeBps: 30,
