@@ -256,11 +256,26 @@ export async function readOpenDoor(rpc: RpcClient, token: ContractId, meta: Toke
   // Started, not awaited: each keeps its own .catch so one slow or refused
   // read cannot take the others, and nothing below blocks until it needs
   // the answer.
+  //
+  // Every one of them is settled rather than left raw. A promise started
+  // early and rejected before anything awaits it is an unhandled rejection,
+  // and the page reports that as a crash: the first version of this threw
+  // "blockscout 404 …/transfers" on every load of a token the explorer does
+  // not know, which is an ordinary case and not an error. Settling keeps the
+  // failure until the await, where the existing catch already handles it.
+  const settle = <T>(p: Promise<T>): Promise<{ value: T } | { error: unknown }> => p.then((value) => ({ value }), (error) => ({ error }));
   const bsEarly = options.blockscout;
   const holderList = bsEarly ? bsEarly.tokenHolders(address, 50).catch(() => null) : Promise.resolve(null);
-  const addressInfoP = bsEarly ? bsEarly.addressInfo(address) : null;
+  const addressInfoP = bsEarly ? settle(bsEarly.addressInfo(address)) : null;
   const tokenInfoP = bsEarly ? bsEarly.tokenInfo(address).catch(() => ({ holders: null, transfers: null, type: null, priceUsd: null, volume24hUsd: null, marketCapUsd: null })) : null;
-  const transfersP = bsEarly ? bsEarly.tokenTransfers(address) : null;
+  const transfersP = bsEarly ? settle(bsEarly.tokenTransfers(address)) : null;
+  /** Hands back the value or rethrows at the await, where the caller's catch is. */
+  const unwrap = async <T>(p: Promise<{ value: T } | { error: unknown }> | null, fallback: () => Promise<T>): Promise<T> => {
+    if (!p) return fallback();
+    const settled = await p;
+    if ("error" in settled) throw settled.error;
+    return settled.value;
+  };
 
   // ---- where it trades, read before the probes so a sale can be simulated into the pool
   let pools: MarketPool[] | null = null;
@@ -390,7 +405,7 @@ export async function readOpenDoor(rpc: RpcClient, token: ContractId, meta: Toke
   if (bs) {
     let info: { isScam: boolean; isVerified: boolean; creator: string | null; creationTx: string | null } | null = null;
     try {
-      const read = await (addressInfoP ?? bs.addressInfo(address));
+      const read = await unwrap(addressInfoP, () => bs.addressInfo(address));
       info = read;
       verified = read.isVerified;
       if (read.creator) {
@@ -459,7 +474,7 @@ export async function readOpenDoor(rpc: RpcClient, token: ContractId, meta: Toke
     }
     if (explorer === null && info) explorer = { isScam: info.isScam, priceUsd: null, volume24hUsd: null, marketCapUsd: null, tokenType: null };
     try {
-      activity = summariseActivity(await (transfersP ?? bs.tokenTransfers(address)));
+      activity = summariseActivity(await unwrap(transfersP, () => bs.tokenTransfers(address)));
     } catch (error) {
       note(error);
       activity = null;

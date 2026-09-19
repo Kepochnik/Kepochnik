@@ -4826,11 +4826,18 @@
     }
     const supply = meta?.totalSupply ?? null;
     const bps3 = (v) => supply !== null && supply > 0n ? Number(v * 10000n / supply) : null;
+    const settle = (p) => p.then((value) => ({ value }), (error) => ({ error }));
     const bsEarly = options.blockscout;
     const holderList = bsEarly ? bsEarly.tokenHolders(address, 50).catch(() => null) : Promise.resolve(null);
-    const addressInfoP = bsEarly ? bsEarly.addressInfo(address) : null;
+    const addressInfoP = bsEarly ? settle(bsEarly.addressInfo(address)) : null;
     const tokenInfoP = bsEarly ? bsEarly.tokenInfo(address).catch(() => ({ holders: null, transfers: null, type: null, priceUsd: null, volume24hUsd: null, marketCapUsd: null })) : null;
-    const transfersP = bsEarly ? bsEarly.tokenTransfers(address) : null;
+    const transfersP = bsEarly ? settle(bsEarly.tokenTransfers(address)) : null;
+    const unwrap = async (p, fallback) => {
+      if (!p) return fallback();
+      const settled = await p;
+      if ("error" in settled) throw settled.error;
+      return settled.value;
+    };
     let pools = null;
     let market = null;
     let liquidity = null;
@@ -4917,7 +4924,7 @@
     if (bs) {
       let info = null;
       try {
-        const read = await (addressInfoP ?? bs.addressInfo(address));
+        const read = await unwrap(addressInfoP, () => bs.addressInfo(address));
         info = read;
         verified = read.isVerified;
         if (read.creator) {
@@ -4983,7 +4990,7 @@
       }
       if (explorer === null && info) explorer = { isScam: info.isScam, priceUsd: null, volume24hUsd: null, marketCapUsd: null, tokenType: null };
       try {
-        activity = summariseActivity(await (transfersP ?? bs.tokenTransfers(address)));
+        activity = summariseActivity(await unwrap(transfersP, () => bs.tokenTransfers(address)));
       } catch (error) {
         note(error);
         activity = null;
