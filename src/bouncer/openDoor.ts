@@ -16,7 +16,7 @@
 import { decodeOutputs, encodeCall, selector, type FunctionAbi, type Hex } from "../chain/abi.js";
 import type { BlockscoutClient, TokenHolder, TokenTransfer } from "../chain/blockscout.js";
 import type { ChainConfig } from "../chain/chains.js";
-import { canPrice, readMarket, readPools, type Market, type MarketPool } from "../chain/market.js";
+import { canPrice, depth, readMarket, readPools, type Market, type MarketPool } from "../chain/market.js";
 import { nameHolders, readPoolLock, type PoolLock } from "../chain/liquidity.js";
 import { readSelectors } from "../chain/code.js";
 import { ERC20_EVENTS, ERC20_FUNCTIONS, ZERO_ADDRESS } from "../chain/pons.js";
@@ -258,7 +258,11 @@ export async function readOpenDoor(rpc: RpcClient, token: ContractId, meta: Toke
         // Contracts only: a wallet is not a pool, and asking one costs two
         // calls for a certain revert. The explorer's name for the contract is
         // passed along because it is the only thing that can name the venue.
-        candidates: (listed ?? []).filter((h) => h.isContract && !h.delegated).map((h) => ({ address: h.address, name: h.name })),
+        // The twenty largest contract holders, no more. The list is
+        // largest-first and a pool is a large holder by definition, so the
+        // tail is two calls each against a rate-limited endpoint for
+        // candidates that are not pools.
+        candidates: (listed ?? []).filter((h) => h.isContract && !h.delegated).slice(0, 20).map((h) => ({ address: h.address, name: h.name })),
       });
       const position = options.position ?? (supply !== null && supply > 0n ? supply / 100n : 0n);
       if (position > 0n) market = readMarket(pools, position, meta?.decimals ?? 18, options.dex.wethSymbol);
@@ -268,7 +272,15 @@ export async function readOpenDoor(rpc: RpcClient, token: ContractId, meta: Toke
     // Who holds the deepest pool's liquidity. Only the deepest: it is the one a
     // sale would go through, and reading every pool would multiply the cost for
     // an answer nobody asked. A failure here costs this section, not the slip.
-    const deepest = pools?.[0] ?? null;
+    //
+    // The exception is a pool whose ownership cannot be read at all — a V4 row
+    // inside the singleton, or a venue found by holder discovery that answers
+    // no known shape. Those are now allowed to be the deepest, and stopping at
+    // one would empty a section that the pool behind it can still answer. So:
+    // the deepest readable pool, and the note says how much of the liquidity
+    // it actually covers.
+    const readable = (pools ?? []).filter((p) => p.kind === "v2" || p.kind === "v3" || p.kind === "solidly");
+    const deepest = readable[0] ?? pools?.[0] ?? null;
     if (deepest && options.liquidity !== false) {
       try {
         liquidity = await readPoolLock(rpc, deepest, options.lockers, options.dex.v3PositionManager, block, {
@@ -282,6 +294,12 @@ export async function readOpenDoor(rpc: RpcClient, token: ContractId, meta: Toke
         if (bs) {
           liquidity = await nameHolders(liquidity, async (address) => (await bs.addressInfo(address)).name);
         }
+        // How much of the market this pool actually is. Depth, not count: a
+        // reader needs to know whether "all of it can be withdrawn" is about
+        // the pool they would sell into or about a rounding error beside it.
+        const total = (pools ?? []).reduce((a, p) => a + (depth(p) > 0n ? depth(p) : 0n), 0n);
+        const mine = depth(deepest) > 0n ? depth(deepest) : 0n;
+        liquidity.shareOfLiquidityBps = total > 0n ? Number((mine * 10_000n) / total) : 10_000;
       } catch {
         liquidity = null;
       }
