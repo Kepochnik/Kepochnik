@@ -4088,7 +4088,7 @@
         // the endpoint refuse every wide chunk, so the span halves to a single
         // block and a week's window becomes hundreds of thousands of requests —
         // ten minutes of a door, and then nothing to show for it.
-        { minChunk: 1, startChunk: options.chunkSize ?? 5e3, maxChunk: 1e5, maxRequests: options.maxRequests ?? 40 }
+        { minChunk: 1, startChunk: options.chunkSize ?? 2e3, maxChunk: 1e5, maxRequests: options.maxRequests ?? 15 }
       );
       logs = tape.logs;
       windowComplete = tape.complete !== false;
@@ -4118,7 +4118,12 @@
     const realOwners = /* @__PURE__ */ new Map();
     const managed = considered.filter((p) => manager && p.owner === manager);
     if (managed.length) {
-      const receipts = await rpc.sendBatchSettled(managed.map((p) => ({ method: "eth_getTransactionReceipt", params: [p.tx] })));
+      let receipts = [];
+      try {
+        receipts = await rpc.sendBatchSettled(managed.map((p) => ({ method: "eth_getTransactionReceipt", params: [p.tx] })));
+      } catch {
+        receipts = [];
+      }
       const idCalls = [];
       const idFor = [];
       receipts.forEach((receipt, i) => {
@@ -4139,7 +4144,12 @@
         }
       });
       if (idCalls.length) {
-        const owners = await rpc.callBatchSettled(idCalls, block);
+        let owners = [];
+        try {
+          owners = await rpc.callBatchSettled(idCalls, block);
+        } catch {
+          owners = [];
+        }
         owners.forEach((raw, i) => {
           if (raw instanceof Error) return;
           try {
@@ -4157,7 +4167,12 @@
       merged.set(resolved, (merged.get(resolved) ?? 0n) + p.amount);
     }
     const addresses = [...merged.keys()];
-    const codes = await rpc.sendBatchSettled(addresses.map((a) => ({ method: "eth_getCode", params: [a, `0x${block.toString(16)}`] })));
+    let codes = [];
+    try {
+      codes = await rpc.sendBatchSettled(addresses.map((a) => ({ method: "eth_getCode", params: [a, `0x${block.toString(16)}`] })));
+    } catch {
+      codes = [];
+    }
     const holders = addresses.map((address, i) => {
       const code = codes[i];
       const hasCode = code instanceof Error ? null : typeof code === "string" && code.length > 2;
@@ -4751,10 +4766,12 @@
           dex: chain2.dex,
           lockers: chain2.lockers,
           liquidity: options.skipLiquidity !== true,
-          // A week of this chain's blocks, capped so a fast chain does not turn
-          // one section into the whole read. A token older than the window reads
-          // as "no position opened here", which names the flag that widens it.
-          liquidityFromBlock: head.number - (options.liquidityBlocks ?? Math.min(5e5, Math.round(7 * 86400 * chain2.blocksPerSecond))),
+          // A day, not a week. This is read before a trade, and the measured
+          // cost of a week on Base was the better part of a minute for a section
+          // that then reported nothing. What matters for "can they pull it now"
+          // is who holds the liquidity now; --liquidity-blocks widens it for
+          // anyone who wants the longer history and will wait for it.
+          liquidityFromBlock: head.number - (options.liquidityBlocks ?? Math.min(2e5, Math.round(86400 * chain2.blocksPerSecond))),
           v4PoolManager: await resolveV4Manager(rpc, chain2, options.factory, head.number)
         });
       });

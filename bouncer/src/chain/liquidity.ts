@@ -224,7 +224,7 @@ export async function readV3Lock(
       // the endpoint refuse every wide chunk, so the span halves to a single
       // block and a week's window becomes hundreds of thousands of requests —
       // ten minutes of a door, and then nothing to show for it.
-      { minChunk: 1, startChunk: options.chunkSize ?? 5_000, maxChunk: 100_000, maxRequests: options.maxRequests ?? 40 },
+      { minChunk: 1, startChunk: options.chunkSize ?? 2_000, maxChunk: 100_000, maxRequests: options.maxRequests ?? 15 },
     );
     logs = tape.logs;
     windowComplete = tape.complete !== false;
@@ -264,7 +264,18 @@ export async function readV3Lock(
   const realOwners = new Map<string, string>();
   const managed = considered.filter((p) => manager && p.owner === manager);
   if (managed.length) {
-    const receipts = await rpc.sendBatchSettled(managed.map((p) => ({ method: "eth_getTransactionReceipt", params: [p.tx] })));
+    // Resolving an NFT holder is the optional half of this read. When the
+    // batch fails as a whole — one bad response takes all of them — the
+    // positions stay unresolved and count as withdrawable, which is the
+    // cautious reading. Letting it throw discarded the entire liquidity
+    // section instead, which is how sixty seconds of log reading became
+    // "MISSING" on Base for a second time.
+    let receipts: (unknown | Error)[] = [];
+    try {
+      receipts = await rpc.sendBatchSettled(managed.map((p) => ({ method: "eth_getTransactionReceipt", params: [p.tx] })));
+    } catch {
+      receipts = [];
+    }
     const idCalls: { to: string; data: Hex }[] = [];
     const idFor: { key: string }[] = [];
     receipts.forEach((receipt, i) => {
@@ -285,7 +296,12 @@ export async function readV3Lock(
       }
     });
     if (idCalls.length) {
-      const owners = await rpc.callBatchSettled(idCalls, block);
+      let owners: (Hex | Error)[] = [];
+      try {
+        owners = await rpc.callBatchSettled(idCalls, block);
+      } catch {
+        owners = [];
+      }
       owners.forEach((raw, i) => {
         if (raw instanceof Error) return;
         try {
@@ -309,7 +325,15 @@ export async function readV3Lock(
 
   // Who has bytecode decides wallet vs contract, and neither is a lock.
   const addresses = [...merged.keys()];
-  const codes = await rpc.sendBatchSettled(addresses.map((a) => ({ method: "eth_getCode", params: [a, `0x${block.toString(16)}`] })));
+  // Wallet or contract is a label, not the finding. Losing it must not lose
+  // the shares, so an unread code reads as null and classify() falls to
+  // "wallet" — withdrawable either way, which is what matters here.
+  let codes: (unknown | Error)[] = [];
+  try {
+    codes = await rpc.sendBatchSettled(addresses.map((a) => ({ method: "eth_getCode", params: [a, `0x${block.toString(16)}`] })));
+  } catch {
+    codes = [];
+  }
   const holders: LiquidityHolder[] = addresses.map((address, i) => {
     const code = codes[i];
     const hasCode = code instanceof Error ? null : typeof code === "string" && code.length > 2;
