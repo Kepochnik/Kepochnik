@@ -84,6 +84,13 @@ export class RpcClient {
   private readonly minSpacingMs: number;
   private readonly rateLimitRetries: number;
   private activeIndex = 0;
+  /**
+   * Calls, milliseconds and failures per method. The Solana side got this
+   * after three wrong diagnoses in a row, and it found the answer on the
+   * first run; a Base door that takes minutes deserves the same treatment
+   * rather than another plausible story.
+   */
+  private readonly counters = new Map<string, { calls: number; ms: number; failures: number }>();
   private nextId = 1;
   private verifiedChain = false;
   private lastRequestAt = 0;
@@ -213,6 +220,24 @@ export class RpcClient {
     return this.dispatch(requests, false);
   }
 
+  /** Per-method call counts and total milliseconds, for working out where a slow read went. */
+  stats(): { method: string; calls: number; ms: number; failures: number }[] {
+    return [...this.counters.entries()].map(([method, v]) => ({ method, ...v })).sort((a, b) => b.ms - a.ms);
+  }
+
+  private record(requests: RpcRequest[], ms: number, failed: boolean): void {
+    // A batch is one round trip shared by its members, so the time is charged
+    // once to each method in it rather than multiplied by the batch size.
+    const methods = new Set(requests.map((r) => r.method));
+    for (const method of methods) {
+      const entry = this.counters.get(method) ?? { calls: 0, ms: 0, failures: 0 };
+      entry.calls += requests.filter((r) => r.method === method).length;
+      entry.ms += ms;
+      if (failed) entry.failures += 1;
+      this.counters.set(method, entry);
+    }
+  }
+
   private async dispatch(requests: RpcRequest[], settled: boolean): Promise<unknown[]> {
     for (const request of requests) {
       if (!READ_ONLY_METHODS.has(request.method)) {
@@ -227,6 +252,7 @@ export class RpcClient {
     }));
 
     let lastError: unknown;
+    const startedAt = Date.now();
     const attempts = this.urls.length * (this.rateLimitRetries + 1);
     for (let attempt = 0; attempt < attempts; attempt++) {
       const url = this.urls[this.activeIndex];
@@ -249,6 +275,7 @@ export class RpcClient {
         for (const item of items as { id: number; result?: unknown; error?: { code: number; message: string; data?: unknown } }[]) {
           byId.set(item.id, item);
         }
+        this.record(requests, Date.now() - startedAt, false);
         return payload.map((request) => {
           const item = byId.get(request.id);
           if (!item) throw new RpcError(`missing response for ${request.method}`);
@@ -278,6 +305,7 @@ export class RpcClient {
         this.verifiedChain = false;
       }
     }
+    this.record(requests, Date.now() - startedAt, true);
     throw lastError instanceof Error ? lastError : new RpcError(String(lastError));
   }
 

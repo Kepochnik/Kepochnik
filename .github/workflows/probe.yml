@@ -74,6 +74,36 @@ jobs:
         run: node bin/bouncer.mjs door "$ADDR" --chain "$CHAIN" --no-dev --no-crew --format json | head -c 12000 || true
       - name: bouncer doctor
         run: node bin/bouncer.mjs doctor --chain "${{ inputs.chain }}" || true
+      - name: Where an EVM door spends its time
+        if: inputs.chain != 'solana' && inputs.address != ''
+        env:
+          ADDR: ${{ inputs.address }}
+          CHAIN: ${{ inputs.chain }}
+        run: |
+          # One door, timed per method. A Base door went from seconds to
+          # minutes when the liquidity read and the V4 log scans arrived, and
+          # the Solana lesson was that guessing which of them costs what is a
+          # waste of everybody's afternoon.
+          node -e '
+            const { RpcClient } = require("./dist/src/chain/rpc.js");
+            const { BlockscoutClient } = require("./dist/src/chain/blockscout.js");
+            const { CHAINS } = require("./dist/src/chain/chains.js");
+            const { readDoor } = require("./dist/src/bouncer/door.js");
+            const chain = CHAINS[process.argv[2]];
+            const rpc = new RpcClient({ urls: chain.rpc, expectedChainId: chain.chainId });
+            const blockscout = chain.blockscout ? new BlockscoutClient({ baseUrl: chain.blockscout }) : null;
+            const started = Date.now();
+            readDoor(rpc, process.argv[1], { chain, factory: chain.factory || undefined, blockscout })
+              .then((slip) => {
+                console.log(`door took ${Date.now() - started} ms`);
+                const o = slip.open;
+                console.log("  pools:", o && o.pools ? o.pools.length : "none", "| liquidity:", o && o.liquidity ? `${o.liquidity.positionsRead}/${o.liquidity.positionsFound} positions` : "MISSING");
+              })
+              .catch((e) => console.log("door threw:", e.message))
+              .finally(() => {
+                for (const r of rpc.stats()) console.log(`  ${r.method}: ${r.calls} calls, ${r.ms} ms total, ${r.failures} failed`);
+              });
+          ' "$ADDR" "$CHAIN"
       - name: Which Solana endpoints serve the heavy reads
         if: inputs.chain == 'solana'
         run: |
