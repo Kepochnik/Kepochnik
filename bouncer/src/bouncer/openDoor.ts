@@ -298,11 +298,17 @@ export async function readOpenDoor(rpc: RpcClient, token: ContractId, meta: Toke
           // deadline: a name is a nicety, and a throttled explorer must not
           // be able to hold up the section it is decorating.
           const byAddress = new Map((await holderList.catch(() => null) ?? []).filter((h) => h.name).map((h) => [h.address.toLowerCase(), h.name as string]));
+          // Ten, not four. Capping by position was wrong and a live run caught
+          // it: the holders are sorted by share, and on $PONS the only two
+          // contracts the explorer had names for were the fifth and sixth,
+          // holding 0.01% and 0%. A cap of four dropped exactly the names that
+          // existed. The deadline below is the real bound on cost; the cap is
+          // only there to stop a pathological list.
           const named = nameHolders(liquidity, async (address) => {
             const known = byAddress.get(address.toLowerCase());
             if (known) return known;
             return (await bs.addressInfo(address)).name;
-          }, 4);
+          }, 10);
           liquidity = await Promise.race([named, new Promise<PoolLock>((resolve) => setTimeout(() => resolve(liquidity as PoolLock), 4_000))]);
         }
         // How much of the market this pool actually is. Depth, not count: a

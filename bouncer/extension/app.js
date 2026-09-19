@@ -4655,7 +4655,7 @@
               const known = byAddress.get(address2.toLowerCase());
               if (known) return known;
               return (await bs2.addressInfo(address2)).name;
-            }, 4);
+            }, 10);
             liquidity = await Promise.race([named, new Promise((resolve) => setTimeout(() => resolve(liquidity), 4e3))]);
           }
           const total = (pools ?? []).reduce((a, p) => a + (depth(p) > 0n ? depth(p) : 0n), 0n);
