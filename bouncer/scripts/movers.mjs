@@ -31,7 +31,15 @@ if (!chain || chain.family !== "evm") {
 }
 
 const rpc = new RpcClient({ urls: chain.rpc, expectedChainId: chain.chainId });
-const head = await rpc.getBlock("latest");
+let head;
+try {
+  head = await rpc.getBlock("latest");
+} catch (error) {
+  // A stack trace here would read as a defect in this script. It is the
+  // endpoint refusing, which is a fact about the endpoint.
+  console.error(`movers: no endpoint for ${chain.name} answered (${error instanceof Error ? error.message : error})`);
+  process.exit(3);
+}
 const transfer = eventTopic(ERC20_EVENTS.Transfer);
 
 // About ten minutes of chain, in slices the endpoints accept. A wider window
