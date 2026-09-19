@@ -42,18 +42,28 @@ try {
 }
 const transfer = eventTopic(ERC20_EVENTS.Transfer);
 
-// About ten minutes of chain, in slices the endpoints accept. A wider window
-// finds more tokens and costs more; ten minutes is enough to see what is busy
-// and short enough that the answer is about now.
-const span = Math.min(3_000, Math.max(200, Math.round(600 * chain.blocksPerSecond)));
-const slice = Math.max(50, Math.round(span / 6));
+// Single blocks, spread out — not a range.
+//
+// The first version asked for fifty-block slices, which on Base is a
+// firehose: every ERC-20 transfer on the chain for a hundred seconds, tens of
+// thousands of logs in one response, and a step that ran for twenty-five
+// minutes without finishing. A busy chain makes an unfiltered range query by
+// topic alone an enormous read.
+//
+// One block at a time is bounded by how busy one block is, and a dozen blocks
+// spread over the last few minutes rank the movers just as well as a
+// contiguous range would — better, arguably, since one burst cannot dominate.
+const SAMPLES = 12;
+const span = Math.max(SAMPLES, Math.round(300 * chain.blocksPerSecond));
+const step = Math.max(1, Math.floor(span / SAMPLES));
 
 const counts = new Map();
 let read = 0;
-for (let from = head.number - span; from <= head.number; from += slice) {
-  const to = Math.min(from + slice - 1, head.number);
+for (let i = 0; i < SAMPLES; i++) {
+  const at = head.number - i * step;
+  if (at < 0) break;
   try {
-    const logs = await rpc.getLogs({ fromBlock: from, toBlock: to, topics: [transfer] });
+    const logs = await rpc.getLogs({ fromBlock: at, toBlock: at, topics: [transfer] });
     read++;
     for (const log of logs) {
       // Three topics is an ERC-20 Transfer; two is an ERC-721, whose "value"
@@ -63,7 +73,7 @@ for (let from = head.number - span; from <= head.number; from += slice) {
       counts.set(address, (counts.get(address) ?? 0) + 1);
     }
   } catch {
-    // A slice the endpoint refuses costs its own blocks, not the run.
+    // A block the endpoint refuses costs its own logs, not the run.
   }
 }
 
@@ -77,7 +87,7 @@ const ranked = [...counts.entries()]
   .slice(0, want);
 
 if (!ranked.length) {
-  console.error(`movers: no ERC-20 transfers found on ${chain.name} in ${span} blocks (${read} log reads answered)`);
+  console.error(`movers: no ERC-20 transfers found on ${chain.name} across ${SAMPLES} sampled blocks (${read} answered)`);
   process.exit(2);
 }
 for (const [address, transfers] of ranked) console.log(`${address} ${transfers}`);

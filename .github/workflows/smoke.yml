@@ -311,14 +311,18 @@ jobs:
             done
             [ -z "$SUBJECTS" ] && echo "::warning::no public mint list answered, so no arbitrary Solana mints were checked"
           else
-            SUBJECTS=$(node scripts/movers.mjs "$CHAIN" 4 2>/dev/null | cut -d' ' -f1 | tr '\n' ' ' || true)
+            SUBJECTS=$(timeout 120 node scripts/movers.mjs "$CHAIN" 3 2>/dev/null | cut -d' ' -f1 | tr '\n' ' ' || true)
             [ -z "$SUBJECTS" ] && echo "::warning::no ERC-20 transfers came back, so no arbitrary tokens were checked on $CHAIN"
           fi
           echo "subjects: ${SUBJECTS:-none}"
 
           for SUBJECT in $SUBJECTS; do
             echo "::group::$SUBJECT"
-            if timeout 240 $B door "$SUBJECT" --chain "$CHAIN" --format json > /tmp/rand.json 2>/tmp/rand.err; then
+            # Ninety seconds, not four minutes. This is a sweep over unknown
+            # tokens; a door that cannot answer in ninety seconds is not a
+            # door anybody would use before a trade, and saying so is more
+            # useful than waiting it out.
+            if timeout 90 $B door "$SUBJECT" --chain "$CHAIN" --format json > /tmp/rand.json 2>/tmp/rand.err; then
               SUBJECT="$SUBJECT" node -e '
                 const raw = require("fs").readFileSync("/tmp/rand.json","utf8").trim();
                 let j; try { j = JSON.parse(raw); } catch { console.error("::error::not JSON for " + process.env.SUBJECT + ": " + raw.slice(0,200)); process.exit(1); }
@@ -346,7 +350,14 @@ jobs:
                 }
               ' || fail=1
             else
-              echo "::error::the door crashed on $SUBJECT"; cat /tmp/rand.err; fail=1
+              CODE=$?
+              if [ "$CODE" = "124" ]; then
+                echo "::error::the door did not finish in 90 seconds for $SUBJECT — too slow to be used before a trade"
+              else
+                echo "::error::the door failed on $SUBJECT (exit $CODE)"
+              fi
+              cat /tmp/rand.err
+              fail=1
             fi
             echo "::endgroup::"
           done
