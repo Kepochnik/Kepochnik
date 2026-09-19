@@ -228,6 +228,13 @@ jobs:
             const j = JSON.parse(require("fs").readFileSync("/tmp/l.json","utf8"));
             const l = j.open && j.open.liquidity;
             const pools = (j.open && j.open.pools) || [];
+            // Every venue, with the shape it claimed. A pool found by asking
+            // the token holders rather than a factory shows up here and
+            // nowhere else, so this is where a DEX nobody wrote down becomes
+            // visible — and where a pool priced by the wrong formula would.
+            for (const p of pools) console.log("pool:", p.kind, p.dex, p.address, String(p.tokenReserve), "/", String(p.quoteReserve));
+            const unknown = pools.filter((p) => p.kind === "unknown");
+            if (unknown.length) console.log("::notice::" + unknown.length + " venue(s) found by holder discovery that answer no known pool shape; shown unpriced");
             if (!pools.length) { console.log("no pool on this chain for this token; liquidity not applicable"); process.exit(0); }
             if (!l) { console.error("::error::pools were found but the liquidity read produced nothing"); process.exit(1); }
             console.log(`${l.dex} ${l.kind}: ${l.burnedBps/100}% burned, ${l.lockedBps/100}% locked, ${l.freeBps/100}% withdrawable`);
