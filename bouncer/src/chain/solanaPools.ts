@@ -379,11 +379,17 @@ async function readLocks(rpc: SolanaRpc, pools: SolanaPool[]): Promise<SolanaPoo
   const wanted = [pools[0]];
   const withLp = pools.find((p) => !p.concentrated);
   if (withLp && withLp !== pools[0]) wanted.push(withLp);
+  // Quote assets only, and only the ones that are the same asset, so the sum
+  // is a real total rather than SOL added to USDC.
+  const totalFor = (quoteMint: string) => pools.filter((p) => p.quoteMint === quoteMint).reduce((a, p) => a + p.quoteReserve, 0n);
   const locks: SolanaPoolLock[] = [];
   for (const pool of wanted) {
     if (!pool) continue;
     try {
-      locks.push(await readSolanaLock(rpc, pool));
+      const lock = await readSolanaLock(rpc, pool);
+      const total = totalFor(pool.quoteMint);
+      lock.shareOfLiquidityBps = total > 0n ? Number((pool.quoteReserve * 10_000n) / total) : 10_000;
+      locks.push(lock);
     } catch {
       // A lock that did not answer must not cost the market read that did.
     }

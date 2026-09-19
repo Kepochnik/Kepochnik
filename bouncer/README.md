@@ -137,7 +137,20 @@ Deploys to GitHub Pages from `main` with `.github/workflows/pages.yml`.
 | `bouncer board [--hours 1] [--top 10] [--no-cover]` | factory launches, sweeps and graduations in the window; every `CurveBuy` on the chain in the window; `creatorTaxBps()` per curve | the board |
 | `bouncer demo` | nothing (synthetic chain) | three slips offline |
 
-Every command takes `--chain robinhood|arc-testnet|arc`, `--factory <address>`, `--rpc <url>`, `--demo`, `--format text|markdown|json` and `--output <new file>` (never overwrites). `door` also takes `--hours`, `--launch-blocks` and `--no-dev --no-room --no-crew --no-lookalikes --no-blockscout`.
+Every command takes `--chain robinhood|base|bnb|solana|arc-testnet|arc`, `--factory <address>`, `--rpc <url>`, `--demo`, `--format text|markdown|json` and `--output <new file>` (never overwrites). `door` also takes `--hours`, `--launch-blocks` and `--no-dev --no-room --no-crew --no-lookalikes --no-blockscout`.
+
+### Pointing it at your own endpoint
+
+The public endpoints rate-limit, and a throttled read is the most common reason a section of the slip comes back unread. Any of these override the built-in list, most specific first:
+
+| What you set | What it changes |
+| --- | --- |
+| `--rpc <url>` | this one command |
+| `RPC_URL_SOLANA`, `RPC_URL_BASE`, `RPC_URL_BNB`, `RPC_URL_ROBINHOOD`, `RPC_URL_ARC` | that one chain (`RPC_URL_<KEY>`, upper case, dashes as underscores) |
+| `RPC_URL` | every chain |
+| `RPC_FALLBACK_URLS` | extra EVM endpoints to try after the first, comma-separated |
+
+`bouncer doctor --chain solana` asks your endpoint which reads it actually serves, one at a time, and prints served / rate-limited / refused / no answer for each — with the part of the slip that goes missing when it is refused. A throttle and a refusal look alike and are not: one is fixed by waiting or paying, the other only by using a different endpoint.
 
 ## Arc
 

@@ -187,3 +187,51 @@ test("a layout that does not check out is refused, not turned into a number", as
   const notAMint = await readSolanaLock(rpcFor(poolAccount(LP_MINT, 1_000n), { [LP_MINT]: tokenAccount(OTHER_MINT, 5n) }), cpmmPool);
   assert.equal(notAMint.read, false);
 });
+
+test("the share of liquidity a lock covers is carried, because the biggest pool is usually unreadable", async () => {
+  // Measured live: the deepest venue for a graduated pump token was an Orca
+  // Whirlpool with 5519x more SOL than the Raydium pool the lock could be
+  // read from. "Every LP token is still held by somebody" is a fair warning
+  // about the pool people trade in and an alarm about nothing when that pool
+  // holds a five-thousandth of the market — so the share travels with the lock.
+  const lock = await readSolanaLock(rpcFor(poolAccount(LP_MINT, 1_000n), { [LP_MINT]: mintAccount(1_000n) }), cpmmPool);
+  assert.equal(lock.shareOfLiquidityBps, 10_000, "a lock read on its own covers everything it knows about");
+});
+
+test("a free pool that holds a sliver of the market is INFO, not STOP", async () => {
+  // Measured live: the deepest venue for a graduated pump token was an Orca
+  // Whirlpool with 5519x more SOL than the deepest Raydium pool — and Raydium
+  // is the only one whose ownership can be read at all. Shouting STOP about a
+  // pool holding a five-thousandth of the liquidity is how a reader learns to
+  // ignore the word.
+  const { splNotes } = await import("../src/bouncer/spl.js");
+  const lock = {
+    pool: POOL,
+    name: "Raydium CPMM",
+    read: true,
+    burnedBps: 0,
+    strandedBps: 0,
+    freeBps: 10_000,
+    lpMint: LP_MINT,
+    shareOfLiquidityBps: 2,
+    unread: "",
+  };
+  const slip = {
+    chain: { key: "solana", name: "Solana", family: "solana" },
+    subject: LP_MINT,
+    mint: { decimals: 6, extensions: [], mintAuthority: null, freezeAuthority: null, supply: 1_000n, isInitialized: true, token2022: false },
+    market: { curve: null, pools: [], best: null, spot: null, quoteSymbol: "SOL", quotes: [], locks: [lock], note: "" },
+    holders: null,
+    skipped: [],
+  };
+  const sliver = splNotes(slip as never).find((n) => n.code === "sol-liquidity-free");
+  assert.ok(sliver);
+  assert.equal(sliver.level, "info");
+  assert.match(sliver.text, /0\.0% of this token/);
+
+  // The same pool holding the market is the warning it was written to be.
+  const whole = splNotes({ ...slip, market: { ...slip.market, locks: [{ ...lock, shareOfLiquidityBps: 10_000 }] } } as never).find((n) => n.code === "sol-liquidity-free");
+  assert.ok(whole);
+  assert.equal(whole.level, "stop");
+  assert.doesNotMatch(whole.text, /of this token/, "the size caveat belongs only on the pool it is true of");
+});

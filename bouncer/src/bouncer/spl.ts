@@ -408,17 +408,23 @@ export function splNotes(slip: SplSlip): DoorNote[] {
         continue;
       }
       const held = lock.burnedBps + lock.strandedBps;
+      // A pool holding a sliver of the token's liquidity is not what a sale
+      // goes through, and shouting STOP about it teaches the reader to ignore
+      // the word. The deepest venue on Solana is usually a Whirlpool nobody
+      // can read, so this case is the common one, not the edge.
+      const sliver = lock.shareOfLiquidityBps < 1_000;
+      const size = sliver ? ` That pool holds ${pct(lock.shareOfLiquidityBps)} of this token's readable liquidity, so it is not where a sale of any size would go.` : "";
       if (held === 0) {
         notes.push({
-          level: "stop",
+          level: sliver ? "info" : "stop",
           code: "sol-liquidity-free",
-          text: `Every LP token of the ${lock.name} pool is still held by somebody: none of it was burned and none sits at an address with no key. Whoever holds it can withdraw the pool, and then there is nothing to sell into.`,
+          text: `Every LP token of the ${lock.name} pool is still held by somebody: none of it was burned and none sits at an address with no key. Whoever holds it can withdraw the pool, and then there is nothing to sell into.${size}`,
         });
       } else if (lock.freeBps >= 2_000) {
         notes.push({
-          level: "watch",
+          level: sliver ? "info" : "watch",
           code: "sol-liquidity-partly-free",
-          text: `${pct(lock.freeBps)} of the ${lock.name} pool's LP tokens can still be withdrawn against (${pct(held)} is gone for good). Taking the rest out would thin the pool by that much.`,
+          text: `${pct(lock.freeBps)} of the ${lock.name} pool's LP tokens can still be withdrawn against (${pct(held)} is gone for good). Taking the rest out would thin the pool by that much.${size}`,
         });
       } else {
         notes.push({

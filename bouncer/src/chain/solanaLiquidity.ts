@@ -62,6 +62,18 @@ export interface SolanaPoolLock {
   /** Everything else: LP somebody still holds and can withdraw against. */
   freeBps: number;
   lpMint: string | null;
+  /**
+   * How much of the token's readable liquidity is in THIS pool, in basis
+   * points of the quote assets held across every pool found.
+   *
+   * It matters more here than it looks. The deepest venue for a Solana token
+   * is usually an Orca Whirlpool, whose ownership cannot be read at all, so
+   * the pool this lock covers is often the deepest *Raydium* pool — which can
+   * be a five-thousandth of the market. "Every LP token is still held by
+   * somebody" is a fair warning about the pool people trade in and an alarm
+   * about nothing when the pool holds 0.02% of the liquidity.
+   */
+  shareOfLiquidityBps: number;
   /** Why this is missing or partial. Empty when the read is complete. */
   unread: string;
 }
@@ -95,7 +107,7 @@ const bps = (part: bigint, whole: bigint): number => (whole === 0n ? 0 : Number(
  * the LP mint plus the burn addresses' token accounts.
  */
 export async function readSolanaLock(rpc: SolanaRpc, pool: SolanaPool, poolAccount?: AccountInfo | null): Promise<SolanaPoolLock> {
-  const base: SolanaPoolLock = { pool: pool.address, name: pool.name, read: false, burnedBps: 0, strandedBps: 0, freeBps: 0, lpMint: null, unread: "" };
+  const base: SolanaPoolLock = { pool: pool.address, name: pool.name, read: false, burnedBps: 0, strandedBps: 0, freeBps: 0, lpMint: null, shareOfLiquidityBps: 10_000, unread: "" };
 
   if (pool.program !== CPMM_PROGRAM) {
     return {
