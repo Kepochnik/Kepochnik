@@ -57,6 +57,15 @@ jobs:
         # and look perfect: a dead one earns nothing and renders the same.
         # Both venues sit behind a bot check, so this asks with a browser.
         run: npm run build --silent && node scripts/trade-check.mjs
+      - name: How long until there is an answer on screen
+        env:
+          PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/.pw
+        # Two numbers, not one: time to a verdict, and time to a complete
+        # slip. The page renders the fast half first, and that claim is
+        # worth nothing unless it is measured against the real site.
+        run: |
+          node scripts/speed-check.mjs "${{ inputs.url || 'https://kepochnik.github.io/bouncer/' }}" base 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913
+          node scripts/speed-check.mjs "${{ inputs.url || 'https://kepochnik.github.io/bouncer/' }}" robinhood 0x39dbed3a2bd333467115de45665cc57f813c4571
       - uses: actions/upload-artifact@v4
         if: always()
         with:

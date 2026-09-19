@@ -6220,6 +6220,8 @@
     const a = address.toLowerCase();
     return Object.values(DEMO.tokens).some((t) => t.token === a || t.curve === a || t.deployer === a) || a === DEMO_IMPOSTOR.token || a === DEMO_PLAIN.token || a === DEMO_V1.token || a === DEMO_V1.deployer || a === "0x000000000000000000000000000000000000dead";
   }
+  var doorRun = 0;
+  var SLOW_SECTIONS = { skipLiquidity: true, skipDev: true, skipRoom: true, skipCrew: true, skipLookalikes: true };
   async function runDoor(address) {
     if (chain().family === "solana" && mode === "live") return await runSolanaDoor(address);
     if (!ADDR.test(address)) return bad("Paste a 20-byte hex address: the token or its bonding curve, 0x followed by 40 hex characters.");
@@ -6229,13 +6231,32 @@
       location.hash = `#/t/${address.toLowerCase()}?chain=${chain().key}`;
       return;
     }
+    const run = ++doorRun;
     busy("reading the chain at the door\u2026");
+    const options = mode === "demo" ? { chain: CHAINS.robinhood, factory: factoryFor(), blockscout: blockscoutFor(), devHours: 8, chunkSize: 1e5, launchSearchBlocks: 4e5 } : { chain: chain(), factory: factoryFor(), blockscout: blockscoutFor(), devHours: 24 };
+    let quick = false;
     try {
-      const slip = await readDoor(rpcFor(), address, mode === "demo" ? { chain: CHAINS.robinhood, factory: factoryFor(), blockscout: blockscoutFor(), devHours: 8, chunkSize: 1e5, launchSearchBlocks: 4e5 } : { chain: chain(), factory: factoryFor(), blockscout: blockscoutFor(), devHours: 24 });
+      const fast = await readDoor(rpcFor(), address, { ...options, ...SLOW_SECTIONS });
+      if (run !== doorRun) return;
+      renderSlip(fast, { pending: true });
+      quick = true;
+      status.textContent = `${mode === "demo" ? "DEMO \xB7 " : `${chain().name} \xB7 `}block ${fast.at.block} \xB7 reading the slower parts\u2026`;
+    } catch {
+    }
+    try {
+      const slip = await readDoor(rpcFor(), address, options);
+      if (run !== doorRun) return;
       done(`block ${slip.at.block} \xB7 ${isoUtc(slip.at.timestamp)} \xB7 ${slip.notes.length} thing${slip.notes.length === 1 ? "" : "s"} to know`);
-      renderSlip(slip);
+      if (quick) keepPlace(() => renderSlip(slip));
+      else renderSlip(slip);
     } catch (error) {
-      failed(error, address);
+      if (run !== doorRun) return;
+      if (quick) {
+        go.disabled = false;
+        status.textContent = `${chain().name} \xB7 the slower sections did not answer: ${error instanceof Error ? error.message : String(error)}`;
+      } else {
+        failed(error, address);
+      }
     } finally {
       go.disabled = false;
     }
@@ -6445,7 +6466,7 @@
       </div>
     </div>
     <div class="vfoot">
-      <div class="tallies">${counts || '<span class="tally lv-info"><i></i>nothing to flag</span>'}</div>
+      <div class="tallies">${counts || '<span class="tally lv-info"><i></i>nothing to flag</span>'}${opts.pending ? '<span class="tally pendingchip"><i></i>still reading the liquidity and the dev history</span>' : ""}</div>
       <div class="vat">${opts.at}</div>
       <div class="vacts">${opts.actions}</div>
     </div>
@@ -6658,7 +6679,14 @@
   function sentence(parts) {
     return parts.map((x) => x.charAt(0).toUpperCase() + x.slice(1)).join(". ") + ".";
   }
-  function renderSlip(slip) {
+  function keepPlace(render) {
+    const open = [...document.querySelectorAll("details.sec[open]")].map((d) => d.id).filter(Boolean);
+    const y = window.scrollY;
+    render();
+    for (const id of open) document.getElementById(id)?.setAttribute("open", "");
+    if (y) window.scrollTo({ top: y, behavior: "auto" });
+  }
+  function renderSlip(slip, opts = {}) {
     const meta = slip.id.meta;
     const c0 = chain();
     const explorer = c0.blockscout ? `${c0.blockscout}/address/${slip.subject}` : null;
@@ -6746,6 +6774,7 @@
       at: `${mode === "demo" ? "DEMO \xB7 " : ""}${esc2(slip.chain.name)} \xB7 block ${slip.at.block} \xB7 ${isoUtc(slip.at.timestamp)}`,
       notes: slip.notes,
       lead: summarySentence(slip),
+      pending: opts.pending === true,
       actions: `<button class="ghost" id="act-card" type="button">Image</button><button class="ghost" id="act-json" type="button">JSON</button><button class="ghost" id="act-link" type="button">Link</button>`
     })}
     <div class="card-wrap" id="card"></div>

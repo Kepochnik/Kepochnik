@@ -265,6 +265,34 @@ function isDemoAddress(address: string): boolean {
   return Object.values(DEMO.tokens).some((t) => t.token === a || t.curve === a || t.deployer === a) || a === DEMO_IMPOSTOR.token || a === DEMO_PLAIN.token || a === DEMO_V1.token || a === DEMO_V1.deployer || a === "0x000000000000000000000000000000000000dead";
 }
 
+/**
+ * Rising sequence number, so a slow read cannot land on a newer one.
+ *
+ * The door now renders twice: fast first, complete second. If you paste a
+ * second address while the first is still finishing its log scans, the
+ * first one's late result must not overwrite the second one's page.
+ */
+let doorRun = 0;
+
+/**
+ * The reads that make a door slow, measured rather than guessed. On Base,
+ * USDC, one door:
+ *
+ *   eth_getLogs                15 calls, 13136 ms
+ *   eth_getTransactionReceipt  58 calls,  2649 ms
+ *   everything else                       ~1920 ms
+ *
+ * Eighteen seconds, and 89% of it is one section: who holds the pool's
+ * liquidity — log scans for the pool's Mint events, then a receipt each to
+ * trace a position to the wallet holding its NFT. The dev history, the room
+ * and the lookalike search are log scans too.
+ *
+ * Everything a reader needs for the verdict — the code, the owner, the
+ * powers, the pools, the holders — is under two seconds. So the page stops
+ * waiting for the slow half before showing the fast one.
+ */
+const SLOW_SECTIONS = { skipLiquidity: true, skipDev: true, skipRoom: true, skipCrew: true, skipLookalikes: true } as const;
+
 async function runDoor(address: string): Promise<void> {
   if (chain().family === "solana" && mode === "live") return await runSolanaDoor(address);
   if (!ADDR.test(address)) return bad("Paste a 20-byte hex address: the token or its bonding curve, 0x followed by 40 hex characters.");
@@ -275,15 +303,43 @@ async function runDoor(address: string): Promise<void> {
     location.hash = `#/t/${address.toLowerCase()}?chain=${chain().key}`;
     return;
   }
+  const run = ++doorRun;
   busy("reading the chain at the door…");
+  const options = mode === "demo"
+    ? { chain: CHAINS.robinhood, factory: factoryFor(), blockscout: blockscoutFor(), devHours: 8, chunkSize: 100_000, launchSearchBlocks: 400_000 }
+    : { chain: chain(), factory: factoryFor(), blockscout: blockscoutFor(), devHours: 24 };
+
+  // Pass one: everything but the log scans. This costs the fast reads twice
+  // over the two passes, which is about two seconds against the eighteen it
+  // takes off the wait for an answer.
+  let quick = false;
   try {
-    const slip = await readDoor(rpcFor(), address, mode === "demo"
-      ? { chain: CHAINS.robinhood, factory: factoryFor(), blockscout: blockscoutFor(), devHours: 8, chunkSize: 100_000, launchSearchBlocks: 400_000 }
-      : { chain: chain(), factory: factoryFor(), blockscout: blockscoutFor(), devHours: 24 });
+    const fast = await readDoor(rpcFor(), address, { ...options, ...SLOW_SECTIONS });
+    if (run !== doorRun) return;
+    renderSlip(fast, { pending: true });
+    quick = true;
+    status.textContent = `${mode === "demo" ? "DEMO · " : `${chain().name} · `}block ${fast.at.block} · reading the slower parts…`;
+  } catch {
+    // The fast pass failing is not itself worth reporting: the full pass is
+    // about to try the same reads and will say what went wrong.
+  }
+
+  try {
+    const slip = await readDoor(rpcFor(), address, options);
+    if (run !== doorRun) return;
     done(`block ${slip.at.block} · ${isoUtc(slip.at.timestamp)} · ${slip.notes.length} thing${slip.notes.length === 1 ? "" : "s"} to know`);
-    renderSlip(slip);
+    if (quick) keepPlace(() => renderSlip(slip));
+    else renderSlip(slip);
   } catch (error) {
-    failed(error, address);
+    if (run !== doorRun) return;
+    // A fast answer already on screen is not thrown away because the slow
+    // half failed. It says what is missing and stays.
+    if (quick) {
+      go.disabled = false;
+      status.textContent = `${chain().name} · the slower sections did not answer: ${error instanceof Error ? error.message : String(error)}`;
+    } else {
+      failed(error, address);
+    }
   } finally {
     go.disabled = false;
   }
@@ -505,6 +561,8 @@ function verdictBlock(opts: {
   at: string;
   notes: DoorNote[];
   lead: string;
+  /** True while the slow half is still reading, so the tallies are not final. */
+  pending?: boolean;
   actions: string;
 }): string {
   const v = verdictOf(opts.notes);
@@ -531,7 +589,7 @@ function verdictBlock(opts: {
       </div>
     </div>
     <div class="vfoot">
-      <div class="tallies">${counts || '<span class="tally lv-info"><i></i>nothing to flag</span>'}</div>
+      <div class="tallies">${counts || '<span class="tally lv-info"><i></i>nothing to flag</span>'}${opts.pending ? '<span class="tally pendingchip"><i></i>still reading the liquidity and the dev history</span>' : ""}</div>
       <div class="vat">${opts.at}</div>
       <div class="vacts">${opts.actions}</div>
     </div>
@@ -796,7 +854,22 @@ function sentence(parts: string[]): string {
   return parts.map((x) => x.charAt(0).toUpperCase() + x.slice(1)).join(". ") + ".";
 }
 
-function renderSlip(slip: DoorSlip): void {
+/**
+ * Keeps what the reader had open across a re-render.
+ *
+ * The slip is rebuilt from scratch when the slow half arrives, and a
+ * rebuild that silently closes the section somebody was reading, and jumps
+ * them to the top, is worse than the wait it replaced.
+ */
+function keepPlace(render: () => void): void {
+  const open = [...document.querySelectorAll<HTMLDetailsElement>("details.sec[open]")].map((d) => d.id).filter(Boolean);
+  const y = window.scrollY;
+  render();
+  for (const id of open) document.getElementById(id)?.setAttribute("open", "");
+  if (y) window.scrollTo({ top: y, behavior: "auto" });
+}
+
+function renderSlip(slip: DoorSlip, opts: { pending?: boolean } = {}): void {
   const meta = slip.id.meta;
   const c0 = chain();
   const explorer = c0.blockscout ? `${c0.blockscout}/address/${slip.subject}` : null;
@@ -914,6 +987,7 @@ function renderSlip(slip: DoorSlip): void {
       at: `${mode === "demo" ? "DEMO · " : ""}${esc(slip.chain.name)} · block ${slip.at.block} · ${isoUtc(slip.at.timestamp)}`,
       notes: slip.notes,
       lead: summarySentence(slip),
+      pending: opts.pending === true,
       actions: `<button class="ghost" id="act-card" type="button">Image</button><button class="ghost" id="act-json" type="button">JSON</button><button class="ghost" id="act-link" type="button">Link</button>`,
     })}
     <div class="card-wrap" id="card"></div>

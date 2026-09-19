@@ -200,6 +200,10 @@ body.answered .chips{display:none}
 .tally{display:inline-flex;align-items:center;gap:7px;font:600 12px var(--mono);color:var(--muted);text-transform:lowercase}
 .tally i{width:8px;height:8px;border-radius:2px;display:inline-block}
 .tally.lv-stop i{background:var(--stop)}.tally.lv-watch i{background:var(--watch)}.tally.lv-info i{background:var(--info)}
+/* The fast half is on screen and the slow half is still reading. Says so,
+   because a tally that is about to change is not a tally. */
+.tally.pendingchip{color:var(--brass)}
+.tally.pendingchip i{background:var(--brass);border-radius:50%;animation:pulse 1s infinite alternate}
 .vat{color:var(--dim);font:12px var(--mono)}
 .vacts{margin-left:auto;display:flex;gap:8px;flex-wrap:wrap}
 @media (max-width:760px){.vbody{grid-template-columns:1fr;gap:14px}.vaddr{margin-left:0;order:9;width:100%}.vfoot{gap:10px}.vacts{margin-left:0;width:100%}}
