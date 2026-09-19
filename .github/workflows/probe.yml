@@ -97,7 +97,12 @@ jobs:
               .then((slip) => {
                 console.log(`door took ${Date.now() - started} ms`);
                 const o = slip.open;
-                console.log("  pools:", o && o.pools ? o.pools.length : "none", "| liquidity:", o && o.liquidity ? `${o.liquidity.positionsRead}/${o.liquidity.positionsFound} positions` : "MISSING");
+                console.log("  pools:", o && o.pools ? o.pools.length : "none", "| liquidity:", o && o.liquidity ? `${o.liquidity.positionsRead}/${o.liquidity.positionsFound} positions, ${o.liquidity.shareOfLiquidityBps/100}% of the market` : "MISSING");
+                // Which venues came from the chain table and which from
+                // asking the token holders. The second kind is the only way a
+                // DEX nobody listed shows up, and it is also a cost: two
+                // calls per candidate against one endpoint.
+                for (const p of (o && o.pools) || []) console.log("  pool:", p.kind, p.dex, p.address);
               })
               .catch((e) => console.log("door threw:", e.message))
               .finally(() => {
