@@ -237,9 +237,15 @@ jobs:
             if (unknown.length) console.log("::notice::" + unknown.length + " venue(s) found by holder discovery that answer no known pool shape; shown unpriced");
             if (!pools.length) { console.log("no pool on this chain for this token; liquidity not applicable"); process.exit(0); }
             if (!l) { console.error("::error::pools were found but the liquidity read produced nothing"); process.exit(1); }
-            console.log(`${l.dex} ${l.kind}: ${l.burnedBps/100}% burned, ${l.lockedBps/100}% locked, ${l.freeBps/100}% withdrawable`);
+            console.log(`${l.dex} ${l.kind}: ${l.burnedBps/100}% burned, ${l.lockedBps/100}% locked, ${l.freeBps/100}% withdrawable — this pool is ${l.shareOfLiquidityBps/100}% of the readable liquidity`);
             for (const h of l.holders) console.log("  ", h.kind, h.name || "", h.address, (h.shareBps/100)+"%");
             if (l.unread) console.log("unread:", l.unread);
+            // Which pool the launchpad locker actually holds a position in.
+            // The house rules name a locker and a position id; assuming that
+            // position is in the deepest pool is a guess, and it was wrong
+            // once already, so the slip prints both and nobody has to assume.
+            const v1 = j.id && j.id.v1;
+            if (v1 && v1.locker) console.log("launchpad locker:", v1.locker, "holds position", (v1.record && v1.record.positionId) || "?");
             const total = l.burnedBps + l.lockedBps + l.freeBps;
             if (Math.abs(total - 10000) > 1 && l.holders.length) { console.error("::error::the shares do not add up: "+total); process.exit(1); }
             if (!l.holders.length && !l.unread) { console.error("::error::no holders and no reason given"); process.exit(1); }
@@ -274,6 +280,78 @@ jobs:
           fi
 
           exit $fail
+      - name: Whatever the chain is actually trading right now
+        env:
+          CHAIN: ${{ inputs.chain || 'robinhood' }}
+        run: |
+          # One reference token per chain proves very little: USDC and CAKE
+          # are the best-behaved contracts on their chains, and the slip is
+          # for the ones that are not. So this step points the tool at real,
+          # arbitrary, currently-traded tokens.
+          #
+          # Where they come from matters. On an EVM chain they are counted out
+          # of the last ten minutes of Transfer logs — the chain answering the
+          # question itself. On Solana there is no allow-listed read that
+          # enumerates mints, so a public list supplies candidate addresses
+          # and nothing else: every word the slip says about them is still
+          # read from the chain, and a bad candidate can only produce "there
+          # is no account at this address", never a wrong finding.
+          #
+          # Nothing here fails the run. These tokens are unknown by design;
+          # what is checked is that BOUNCER answers about each of them with a
+          # slip rather than a crash, and that it never claims a finding it
+          # did not read.
+          B="node bin/bouncer.mjs"
+          SUBJECTS=""
+          if [ "$CHAIN" = "solana" ]; then
+            for SOURCE in "https://tokens.jup.ag/tokens?tags=verified" "https://token.jup.ag/strict"; do
+              SUBJECTS=$(curl -sS --max-time 20 "$SOURCE" 2>/dev/null \
+                | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const j=JSON.parse(s);const a=(Array.isArray(j)?j:j.tokens||[]).map(t=>t.address).filter(Boolean);const out=[];for(let i=0;i<a.length&&out.length<4;i+=Math.max(1,Math.floor(a.length/40)))out.push(a[i]);console.log(out.join(" "))}catch{console.log("")}})' || true)
+              [ -n "$SUBJECTS" ] && break
+            done
+            [ -z "$SUBJECTS" ] && echo "::warning::no public mint list answered, so no arbitrary Solana mints were checked"
+          else
+            SUBJECTS=$(node scripts/movers.mjs "$CHAIN" 4 2>/dev/null | cut -d' ' -f1 | tr '\n' ' ' || true)
+            [ -z "$SUBJECTS" ] && echo "::warning::no ERC-20 transfers came back, so no arbitrary tokens were checked on $CHAIN"
+          fi
+          echo "subjects: ${SUBJECTS:-none}"
+
+          for SUBJECT in $SUBJECTS; do
+            echo "::group::$SUBJECT"
+            if timeout 240 $B door "$SUBJECT" --chain "$CHAIN" --format json > /tmp/rand.json 2>/tmp/rand.err; then
+              SUBJECT="$SUBJECT" node -e '
+                const raw = require("fs").readFileSync("/tmp/rand.json","utf8").trim();
+                let j; try { j = JSON.parse(raw); } catch { console.error("::error::not JSON for " + process.env.SUBJECT + ": " + raw.slice(0,200)); process.exit(1); }
+                const notes = j.notes || [];
+                const name = (j.metadata && j.metadata.symbol) || (j.id && j.id.meta && j.id.meta.symbol) || j.whatItIs || "(no symbol)";
+                console.log(name, "|", j.stamp, "|", notes.length, "notes:", notes.filter((n)=>n.level==="stop").length, "stop,", notes.filter((n)=>n.level==="watch").length, "watch");
+                const o = j.open;
+                if (o) {
+                  console.log("  pools:", (o.pools||[]).map((p)=>p.kind+" "+p.dex).join(", ") || "none");
+                  if (o.liquidity) console.log("  liquidity:", o.liquidity.read === false ? "not read" : `${o.liquidity.burnedBps/100}% burned, ${o.liquidity.lockedBps/100}% locked, ${o.liquidity.freeBps/100}% withdrawable over ${o.liquidity.shareOfLiquidityBps/100}% of the market`);
+                }
+                const mk = j.market;
+                if (mk) {
+                  console.log("  venue:", mk.best ? mk.best.name : "none", "| pools:", (mk.pools||[]).length);
+                  for (const l of mk.locks || []) console.log("  lock:", l.name, l.read ? `${l.burnedBps/100}% burned, ${l.freeBps/100}% withdrawable` : "not read");
+                }
+                for (const sk of j.skipped || []) console.log("  skipped:", sk.section, "-", sk.reason);
+                for (const n of notes.filter((x)=>x.level==="stop")) console.log("  STOP:", n.text.slice(0,200));
+                // The one thing that is a failure: a share reported without
+                // the read behind it. Everything else about an unknown token
+                // is a finding, not a fault.
+                if (o && o.liquidity && o.liquidity.holders && o.liquidity.holders.length) {
+                  const total = o.liquidity.burnedBps + o.liquidity.lockedBps + o.liquidity.freeBps;
+                  if (Math.abs(total - 10000) > 1) { console.error("::error::liquidity shares do not add up for " + process.env.SUBJECT + ": " + total); process.exit(1); }
+                }
+              ' || fail=1
+            else
+              echo "::error::the door crashed on $SUBJECT"; cat /tmp/rand.err; fail=1
+            fi
+            echo "::endgroup::"
+          done
+          exit ${fail:-0}
+
       - name: The MCP server answers over stdio
         env:
           CHAIN: ${{ inputs.chain || 'robinhood' }}
