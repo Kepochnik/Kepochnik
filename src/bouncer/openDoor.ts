@@ -239,15 +239,26 @@ export async function readOpenDoor(rpc: RpcClient, token: ContractId, meta: Toke
   const supply = meta?.totalSupply ?? null;
   const bps = (v: bigint): number | null => (supply !== null && supply > 0n ? Number((v * 10_000n) / supply) : null);
 
+  // ---- the explorer's holder list, started here rather than below, because
+  // the market read needs it: a DEX the chain's table does not list is found
+  // by asking the token's largest contract holders whether they are pools.
+  // Started, not awaited — the calls above it have nothing to do with it.
+  const holderList = options.blockscout ? options.blockscout.tokenHolders(address, 50).catch(() => null) : Promise.resolve(null);
+
   // ---- where it trades, read before the probes so a sale can be simulated into the pool
   let pools: MarketPool[] | null = null;
   let market: Market | null = null;
   let liquidity: PoolLock | null = null;
   if (options.dex) {
     try {
+      const listed = await holderList;
       pools = await readPools(rpc, address, options.dex, block, meta?.decimals ?? 18, {
         v4PoolManager: options.v4PoolManager,
         v4FromBlock: options.liquidityFromBlock,
+        // Contracts only: a wallet is not a pool, and asking one costs two
+        // calls for a certain revert. The explorer's name for the contract is
+        // passed along because it is the only thing that can name the venue.
+        candidates: (listed ?? []).filter((h) => h.isContract && !h.delegated).map((h) => ({ address: h.address, name: h.name })),
       });
       const position = options.position ?? (supply !== null && supply > 0n ? supply / 100n : 0n);
       if (position > 0n) market = readMarket(pools, position, meta?.decimals ?? 18, options.dex.wethSymbol);
@@ -317,10 +328,14 @@ export async function readOpenDoor(rpc: RpcClient, token: ContractId, meta: Toke
       note(error);
     }
     try {
-      const [list, tokenInfo] = await Promise.all([
-        bs.tokenHolders(address, 50),
+      const [listed, tokenInfo] = await Promise.all([
+        holderList,
         bs.tokenInfo(address).catch(() => ({ holders: null, transfers: null, type: null, priceUsd: null, volume24hUsd: null, marketCapUsd: null })),
       ]);
+      // The same read the market section used, not a second one. It was
+      // started before that section and is long since resolved.
+      if (!listed) throw new Error("the explorer did not return the token's holders");
+      const list = listed;
       topHolders = list;
       explorer = {
         isScam: info ? info.isScam : null,

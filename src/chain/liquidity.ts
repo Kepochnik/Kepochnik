@@ -398,7 +398,19 @@ export async function readPoolLock(
   block: number,
   options: V3LockOptions,
 ): Promise<PoolLock> {
-  return pool.kind === "v3" ? readV3Lock(rpc, pool, lockers, positionManager, block, options) : readV2Lock(rpc, pool, lockers, block);
+  if (pool.kind === "v3") return readV3Lock(rpc, pool, lockers, positionManager, block, options);
+  if (pool.kind === "v4") {
+    // A V4 pool is a row inside a singleton. It has no LP token, and its
+    // positions belong to whatever the hook or the position manager decides,
+    // which is not one shape to read.
+    return { pool: pool.address, dex: pool.dex, kind: pool.kind, burnedBps: 0, lockedBps: 0, freeBps: 0, partial: false, positionsFound: 0, positionsRead: 0, holders: [], unread: "a Uniswap V4 pool holds no LP token of its own, so who can withdraw its liquidity is not read here" };
+  }
+  if (pool.kind === "unknown") {
+    // Found by discovery and it answered none of the shape probes. Reading it
+    // as a V2 pool would be the same guess this file exists to refuse.
+    return { pool: pool.address, dex: pool.dex, kind: pool.kind, burnedBps: 0, lockedBps: 0, freeBps: 0, partial: false, positionsFound: 0, positionsRead: 0, holders: [], unread: "this venue was found by checking which contracts hold the token, and it is not a pool shape BOUNCER knows how to read liquidity ownership from" };
+  }
+  return readV2Lock(rpc, pool, lockers, block);
 }
 
 /** One plain sentence for the slip. */

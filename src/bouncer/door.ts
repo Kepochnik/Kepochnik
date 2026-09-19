@@ -523,6 +523,16 @@ function openDoorFactNotes(slip: DoorSlip, o: OpenDoor): DoorNote[] {
     }
   }
 
+  // ---- venues nobody wrote down
+  const unidentified = (o.pools ?? []).filter((p) => p.kind === "unknown");
+  if (unidentified.length) {
+    notes.push({
+      level: "watch",
+      code: "venue-unidentified",
+      text: `${unidentified.length} contract${unidentified.length === 1 ? "" : "s"} holding this token turned out to be a pool for it — ${unidentified.map((p) => `${p.dex} at ${shortAddress(p.address)}`).join(", ")} — found by asking the largest holders rather than from a list of factories. ${unidentified.length === 1 ? "It answers" : "They answer"} none of the pool shapes BOUNCER can price, so the balances are shown and no sale is priced from them: guessing the invariant is how a quote ends up flattering the exit.`,
+    });
+  }
+
   // ---- can they pull the liquidity out from under you
   if (o.liquidity) {
     const l = o.liquidity;

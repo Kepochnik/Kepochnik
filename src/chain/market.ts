@@ -30,6 +30,7 @@ const FACTORY_FUNCTIONS = {
 
 const POOL_FUNCTIONS = {
   token0: { name: "token0", inputs: [], outputs: ["address"] },
+  token1: { name: "token1", inputs: [], outputs: ["address"] },
   slot0: { name: "slot0", inputs: [], outputs: ["uint160", "int24", "uint16", "uint16", "uint16", "uint8", "bool"] },
   liquidity: { name: "liquidity", inputs: [], outputs: ["uint128"] },
   fee: { name: "fee", inputs: [], outputs: ["uint24"] },
@@ -44,7 +45,7 @@ const POOL_FUNCTIONS = {
   * pool lives inside a singleton and can carry a hook, neither of which is
   * true of the others.
   */
-export type PoolKind = "v3" | "v4" | "v2" | "solidly";
+export type PoolKind = "v3" | "v4" | "v2" | "solidly" | "unknown";
 
 export interface MarketPool {
   dex: string;
@@ -103,6 +104,146 @@ export interface PoolsOptions {
   v4PoolManager?: string;
   /** How far back to look for V4 Initialize logs. */
   v4FromBlock?: number;
+  /**
+   * Contracts that hold a lot of this token, to be asked whether they are
+   * pools. This is how a DEX that is not in the chain's table gets found —
+   * see `discoverPools`. Each candidate costs two calls in one batch.
+   */
+  candidates?: { address: string; name?: string | null }[];
+}
+
+/**
+ * A DEX table is a list of factories somebody wrote down, which means every
+ * chain has venues it does not cover — on a new chain, most of them. Ramses on
+ * Robinhood Chain was the case that made this necessary: real pools, real
+ * liquidity, invisible to the tool because nobody had typed the factory
+ * address in.
+ *
+ * Guessing the factory address would be the wrong fix: a wrong guess is
+ * either nothing or, worse, somebody else's contract. So the pool is found
+ * from the other end. A pool holds the token — that is what a pool is — so it
+ * is among the token's largest holders, and the explorer already lists those.
+ * Ask each contract among them for `token0()` and `token1()`. A pool for this
+ * pair answers with exactly our two addresses. Nothing else does, whatever it
+ * is called.
+ *
+ * What this cannot do is name the DEX. It reports whatever name the caller
+ * passes through (the explorer's verified contract name, when there is one)
+ * and otherwise says the venue is unidentified, which is the truth.
+ */
+export async function discoverPools(
+  rpc: RpcClient,
+  token: string,
+  quote: string,
+  candidates: { address: string; name?: string | null }[],
+  block: number,
+  known: Set<string> = new Set(),
+): Promise<MarketPool[]> {
+  const subject = token.toLowerCase();
+  const weth = quote.toLowerCase();
+  const ask = candidates.filter((c) => {
+    const a = c.address.toLowerCase();
+    return a !== subject && a !== weth && !known.has(a);
+  });
+  if (!ask.length) return [];
+
+  const calls = ask.flatMap((c) => [
+    { to: c.address, data: encodeCall(POOL_FUNCTIONS.token0, []) },
+    { to: c.address, data: encodeCall(POOL_FUNCTIONS.token1, []) },
+  ]);
+  let raws: (Hex | Error)[];
+  try {
+    // Settled: most candidates are not pools, and a candidate that reverts is
+    // the expected case rather than a failure of the search.
+    raws = await rpc.callBatchSettled(calls, block);
+  } catch {
+    return [];
+  }
+
+  const found: MarketPool[] = [];
+  ask.forEach((candidate, i) => {
+    const zero = raws[i * 2];
+    const one = raws[i * 2 + 1];
+    if (zero instanceof Error || one instanceof Error || zero === undefined || one === undefined) return;
+    let token0: string;
+    let token1: string;
+    try {
+      [token0] = decodeOutputs(POOL_FUNCTIONS.token0, zero) as [string];
+      [token1] = decodeOutputs(POOL_FUNCTIONS.token1, one) as [string];
+    } catch {
+      return; // not a pool; it just happened to have those selectors
+    }
+    const pair = [token0.toLowerCase(), token1.toLowerCase()];
+    // Both sides must match. A contract that answers token0() with our token
+    // and token1() with something else is a pool for a different pair, and
+    // pricing this token against it would be arithmetic on the wrong market.
+    if (!(pair.includes(subject) && pair.includes(weth))) return;
+    found.push({
+      // "unknown" until the pool says otherwise, below. Defaulting to V2 here
+      // would mean a concentrated pool got priced by constant product over its
+      // raw balances, which overstates a sale worst on the large one.
+      dex: candidate.name || "an unidentified venue",
+      kind: "unknown",
+      address: candidate.address.toLowerCase(),
+      feeBps: 30,
+      tokenIsToken0: pair[0] === subject,
+      tokenReserve: null,
+      quoteReserve: null,
+    });
+  });
+  if (!found.length) return [];
+  await classify(rpc, found, block);
+  await hydrate(rpc, token, { weth: quote } as DexTable, found, block);
+  return found;
+}
+
+/**
+ * What shape is this pool? Asked, not assumed. Each pool is offered the three
+ * questions only one family answers: a V3-style pool has a `slot0()`, a
+ * Solidly pool has a `stable()`, a V2 pool has `getReserves()` and neither of
+ * the others. A pool that answers none of them stays "unknown" and is never
+ * priced — its reserves are still worth showing, because a venue nobody can
+ * price is still a venue somebody can sell into.
+ */
+async function classify(rpc: RpcClient, pools: MarketPool[], block: number): Promise<void> {
+  const calls = pools.flatMap((p) => [
+    { to: p.address, data: encodeCall(POOL_FUNCTIONS.slot0, []) },
+    { to: p.address, data: encodeCall(POOL_FUNCTIONS.stable, []) },
+    { to: p.address, data: encodeCall(POOL_FUNCTIONS.getReserves, []) },
+    { to: p.address, data: encodeCall(POOL_FUNCTIONS.fee, []) },
+  ]);
+  let raws: (Hex | Error)[];
+  try {
+    raws = await rpc.callBatchSettled(calls, block);
+  } catch {
+    return; // every pool stays unknown, which is the safe direction
+  }
+  pools.forEach((pool, i) => {
+    const [slot0, stable, reserves, fee] = raws.slice(i * 4, i * 4 + 4);
+    const ok = (raw: Hex | Error | undefined): raw is Hex => typeof raw === "string" && raw.length > 2;
+    if (ok(slot0)) {
+      pool.kind = "v3";
+      if (ok(fee)) {
+        try {
+          pool.feeBps = Number(decodeOutputs(POOL_FUNCTIONS.fee, fee)[0] as bigint) / 100;
+        } catch {
+          // the default stands; hydrate reads it again anyway
+        }
+      }
+      return;
+    }
+    if (ok(stable)) {
+      try {
+        pool.kind = "solidly";
+        pool.stable = decodeOutputs(POOL_FUNCTIONS.stable, stable)[0] as boolean;
+        pool.feeBps = pool.stable ? 5 : 30;
+        return;
+      } catch {
+        // fall through: it had the selector but not the shape
+      }
+    }
+    if (ok(reserves)) pool.kind = "v2";
+  });
 }
 
 export async function readPools(rpc: RpcClient, token: string, dex: DexTable, block: number, tokenDecimals = 18, options: PoolsOptions = {}): Promise<MarketPool[]> {
@@ -131,7 +272,11 @@ export async function readPools(rpc: RpcClient, token: string, dex: DexTable, bl
       ? readV4Pools(rpc, token, dex.weth, options.v4PoolManager, { fromBlock: Math.max(0, options.v4FromBlock), toBlock: block }).catch(() => [] as MarketPool[])
       : Promise.resolve([] as MarketPool[]);
 
-  if (!calls.length) return await v4;
+  if (!calls.length) {
+    const only = await v4;
+    const extra = options.candidates?.length ? await discoverPools(rpc, token, dex.weth, options.candidates, block, new Set(only.map((p) => p.address))).catch(() => []) : [];
+    return [...only, ...extra].sort(byDepth);
+  }
 
   const raws = await rpc.callBatch(calls, block);
   const found: MarketPool[] = [];
@@ -147,11 +292,18 @@ export async function readPools(rpc: RpcClient, token: string, dex: DexTable, bl
     }
   });
   const v4Pools = await v4;
-  if (!found.length) return v4Pools.sort(byDepth);
+  if (found.length) await hydrate(rpc, token, dex, found, block);
+  const all = [...found, ...v4Pools];
 
-  await hydrate(rpc, token, dex, found, block);
-  found.push(...v4Pools);
-  return found.sort(byDepth);
+  // Last: the venues nobody wrote down. Only after the factories have had
+  // their say, so a pool already found is not asked about twice, and only
+  // when the caller supplied candidates — this costs a batch.
+  if (options.candidates?.length) {
+    const known = new Set(all.map((p) => p.address));
+    const extra = await discoverPools(rpc, token, dex.weth, options.candidates, block, known).catch(() => []);
+    all.push(...extra);
+  }
+  return all.sort(byDepth);
 }
 
 /** Reads each pool's direction, reserves and, for a V3 pool, its price and liquidity. */
@@ -222,6 +374,11 @@ const byDepth = (a: MarketPool, b: MarketPool): number => {
 
 /** Whether this pool holds enough state to price a sale. */
 export function canPrice(pool: MarketPool): boolean {
+  // A pool found by discovery that answered none of the shape probes. Its
+  // reserves are real and are shown; what its invariant does with them is not
+  // known, and constant product is a guess that would be wrong in exactly the
+  // direction that flatters the sale.
+  if (pool.kind === "unknown") return false;
   if (pool.kind === "v3" || pool.kind === "v4") return (pool.sqrtPriceX96 ?? 0n) > 0n && (pool.liquidity ?? 0n) > 0n;
   if (pool.kind === "solidly" && pool.stable) return false;
   return (pool.tokenReserve ?? 0n) > 0n && (pool.quoteReserve ?? 0n) > 0n;
@@ -329,7 +486,7 @@ export function readMarket(pools: MarketPool[], position: bigint, tokenDecimals:
     spot,
     quotes,
     note:
-      `Priced on the ${best.dex} ${best.kind === "v3" ? "V3" : best.kind === "v4" ? "V4" : best.kind === "v2" ? "V2" : "Solidly"} pool at ${(best.feeBps / 100).toFixed(2)}% fee, from its state at this block. ` +
+      `Priced on the ${best.dex} ${best.kind === "v3" ? "V3" : best.kind === "v4" ? "V4" : best.kind === "v2" ? "V2" : best.kind === "solidly" ? "Solidly" : "unidentified"} pool at ${(best.feeBps / 100).toFixed(2)}% fee, from its state at this block. ` +
       (best.kind === "v3" || best.kind === "v4"
         ? `Concentrated liquidity: exact inside the current tick${crosses ? ", and the larger sizes leave it, so the real answer depends on ticks this does not read" : ""}. `
         : "Constant product, so the arithmetic is exact for the pool. ") +
