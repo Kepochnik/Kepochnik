@@ -66,6 +66,16 @@ export interface AdaptiveChunking {
    * seconds into one that took ten minutes and then gave up.
    */
   maxRequests?: number;
+  /**
+   * Wall-clock budget in milliseconds, which is the bound the request count
+   * cannot give. Measured on BNB Chain: five log requests, all five refused,
+   * a hundred and seventy seconds. The budget of requests was never spent —
+   * each request took thirty-four seconds to fail, because a refusal travels
+   * through a fifteen-second timeout on each endpoint in turn. A read before
+   * a trade cannot be bounded by counting requests when one request can cost
+   * more than the whole read is worth.
+   */
+  budgetMs?: number;
 }
 
 /**
@@ -86,12 +96,19 @@ export async function readTapeAdaptive(rpc: RpcClient, request: TapeRequest, chu
   let chunk = Math.min(maxChunk, Math.max(minChunk, chunking.startChunk ?? 50_000));
 
   const maxRequests = chunking.maxRequests ?? Infinity;
+  const deadline = chunking.budgetMs === undefined ? Infinity : Date.now() + chunking.budgetMs;
   const logs: DecodedLog[] = [];
   let chunks = 0;
   let requests = 0;
   let from = request.fromBlock;
   let complete = true;
   while (from <= request.toBlock) {
+    if (Date.now() >= deadline) {
+      // Out of time with window left. Same trade as running out of requests:
+      // what was read is kept and the walk says it is incomplete.
+      complete = false;
+      break;
+    }
     if (requests >= maxRequests) {
       // Out of budget with window left. Returning what was read, and saying so,
       // beats both alternatives: carrying on for minutes, or throwing away

@@ -238,6 +238,8 @@ export interface V3LockOptions {
   chunkSize?: number;
   /** Most log requests the mint history may spend before reporting a partial window. */
   maxRequests?: number;
+  /** Wall-clock budget for the mint history, in milliseconds. A request count is not a bound when one request can cost half a minute. */
+  budgetMs?: number;
 }
 
 /**
@@ -271,7 +273,7 @@ export async function readV3Lock(
       // the endpoint refuse every wide chunk, so the span halves to a single
       // block and a week's window becomes hundreds of thousands of requests —
       // ten minutes of a door, and then nothing to show for it.
-      { minChunk: 1, startChunk: options.chunkSize ?? 2_000, maxChunk: 100_000, maxRequests: options.maxRequests ?? 15 },
+      { minChunk: 1, startChunk: options.chunkSize ?? 2_000, maxChunk: 100_000, maxRequests: options.maxRequests ?? 15, budgetMs: options.budgetMs ?? 20_000 },
     );
     logs = tape.logs;
     windowComplete = tape.complete !== false;

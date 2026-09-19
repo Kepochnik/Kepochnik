@@ -187,6 +187,8 @@ export interface OpenDoorOptions {
   liquidity?: boolean;
   /** How far back to look for the mints that opened the V3 positions. */
   liquidityFromBlock?: number;
+  /** Wall-clock budget for the liquidity mint history, in milliseconds. A request count is not a bound when one request can cost half a minute. */
+  liquidityBudgetMs?: number;
   /** A resolved Uniswap V4 singleton; V4 pools are skipped when absent. */
   v4PoolManager?: string;
 }
@@ -282,9 +284,42 @@ export async function readOpenDoor(rpc: RpcClient, token: ContractId, meta: Toke
     const deepest = readable[0] ?? pools?.[0] ?? null;
     if (deepest && options.liquidity !== false) {
       try {
-        liquidity = await readPoolLock(rpc, deepest, options.lockers, options.dex.v3PositionManager, block, {
-          fromBlock: Math.max(0, options.liquidityFromBlock ?? block - 500_000),
-        });
+        // Two bounds, because the inner one cannot cover the last call.
+        // The mint history stops itself at a wall-clock budget, but the check
+        // happens between requests, and a request that hangs is exactly the
+        // case here: measured on BNB Chain, five refused log calls cost a
+        // hundred and seventy seconds, thirty-four each, because a refusal
+        // travels through a fifteen-second timeout on every endpoint in turn.
+        // So the section as a whole is raced too, and a section that runs out
+        // of time is reported unread rather than waited out. A slip nobody
+        // can wait for is not a slip.
+        const LIQUIDITY_BUDGET_MS = 30_000;
+        liquidity = await Promise.race([
+          readPoolLock(rpc, deepest, options.lockers, options.dex.v3PositionManager, block, {
+            fromBlock: Math.max(0, options.liquidityFromBlock ?? block - 500_000),
+            budgetMs: options.liquidityBudgetMs ?? 20_000,
+          }),
+          new Promise<PoolLock>((resolve) =>
+            setTimeout(
+              () =>
+                resolve({
+                  pool: deepest.address,
+                  dex: deepest.dex,
+                  kind: deepest.kind,
+                  burnedBps: 0,
+                  lockedBps: 0,
+                  freeBps: 0,
+                  partial: false,
+                  positionsFound: 0,
+                  positionsRead: 0,
+                  holders: [],
+                  shareOfLiquidityBps: 0,
+                  unread: `the endpoint did not answer the liquidity history within ${LIQUIDITY_BUDGET_MS / 1_000} seconds, so who can withdraw this pool was not read`,
+                }),
+              LIQUIDITY_BUDGET_MS,
+            ),
+          ),
+        ]);
         // A contract holding the liquidity is worth naming when the chain's
         // explorer publishes a verified name for it. That is where a locker
         // gets identified without a table of addresses recalled rather than
