@@ -3941,6 +3941,7 @@
 
   // src/chain/market.ts
   var Q962 = 2n ** 96n;
+  var BATCH_SLICE = 40;
   var FACTORY_FUNCTIONS2 = {
     getPool: { name: "getPool", inputs: ["address", "address", "uint24"], outputs: ["address"] },
     getPair: { name: "getPair", inputs: ["address", "address"], outputs: ["address"] },
@@ -3968,11 +3969,13 @@
       { to: c.address, data: encodeCall(POOL_FUNCTIONS.token0, []) },
       { to: c.address, data: encodeCall(POOL_FUNCTIONS.token1, []) }
     ]);
-    let raws;
-    try {
-      raws = await rpc.callBatchSettled(calls, block);
-    } catch {
-      return [];
+    const raws = [];
+    for (let i = 0; i < calls.length; i += BATCH_SLICE) {
+      try {
+        raws.push(...await rpc.callBatchSettled(calls.slice(i, i + BATCH_SLICE), block));
+      } catch (error) {
+        for (let k = i; k < Math.min(i + BATCH_SLICE, calls.length); k++) raws.push(error instanceof Error ? error : new Error(String(error)));
+      }
     }
     const found = [];
     ask.forEach((candidate, i) => {
@@ -4266,7 +4269,7 @@
   }
   var bps2 = (part, whole) => whole > 0n ? Number(part * 10000n / whole) : 0;
   async function readV2Lock(rpc, pool, lockers, block) {
-    const base = { pool: pool.address, dex: pool.dex, kind: pool.kind, burnedBps: 0, lockedBps: 0, freeBps: 0, partial: false, positionsFound: 0, positionsRead: 0, holders: [], unread: "" };
+    const base = { pool: pool.address, dex: pool.dex, kind: pool.kind, burnedBps: 0, lockedBps: 0, freeBps: 0, partial: false, positionsFound: 0, positionsRead: 0, holders: [], shareOfLiquidityBps: 1e4, unread: "" };
     const lockerAddresses = Object.keys(lockers ?? {});
     const asked = [ZERO2, DEAD, ...lockerAddresses];
     const calls = [
@@ -4333,7 +4336,7 @@
     return lock;
   }
   async function readV3Lock(rpc, pool, lockers, positionManager, block, options) {
-    const base = { pool: pool.address, dex: pool.dex, kind: pool.kind, burnedBps: 0, lockedBps: 0, freeBps: 0, partial: false, positionsFound: 0, positionsRead: 0, holders: [], unread: "" };
+    const base = { pool: pool.address, dex: pool.dex, kind: pool.kind, burnedBps: 0, lockedBps: 0, freeBps: 0, partial: false, positionsFound: 0, positionsRead: 0, holders: [], shareOfLiquidityBps: 1e4, unread: "" };
     const maxPositions = options.maxPositions ?? 60;
     let logs;
     let windowComplete = true;
@@ -4451,10 +4454,10 @@
   async function readPoolLock(rpc, pool, lockers, positionManager, block, options) {
     if (pool.kind === "v3") return readV3Lock(rpc, pool, lockers, positionManager, block, options);
     if (pool.kind === "v4") {
-      return { pool: pool.address, dex: pool.dex, kind: pool.kind, burnedBps: 0, lockedBps: 0, freeBps: 0, partial: false, positionsFound: 0, positionsRead: 0, holders: [], unread: "a Uniswap V4 pool holds no LP token of its own, so who can withdraw its liquidity is not read here" };
+      return { pool: pool.address, dex: pool.dex, kind: pool.kind, burnedBps: 0, lockedBps: 0, freeBps: 0, partial: false, positionsFound: 0, positionsRead: 0, holders: [], shareOfLiquidityBps: 1e4, unread: "a Uniswap V4 pool holds no LP token of its own, so who can withdraw its liquidity is not read here" };
     }
     if (pool.kind === "unknown") {
-      return { pool: pool.address, dex: pool.dex, kind: pool.kind, burnedBps: 0, lockedBps: 0, freeBps: 0, partial: false, positionsFound: 0, positionsRead: 0, holders: [], unread: "this venue was found by checking which contracts hold the token, and it is not a pool shape BOUNCER knows how to read liquidity ownership from" };
+      return { pool: pool.address, dex: pool.dex, kind: pool.kind, burnedBps: 0, lockedBps: 0, freeBps: 0, partial: false, positionsFound: 0, positionsRead: 0, holders: [], shareOfLiquidityBps: 1e4, unread: "this venue was found by checking which contracts hold the token, and it is not a pool shape BOUNCER knows how to read liquidity ownership from" };
     }
     return readV2Lock(rpc, pool, lockers, block);
   }
@@ -4618,14 +4621,19 @@
           // Contracts only: a wallet is not a pool, and asking one costs two
           // calls for a certain revert. The explorer's name for the contract is
           // passed along because it is the only thing that can name the venue.
-          candidates: (listed ?? []).filter((h) => h.isContract && !h.delegated).map((h) => ({ address: h.address, name: h.name }))
+          // The twenty largest contract holders, no more. The list is
+          // largest-first and a pool is a large holder by definition, so the
+          // tail is two calls each against a rate-limited endpoint for
+          // candidates that are not pools.
+          candidates: (listed ?? []).filter((h) => h.isContract && !h.delegated).slice(0, 20).map((h) => ({ address: h.address, name: h.name }))
         });
         const position = options.position ?? (supply !== null && supply > 0n ? supply / 100n : 0n);
         if (position > 0n) market = readMarket(pools, position, meta?.decimals ?? 18, options.dex.wethSymbol);
       } catch {
         pools = null;
       }
-      const deepest = pools?.[0] ?? null;
+      const readable = (pools ?? []).filter((p) => p.kind === "v2" || p.kind === "v3" || p.kind === "solidly");
+      const deepest = readable[0] ?? pools?.[0] ?? null;
       if (deepest && options.liquidity !== false) {
         try {
           liquidity = await readPoolLock(rpc, deepest, options.lockers, options.dex.v3PositionManager, block, {
@@ -4635,6 +4643,9 @@
           if (bs2) {
             liquidity = await nameHolders(liquidity, async (address2) => (await bs2.addressInfo(address2)).name);
           }
+          const total = (pools ?? []).reduce((a, p) => a + (depth(p) > 0n ? depth(p) : 0n), 0n);
+          const mine = depth(deepest) > 0n ? depth(deepest) : 0n;
+          liquidity.shareOfLiquidityBps = total > 0n ? Number(mine * 10000n / total) : 1e4;
         } catch {
           liquidity = null;
         }
@@ -5353,6 +5364,8 @@
       const held = l.holders.filter((h2) => h2.kind === "wallet" || h2.kind === "contract");
       const shown = held.slice(0, 3);
       const heldBy = held.length ? `Held by ${shown.map((h2) => h2.name ? `${h2.name} (${shortAddress(h2.address)})` : shortAddress(h2.address)).join(", ")}${held.length > 3 ? ` and ${held.length - 3} more` : ""}.${shown.some((h2) => h2.namedByExplorer) ? " Those names come from the explorer's verified source, not from anything BOUNCER checked: a contract called a locker can still be told to release." : ""}` : "";
+      const sliver = l.shareOfLiquidityBps < 1e3;
+      const size = sliver ? ` That pool holds ${pct2(l.shareOfLiquidityBps)} of this token's liquidity, so it is not where a sale of any size would go.` : "";
       if (l.partial) {
         notes.push({
           level: "watch",
@@ -5361,15 +5374,15 @@
         });
       } else if (l.burnedBps + l.lockedBps === 0 && l.freeBps > 0) {
         notes.push({
-          level: "stop",
+          level: sliver ? "info" : "stop",
           code: "liquidity-free",
-          text: `Every bit of the ${l.dex} pool's liquidity can be withdrawn: none of it is burned and none sits in a locker BOUNCER knows. ${heldBy} Whoever holds it can take the pool away, and then there is nothing to sell into.`
+          text: `Every bit of the ${l.dex} pool's liquidity can be withdrawn: none of it is burned and none sits in a locker BOUNCER knows. ${heldBy} Whoever holds it can take the pool away, and then there is nothing to sell into.${size}`
         });
       } else if (l.freeBps >= 2e3) {
         notes.push({
-          level: "watch",
+          level: sliver ? "info" : "watch",
           code: "liquidity-partly-free",
-          text: `${pct2(l.freeBps)} of the ${l.dex} pool's liquidity can be withdrawn${l.burnedBps ? `, ${pct2(l.burnedBps)} is burned` : ""}${l.lockedBps ? `, ${pct2(l.lockedBps)} is in ${l.holders.find((h2) => h2.kind === "locked")?.name ?? "a locker"}` : ""}. Taking out the withdrawable part would thin the pool by that much.`
+          text: `${pct2(l.freeBps)} of the ${l.dex} pool's liquidity can be withdrawn${l.burnedBps ? `, ${pct2(l.burnedBps)} is burned` : ""}${l.lockedBps ? `, ${pct2(l.lockedBps)} is in ${l.holders.find((h2) => h2.kind === "locked")?.name ?? "a locker"}` : ""}. Taking out the withdrawable part would thin the pool by that much.${size}`
         });
       } else if (l.burnedBps + l.lockedBps > 0) {
         notes.push({

@@ -110,6 +110,18 @@ export interface PoolLock {
   positionsRead: number;
   holders: LiquidityHolder[];
   /**
+   * How much of the token's quote-asset liquidity sits in THIS pool, in basis
+   * points of every pool found. Set by the caller, which is the only place
+   * that knows the other pools.
+   *
+   * It decides how loudly the finding should be said. "All of it can be
+   * withdrawn" is a warning about the pool a sale goes through and an alarm
+   * about nothing when the pool holds a hundredth of the market — and now
+   * that a pool whose ownership cannot be read can be the deepest one, the
+   * pool this covers is not always the biggest.
+   */
+  shareOfLiquidityBps: number;
+  /**
    * Why the numbers above are missing or partial, when they are. An empty
    * string means the read was complete.
    */
@@ -136,7 +148,7 @@ const bps = (part: bigint, whole: bigint): number => (whole > 0n ? Number((part 
  * explorer and no log scan; what is left over is held by somebody.
  */
 export async function readV2Lock(rpc: RpcClient, pool: MarketPool, lockers: LockerTable | undefined, block: number): Promise<PoolLock> {
-  const base: PoolLock = { pool: pool.address, dex: pool.dex, kind: pool.kind, burnedBps: 0, lockedBps: 0, freeBps: 0, partial: false, positionsFound: 0, positionsRead: 0, holders: [], unread: "" };
+  const base: PoolLock = { pool: pool.address, dex: pool.dex, kind: pool.kind, burnedBps: 0, lockedBps: 0, freeBps: 0, partial: false, positionsFound: 0, positionsRead: 0, holders: [], shareOfLiquidityBps: 10_000, unread: "" };
   const lockerAddresses = Object.keys(lockers ?? {});
   const asked = [ZERO, DEAD, ...lockerAddresses];
   const calls = [
@@ -243,7 +255,7 @@ export async function readV3Lock(
   block: number,
   options: V3LockOptions,
 ): Promise<PoolLock> {
-  const base: PoolLock = { pool: pool.address, dex: pool.dex, kind: pool.kind, burnedBps: 0, lockedBps: 0, freeBps: 0, partial: false, positionsFound: 0, positionsRead: 0, holders: [], unread: "" };
+  const base: PoolLock = { pool: pool.address, dex: pool.dex, kind: pool.kind, burnedBps: 0, lockedBps: 0, freeBps: 0, partial: false, positionsFound: 0, positionsRead: 0, holders: [], shareOfLiquidityBps: 10_000, unread: "" };
   // Twelve was too few: a live pool can carry a hundred positions, and the one
   // that matters — the locked launch position — is rarely among the newest.
   const maxPositions = options.maxPositions ?? 60;
@@ -403,12 +415,12 @@ export async function readPoolLock(
     // A V4 pool is a row inside a singleton. It has no LP token, and its
     // positions belong to whatever the hook or the position manager decides,
     // which is not one shape to read.
-    return { pool: pool.address, dex: pool.dex, kind: pool.kind, burnedBps: 0, lockedBps: 0, freeBps: 0, partial: false, positionsFound: 0, positionsRead: 0, holders: [], unread: "a Uniswap V4 pool holds no LP token of its own, so who can withdraw its liquidity is not read here" };
+    return { pool: pool.address, dex: pool.dex, kind: pool.kind, burnedBps: 0, lockedBps: 0, freeBps: 0, partial: false, positionsFound: 0, positionsRead: 0, holders: [], shareOfLiquidityBps: 10_000, unread: "a Uniswap V4 pool holds no LP token of its own, so who can withdraw its liquidity is not read here" };
   }
   if (pool.kind === "unknown") {
     // Found by discovery and it answered none of the shape probes. Reading it
     // as a V2 pool would be the same guess this file exists to refuse.
-    return { pool: pool.address, dex: pool.dex, kind: pool.kind, burnedBps: 0, lockedBps: 0, freeBps: 0, partial: false, positionsFound: 0, positionsRead: 0, holders: [], unread: "this venue was found by checking which contracts hold the token, and it is not a pool shape BOUNCER knows how to read liquidity ownership from" };
+    return { pool: pool.address, dex: pool.dex, kind: pool.kind, burnedBps: 0, lockedBps: 0, freeBps: 0, partial: false, positionsFound: 0, positionsRead: 0, holders: [], shareOfLiquidityBps: 10_000, unread: "this venue was found by checking which contracts hold the token, and it is not a pool shape BOUNCER knows how to read liquidity ownership from" };
   }
   return readV2Lock(rpc, pool, lockers, block);
 }

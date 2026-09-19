@@ -22,6 +22,9 @@ import { readV4Pools } from "./v4.js";
 
 const Q96 = 2n ** 96n;
 
+/** Calls per JSON-RPC batch in the discovery search. Public endpoints cap batches, usually well below 100. */
+const BATCH_SLICE = 40;
+
 const FACTORY_FUNCTIONS = {
   getPool: { name: "getPool", inputs: ["address", "address", "uint24"], outputs: ["address"] },
   getPair: { name: "getPair", inputs: ["address", "address"], outputs: ["address"] },
@@ -151,13 +154,20 @@ export async function discoverPools(
     { to: c.address, data: encodeCall(POOL_FUNCTIONS.token0, []) },
     { to: c.address, data: encodeCall(POOL_FUNCTIONS.token1, []) },
   ]);
-  let raws: (Hex | Error)[];
-  try {
-    // Settled: most candidates are not pools, and a candidate that reverts is
-    // the expected case rather than a failure of the search.
-    raws = await rpc.callBatchSettled(calls, block);
-  } catch {
-    return [];
+  // Public endpoints cap a JSON-RPC batch, and the cap is usually well under
+  // a hundred. A batch over it is rejected whole, which would turn "this
+  // token trades somewhere nobody listed" into "no pools found" — so the
+  // calls go in fixed slices instead of one long one.
+  const raws: (Hex | Error)[] = [];
+  for (let i = 0; i < calls.length; i += BATCH_SLICE) {
+    try {
+      // Settled: most candidates are not pools, and a candidate that reverts
+      // is the expected case rather than a failure of the search.
+      raws.push(...(await rpc.callBatchSettled(calls.slice(i, i + BATCH_SLICE), block)));
+    } catch (error) {
+      // One slice failing costs its own candidates, not the others.
+      for (let k = i; k < Math.min(i + BATCH_SLICE, calls.length); k++) raws.push(error instanceof Error ? error : new Error(String(error)));
+    }
   }
 
   const found: MarketPool[] = [];

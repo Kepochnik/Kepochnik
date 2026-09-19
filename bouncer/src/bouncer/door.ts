@@ -545,6 +545,12 @@ function openDoorFactNotes(slip: DoorSlip, o: OpenDoor): DoorNote[] {
     const heldBy = held.length
       ? `Held by ${shown.map((h) => (h.name ? `${h.name} (${shortAddress(h.address)})` : shortAddress(h.address))).join(", ")}${held.length > 3 ? ` and ${held.length - 3} more` : ""}.${shown.some((h) => h.namedByExplorer) ? " Those names come from the explorer's verified source, not from anything BOUNCER checked: a contract called a locker can still be told to release." : ""}`
       : "";
+    // A pool holding a sliver of the token's liquidity is not what a sale goes
+    // through, and shouting STOP about it teaches the reader to ignore the
+    // word. Now that a V4 pool or an unidentified venue can be the deepest,
+    // the pool this covers is not always the biggest one.
+    const sliver = l.shareOfLiquidityBps < 1_000;
+    const size = sliver ? ` That pool holds ${pct(l.shareOfLiquidityBps)} of this token's liquidity, so it is not where a sale of any size would go.` : "";
     if (l.partial) {
       // A share of what was sampled is not a share of the pool. Saying "all of
       // it can be withdrawn" after reading a tenth of the positions would be
@@ -556,15 +562,15 @@ function openDoorFactNotes(slip: DoorSlip, o: OpenDoor): DoorNote[] {
       });
     } else if (l.burnedBps + l.lockedBps === 0 && l.freeBps > 0) {
       notes.push({
-        level: "stop",
+        level: sliver ? "info" : "stop",
         code: "liquidity-free",
-        text: `Every bit of the ${l.dex} pool's liquidity can be withdrawn: none of it is burned and none sits in a locker BOUNCER knows. ${heldBy} Whoever holds it can take the pool away, and then there is nothing to sell into.`,
+        text: `Every bit of the ${l.dex} pool's liquidity can be withdrawn: none of it is burned and none sits in a locker BOUNCER knows. ${heldBy} Whoever holds it can take the pool away, and then there is nothing to sell into.${size}`,
       });
     } else if (l.freeBps >= 2_000) {
       notes.push({
-        level: "watch",
+        level: sliver ? "info" : "watch",
         code: "liquidity-partly-free",
-        text: `${pct(l.freeBps)} of the ${l.dex} pool's liquidity can be withdrawn${l.burnedBps ? `, ${pct(l.burnedBps)} is burned` : ""}${l.lockedBps ? `, ${pct(l.lockedBps)} is in ${l.holders.find((h) => h.kind === "locked")?.name ?? "a locker"}` : ""}. Taking out the withdrawable part would thin the pool by that much.`,
+        text: `${pct(l.freeBps)} of the ${l.dex} pool's liquidity can be withdrawn${l.burnedBps ? `, ${pct(l.burnedBps)} is burned` : ""}${l.lockedBps ? `, ${pct(l.lockedBps)} is in ${l.holders.find((h) => h.kind === "locked")?.name ?? "a locker"}` : ""}. Taking out the withdrawable part would thin the pool by that much.${size}`,
       });
     } else if (l.burnedBps + l.lockedBps > 0) {
       notes.push({

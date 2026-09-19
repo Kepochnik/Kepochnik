@@ -304,6 +304,7 @@ test("an explorer name says what is holding the liquidity — and does not make 
     partial: false,
     positionsFound: 1,
     positionsRead: 1,
+    shareOfLiquidityBps: 10_000,
     holders: [{ address: LOCKER, kind: "contract", shareBps: 10_000 }],
     unread: "",
   };
@@ -326,6 +327,7 @@ test("naming never costs the liquidity read: no explorer, a silent one, or a bro
     partial: false,
     positionsFound: 1,
     positionsRead: 1,
+    shareOfLiquidityBps: 10_000,
     holders: [{ address: LOCKER, kind: "contract", shareBps: 6_000 }, { address: WALLET, kind: "wallet", shareBps: 4_000 }],
     unread: "",
   };
@@ -348,7 +350,7 @@ test("only contracts are asked about, and only the first few of them", async () 
     kind: (i === 0 ? "wallet" : "contract") as "wallet" | "contract",
     shareBps: 1_000,
   }));
-  await nameHolders({ pool: POOL, dex: "d", kind: "v3", burnedBps: 0, lockedBps: 0, freeBps: 10_000, partial: false, positionsFound: 9, positionsRead: 9, holders, unread: "" }, async (a) => {
+  await nameHolders({ pool: POOL, dex: "d", kind: "v3", burnedBps: 0, lockedBps: 0, freeBps: 10_000, partial: false, positionsFound: 9, positionsRead: 9, shareOfLiquidityBps: 10_000, holders, unread: "" }, async (a) => {
     asked.push(a);
     return null;
   });
