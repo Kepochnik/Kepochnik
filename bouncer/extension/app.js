@@ -321,12 +321,20 @@
     const minChunk = chunking.minChunk ?? 1e3;
     const maxChunk = chunking.maxChunk ?? 2e5;
     let chunk = Math.min(maxChunk, Math.max(minChunk, chunking.startChunk ?? 5e4));
+    const maxRequests = chunking.maxRequests ?? Infinity;
     const logs = [];
     let chunks = 0;
+    let requests = 0;
     let from = request.fromBlock;
+    let complete = true;
     while (from <= request.toBlock) {
+      if (requests >= maxRequests) {
+        complete = false;
+        break;
+      }
       const to = Math.min(from + chunk - 1, request.toBlock);
       try {
+        requests++;
         const raw = await rpc.getLogs({ address: request.address, topics: filterTopics, fromBlock: from, toBlock: to });
         chunks++;
         for (const log of raw) logs.push(decodeRaw(byTopic, log));
@@ -338,7 +346,7 @@
       }
     }
     logs.sort((a, b) => a.blockNumber - b.blockNumber || a.logIndex - b.logIndex);
-    return { logs, fromBlock: request.fromBlock, toBlock: request.toBlock, chunks };
+    return { logs, fromBlock: request.fromBlock, toBlock: complete ? request.toBlock : Math.max(request.fromBlock, from - 1), chunks, complete };
   }
   function addressTopic(address) {
     return `0x${address.toLowerCase().replace(/^0x/, "").padStart(64, "0")}`;
@@ -3714,7 +3722,7 @@
     const lower = token.toLowerCase();
     const quoteLower = quote.toLowerCase();
     const window2 = { address: poolManager, events: [V4_EVENTS.Initialize], fromBlock: options.fromBlock, toBlock: options.toBlock };
-    const chunking = { minChunk: 1, startChunk: options.chunkSize ?? 5e3, maxChunk: 2e5 };
+    const chunking = { minChunk: 1, startChunk: options.chunkSize ?? 5e3, maxChunk: 2e5, maxRequests: options.maxRequests ?? 20 };
     const [asCurrency0, asCurrency1] = await Promise.all([
       readTapeAdaptive(rpc, { ...window2, topics: [addressTopic(lower)] }, chunking),
       readTapeAdaptive(rpc, { ...window2, topics: [null, addressTopic(lower)] }, chunking)
@@ -4065,17 +4073,30 @@
     const base = { pool: pool.address, dex: pool.dex, kind: pool.kind, burnedBps: 0, lockedBps: 0, freeBps: 0, partial: false, positionsFound: 0, positionsRead: 0, holders: [], unread: "" };
     const maxPositions = options.maxPositions ?? 60;
     let logs;
+    let windowComplete = true;
     try {
       const { readTapeAdaptive: readTapeAdaptive2 } = await Promise.resolve().then(() => (init_tape(), tape_exports));
-      logs = (await readTapeAdaptive2(
+      const tape = await readTapeAdaptive2(
         rpc,
         { address: pool.address, events: [POOL_EVENTS.Mint], fromBlock: options.fromBlock, toBlock: block },
-        { minChunk: 1, startChunk: options.chunkSize ?? 5e3, maxChunk: 1e5 }
-      )).logs;
+        // The budget is the whole point on a busy pool. USDC/WETH on Base makes
+        // the endpoint refuse every wide chunk, so the span halves to a single
+        // block and a week's window becomes hundreds of thousands of requests —
+        // ten minutes of a door, and then nothing to show for it.
+        { minChunk: 1, startChunk: options.chunkSize ?? 5e3, maxChunk: 1e5, maxRequests: options.maxRequests ?? 40 }
+      );
+      logs = tape.logs;
+      windowComplete = tape.complete !== false;
     } catch {
       return { ...base, unread: "the pool's mint history did not answer, so who holds the liquidity is not read" };
     }
-    if (!logs.length) return { ...base, unread: `no position was opened in this pool within the window searched (from block ${options.fromBlock}); --liquidity-blocks looks further back` };
+    if (!logs.length) {
+      return {
+        ...base,
+        partial: !windowComplete,
+        unread: windowComplete ? `no position was opened in this pool within the window searched (from block ${options.fromBlock}); --liquidity-blocks looks further back` : "this pool is busy enough that the walk ran out of budget before finding a position, so who holds its liquidity is not read rather than absent"
+      };
+    }
     const byPosition = /* @__PURE__ */ new Map();
     for (const log of logs) {
       const owner = String(log.args.owner).toLowerCase();
@@ -4142,11 +4163,12 @@
     const lockedBps = holders.filter((h) => h.kind === "locked").reduce((a, h) => a + h.shareBps, 0);
     const freeBps = Math.max(0, 1e4 - burnedBps - lockedBps);
     const notes = [];
+    if (!windowComplete) notes.push("the pool is busy enough that only part of the window could be walked within this read's budget, so older positions were not seen");
     if (partial) notes.push(`only the ${maxPositions} largest of ${positions.length} positions in the window were resolved, so the shares above are of those and not of the pool`);
     if (!manager) notes.push("this DEX's position manager is not in BOUNCER's table, so an NFT position is reported under the manager rather than its holder");
     const unresolved = holders.filter((h) => manager && h.address === manager);
     if (unresolved.length) notes.push("some positions could not be traced to an NFT holder and are counted as withdrawable");
-    return { ...base, burnedBps, lockedBps, freeBps, partial, holders: holders.sort((a, b) => b.shareBps - a.shareBps), unread: notes.join("; ") };
+    return { ...base, burnedBps, lockedBps, freeBps, partial: partial || !windowComplete, holders: holders.sort((a, b) => b.shareBps - a.shareBps), unread: notes.join("; ") };
   }
   async function readPoolLock(rpc, pool, lockers, positionManager, block, options) {
     return pool.kind === "v3" ? readV3Lock(rpc, pool, lockers, positionManager, block, options) : readV2Lock(rpc, pool, lockers, block);

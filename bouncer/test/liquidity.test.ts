@@ -188,3 +188,65 @@ test("a partial read is never phrased as a fact about the pool", async () => {
   assert.equal(full.partial, false);
   assert.doesNotMatch(lockInWords(full), /positions read/);
 });
+
+test("a busy pool cannot spend an unbounded number of requests", async () => {
+  // The Base failure this exists to prevent: on the USDC/WETH pool the
+  // endpoint refuses every wide chunk, the span halves to a single block, and
+  // a 300,000-block window becomes 300,000 requests. Ten minutes of a door,
+  // and nothing to show for it.
+  let requests = 0;
+  const rpc = {
+    getLogs: async ({ fromBlock, toBlock }: { fromBlock: number; toBlock: number }) => {
+      requests++;
+      // Anything wider than one block is "too many results", exactly as a busy
+      // pool behaves.
+      if (toBlock - fromBlock + 1 > 1) throw new Error("query returned more than 10000 results");
+      return [];
+    },
+  } as unknown as RpcClient;
+
+  const lock = await readV3Lock(rpc, v3Pool, undefined, MANAGER, 300_000, { fromBlock: 0, maxRequests: 25 });
+  assert.ok(requests <= 25, `the walk must stop at its budget; it spent ${requests} requests`);
+  assert.match(lock.unread, /ran out of budget/, "an unfinished walk must not read as 'no positions'");
+  assert.equal(lock.partial, true);
+});
+
+test("a truncated window makes the read partial, so its shares are never stated as the pool's", async () => {
+  // Being cut short is exactly the case where "100% withdrawable" would be a
+  // confident lie, so it has to set the same flag a position cap does.
+  const mintTopic = eventTopic({
+    name: "Mint",
+    inputs: [
+      { name: "sender", type: "address", indexed: false },
+      { name: "owner", type: "address", indexed: true },
+      { name: "tickLower", type: "int24", indexed: true },
+      { name: "tickUpper", type: "int24", indexed: true },
+      { name: "amount", type: "uint128", indexed: false },
+      { name: "amount0", type: "uint256", indexed: false },
+      { name: "amount1", type: "uint256", indexed: false },
+    ],
+  });
+  const rpc = {
+    getLogs: async ({ fromBlock, toBlock }: { fromBlock: number; toBlock: number }) => {
+      if (toBlock - fromBlock + 1 > 10) throw new Error("too many results");
+      return fromBlock === 0
+        ? [{
+            address: POOL,
+            topics: [mintTopic, addressWord(WALLET), word(0n), word(60n)],
+            data: `0x${addressWord(WALLET).slice(2)}${word(1000n).slice(2)}${word(1n).slice(2)}${word(1n).slice(2)}`,
+            blockNumber: "0x1",
+            transactionHash: `0x${"5".repeat(64)}`,
+            logIndex: "0x0",
+          }]
+        : [];
+    },
+    sendBatchSettled: async (requests: { method: string }[]) => requests.map(() => "0x60806040"),
+    callBatchSettled: async () => [],
+  } as unknown as RpcClient;
+
+  // Budget enough to get past the halving and find the log, not enough to
+  // finish the window — which is the case being pinned.
+  const lock = await readV3Lock(rpc, v3Pool, undefined, MANAGER, 100_000, { fromBlock: 0, maxRequests: 20 });
+  assert.equal(lock.partial, true, "a window that was not finished must not read as a statement about the pool");
+  assert.match(lockInWords(lock), /positions read/);
+});

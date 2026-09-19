@@ -58,6 +58,8 @@ export interface V4Options {
   chunkSize?: number;
   /** At most this many pools are read; the rest are counted and reported. */
   maxPools?: number;
+  /** Most log requests each of the two Initialize scans may spend. */
+  maxRequests?: number;
 }
 
 /** A V4 pool as the market code understands it, plus what only V4 has. */
@@ -81,7 +83,10 @@ export async function readV4Pools(rpc: RpcClient, token: string, quote: string, 
   const lower = token.toLowerCase();
   const quoteLower = quote.toLowerCase();
   const window = { address: poolManager, events: [V4_EVENTS.Initialize], fromBlock: options.fromBlock, toBlock: options.toBlock };
-  const chunking = { minChunk: 1, startChunk: options.chunkSize ?? 5_000, maxChunk: 200_000 };
+  // A singleton holding every pool on the chain is the busiest contract there
+  // is, so the same budget applies here as to the mint history: without one,
+  // a wide window on Base costs minutes and finishes nothing.
+  const chunking = { minChunk: 1, startChunk: options.chunkSize ?? 5_000, maxChunk: 200_000, maxRequests: options.maxRequests ?? 20 };
 
   // The token can be either currency, so ask for both sides.
   const [asCurrency0, asCurrency1] = await Promise.all([

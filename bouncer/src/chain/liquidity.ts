@@ -189,6 +189,8 @@ export interface V3LockOptions {
   /** At most this many positions are resolved; a pool with more is reported as partial. */
   maxPositions?: number;
   chunkSize?: number;
+  /** Most log requests the mint history may spend before reporting a partial window. */
+  maxRequests?: number;
 }
 
 /**
@@ -212,19 +214,35 @@ export async function readV3Lock(
   const maxPositions = options.maxPositions ?? 60;
 
   let logs;
+  let windowComplete = true;
   try {
     const { readTapeAdaptive } = await import("./tape.js");
-    logs = (
-      await readTapeAdaptive(
-        rpc,
-        { address: pool.address, events: [POOL_EVENTS.Mint], fromBlock: options.fromBlock, toBlock: block },
-        { minChunk: 1, startChunk: options.chunkSize ?? 5_000, maxChunk: 100_000 },
-      )
-    ).logs;
+    const tape = await readTapeAdaptive(
+      rpc,
+      { address: pool.address, events: [POOL_EVENTS.Mint], fromBlock: options.fromBlock, toBlock: block },
+      // The budget is the whole point on a busy pool. USDC/WETH on Base makes
+      // the endpoint refuse every wide chunk, so the span halves to a single
+      // block and a week's window becomes hundreds of thousands of requests —
+      // ten minutes of a door, and then nothing to show for it.
+      { minChunk: 1, startChunk: options.chunkSize ?? 5_000, maxChunk: 100_000, maxRequests: options.maxRequests ?? 40 },
+    );
+    logs = tape.logs;
+    windowComplete = tape.complete !== false;
   } catch {
     return { ...base, unread: "the pool's mint history did not answer, so who holds the liquidity is not read" };
   }
-  if (!logs.length) return { ...base, unread: `no position was opened in this pool within the window searched (from block ${options.fromBlock}); --liquidity-blocks looks further back` };
+  if (!logs.length) {
+    // "No position was opened" and "we stopped looking" are different
+    // statements, and only one of them is true when the budget ran out. Saying
+    // the first would be the most confident wrong sentence available here.
+    return {
+      ...base,
+      partial: !windowComplete,
+      unread: windowComplete
+        ? `no position was opened in this pool within the window searched (from block ${options.fromBlock}); --liquidity-blocks looks further back`
+        : "this pool is busy enough that the walk ran out of budget before finding a position, so who holds its liquidity is not read rather than absent",
+    };
+  }
 
   // Group by position: the pool identifies one by (owner, tickLower, tickUpper).
   const byPosition = new Map<string, { owner: string; amount: bigint; tx: string }>();
@@ -303,12 +321,13 @@ export async function readV3Lock(
   const lockedBps = holders.filter((h) => h.kind === "locked").reduce((a, h) => a + h.shareBps, 0);
   const freeBps = Math.max(0, 10_000 - burnedBps - lockedBps);
   const notes: string[] = [];
+  if (!windowComplete) notes.push("the pool is busy enough that only part of the window could be walked within this read's budget, so older positions were not seen");
   if (partial) notes.push(`only the ${maxPositions} largest of ${positions.length} positions in the window were resolved, so the shares above are of those and not of the pool`);
   if (!manager) notes.push("this DEX's position manager is not in BOUNCER's table, so an NFT position is reported under the manager rather than its holder");
   const unresolved = holders.filter((h) => manager && h.address === manager);
   if (unresolved.length) notes.push("some positions could not be traced to an NFT holder and are counted as withdrawable");
 
-  return { ...base, burnedBps, lockedBps, freeBps, partial, holders: holders.sort((a, b) => b.shareBps - a.shareBps), unread: notes.join("; ") };
+  return { ...base, burnedBps, lockedBps, freeBps, partial: partial || !windowComplete, holders: holders.sort((a, b) => b.shareBps - a.shareBps), unread: notes.join("; ") };
 }
 
 /** Whichever read this pool's shape calls for. */
