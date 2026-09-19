@@ -4826,7 +4826,11 @@
     }
     const supply = meta?.totalSupply ?? null;
     const bps3 = (v) => supply !== null && supply > 0n ? Number(v * 10000n / supply) : null;
-    const holderList = options.blockscout ? options.blockscout.tokenHolders(address, 50).catch(() => null) : Promise.resolve(null);
+    const bsEarly = options.blockscout;
+    const holderList = bsEarly ? bsEarly.tokenHolders(address, 50).catch(() => null) : Promise.resolve(null);
+    const addressInfoP = bsEarly ? bsEarly.addressInfo(address) : null;
+    const tokenInfoP = bsEarly ? bsEarly.tokenInfo(address).catch(() => ({ holders: null, transfers: null, type: null, priceUsd: null, volume24hUsd: null, marketCapUsd: null })) : null;
+    const transfersP = bsEarly ? bsEarly.tokenTransfers(address) : null;
     let pools = null;
     let market = null;
     let liquidity = null;
@@ -4913,7 +4917,7 @@
     if (bs) {
       let info = null;
       try {
-        const read = await bs.addressInfo(address);
+        const read = await (addressInfoP ?? bs.addressInfo(address));
         info = read;
         verified = read.isVerified;
         if (read.creator) {
@@ -4938,7 +4942,7 @@
       try {
         const [listed, tokenInfo] = await Promise.all([
           holderList,
-          bs.tokenInfo(address).catch(() => ({ holders: null, transfers: null, type: null, priceUsd: null, volume24hUsd: null, marketCapUsd: null }))
+          tokenInfoP ?? bs.tokenInfo(address).catch(() => ({ holders: null, transfers: null, type: null, priceUsd: null, volume24hUsd: null, marketCapUsd: null }))
         ]);
         if (!listed) throw new Error("the explorer did not return the token's holders");
         const list = listed;
@@ -4979,7 +4983,7 @@
       }
       if (explorer === null && info) explorer = { isScam: info.isScam, priceUsd: null, volume24hUsd: null, marketCapUsd: null, tokenType: null };
       try {
-        activity = summariseActivity(await bs.tokenTransfers(address));
+        activity = summariseActivity(await (transfersP ?? bs.tokenTransfers(address)));
       } catch (error) {
         note(error);
         activity = null;
