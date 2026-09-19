@@ -1,10 +1,45 @@
-/* Popup-only overrides: a fixed width, one column, no remote fonts. */
-body{width:560px;min-height:640px;max-height:600px;overflow-y:auto;padding-inline:14px}
-.grid{grid-template-columns:1fr}
+/* Popup-only overrides: a fixed width, one column, no remote fonts.
+
+   The popup is the same app in a 560-pixel box, so everything the site
+   lays out in two columns has to fold, and the poster has to stop being a
+   poster — a 132-pixel word in a 560-pixel popup is the whole window. */
+body{width:560px;min-height:640px;max-height:600px;overflow-y:auto;background-image:none}
+.wrap{padding-inline:12px}
+header{position:static}
+.hbar{padding-inline:12px;padding-block:10px;gap:8px}
+.wordmark{font-size:22px}
+.mark{width:28px;height:28px}
+.ext{display:none}
+.hero{padding-block:16px 0}
+.hero h1{font-size:30px;margin-bottom:6px}
+.hero p{font-size:13px}
+.chips{display:none}
+.door{margin-top:12px}
+.door input{font-size:13px;padding:11px}
+.btn{font-size:14px;min-height:42px;padding:0 16px}
+.source{font-size:12px}
+
+/* One column everywhere. */
+.qgrid,.grid{grid-template-columns:1fr}
+.tiles,.exit-grid{grid-template-columns:1fr 1fr}
 .stamp-row{grid-template-columns:1fr}
 .stamp{justify-self:start;transform:rotate(-3deg)}
-.brand h1{font-size:34px}
-.chips{display:none}
-header{padding-block:14px 4px}
-.mark{width:40px;height:40px}
-.ext{display:none}
+
+/* The verdict, shrunk to a badge-sized statement rather than a billboard. */
+.vbody{grid-template-columns:1fr;gap:10px;padding:14px 16px 18px}
+.vword{font-size:56px;line-height:.9;text-shadow:0 0 34px currentColor}
+.vhead{padding:14px 16px 0}
+.vsym{font-size:28px}
+.vaddr{margin-left:0;order:9;width:100%;font-size:11px}
+.vlead{font-size:14px}
+.vfoot{padding:10px 16px;gap:8px}
+.vacts{margin-left:0}
+.qcard,.unread{padding:16px}
+.qcard h2,.unread h2{font-size:15px}
+details.sec>summary{padding:13px 16px}
+details.sec>.body{padding:0 16px 16px}
+.sec{padding:16px}
+footer{margin-top:28px;font-size:11px}
+.hero p{display:none}
+.hero h1{font-size:26px;letter-spacing:.05em}
+footer>span{flex:1 1 100%}

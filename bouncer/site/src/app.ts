@@ -8,6 +8,7 @@
  * Add ?chain=arc-testnet to any live route.
  */
 import { BlockscoutClient } from "../../src/chain/blockscout.js";
+import { TOPIC_BLURB, TOPIC_ORDER, TOPIC_QUESTION, topicOf } from "../../src/bouncer/topics.js";
 import { CHAINS, chainByKey, type ChainConfig } from "../../src/chain/chains.js";
 import { PHASE_LABEL } from "../../src/chain/pons.js";
 import { PonsReader } from "../../src/chain/reader.js";
@@ -20,7 +21,7 @@ import { doorCard } from "../../src/bouncer/card.js";
 import { coverChargeLine } from "../../src/bouncer/coverCharge.js";
 import { DEMO, DEMO_BLOCKSCOUT, DEMO_IMPOSTOR, DEMO_PLAIN, DEMO_V1, demoBlockscoutFetch, demoRpc } from "../../src/bouncer/demo.js";
 import { devReportLine, readDevReport, type DevReport } from "../../src/bouncer/devReport.js";
-import { findLaunchBlock, impostorOf, readDoor, slipJson, type DoorSlip } from "../../src/bouncer/door.js";
+import { findLaunchBlock, impostorOf, readDoor, slipJson, type DoorNote, type DoorSlip } from "../../src/bouncer/door.js";
 import { lookalikeLine, registeredLookalikes } from "../../src/bouncer/lookalike.js";
 import { MASCOT_SVG_INNER } from "../../src/bouncer/mascot.js";
 import { oneCrewLine } from "../../src/bouncer/oneCrew.js";
@@ -193,6 +194,37 @@ function renderChips(): void {
   more.innerHTML = `<span>More:</span><a href="#/board?chain=${c}">Tonight's board</a><a href="#/plan?tax=100&chain=${c}">Plan a launch</a><span>Paste "token wallet" (two addresses) to see one wallet's bag.</span>`;
   chips.appendChild(more);
 }
+
+/**
+ * The headline is an invitation, and an invitation that stays on screen
+ * after you have accepted it is furniture. Once a slip is on the page the
+ * hero shrinks to a line, so a second check starts where the answer is
+ * rather than a screen above it.
+ *
+ * Driven by an observer rather than by each renderer: there are a dozen
+ * places that fill #out, and the one that gets forgotten is the one that
+ * leaves the page in the wrong state.
+ */
+new MutationObserver(() => {
+  document.body.classList.toggle("answered", (document.getElementById("out")?.childElementCount ?? 0) > 0);
+}).observe(document.getElementById("out") as Node, { childList: true });
+
+/**
+ * Copy-on-click for any element carrying data-copy. Delegated at the document
+ * rather than wired per render: a slip rebuilds its whole subtree and a
+ * listener attached to the old nodes goes with them.
+ */
+document.addEventListener("click", async (event) => {
+  const target = (event.target as HTMLElement | null)?.closest<HTMLElement>("[data-copy]");
+  if (!target) return;
+  const text = target.dataset.copy ?? "";
+  try {
+    await navigator.clipboard.writeText(text);
+    showToast("Copied");
+  } catch {
+    showToast(text);
+  }
+});
 
 function showToast(text: string): void {
   toast.textContent = text;
@@ -438,6 +470,114 @@ function summarySentence(slip: DoorSlip): string {
 }
 
 /**
+ * THE VERDICT, and the five questions under it.
+ *
+ * A slip used to open with a flat list called "What to know", ordered by how
+ * loud each note was. That is the right order for one note and the wrong
+ * shape for twenty. A reader arrives with questions already in a fixed order
+ * — is this even the token I meant, can they take it away, can I sell, what
+ * would I get, who else is in here — and the page should answer them in that
+ * order rather than hand over a pile sorted by volume.
+ *
+ * The grouping itself lives in the core (src/bouncer/topics.ts), so the CLI,
+ * the site, the extension and the MCP server cannot drift apart on it.
+ */
+
+/** The one word at the top. Loudest note wins; nothing loud means nothing was found, which is not the same as safe. */
+function verdictOf(notes: DoorNote[]): { word: string; kind: "stop" | "watch" | "clear"; line: string } {
+  const stop = notes.filter((n) => n.level === "stop").length;
+  const watch = notes.filter((n) => n.level === "watch").length;
+  if (stop) return { word: "STOP", kind: "stop", line: `${stop} thing${stop === 1 ? "" : "s"} here can cost you money outright.` };
+  if (watch) return { word: "WATCH", kind: "watch", line: `Nothing outright dangerous, ${watch} thing${watch === 1 ? "" : "s"} worth reading before you buy.` };
+  return { word: "CLEAR", kind: "clear", line: "Nothing in what was read stands out. That is not a promise about the price." };
+}
+
+/**
+ * The poster at the top of every slip: who it is, one word, one sentence, and
+ * the count. Everything below is detail for somebody who wants it.
+ */
+function verdictBlock(opts: {
+  sym: string;
+  name: string;
+  address: string;
+  stamp: string;
+  at: string;
+  notes: DoorNote[];
+  lead: string;
+  actions: string;
+}): string {
+  const v = verdictOf(opts.notes);
+  const counts = (["stop", "watch", "info"] as const)
+    .map((level) => ({ level, n: opts.notes.filter((x) => x.level === level).length }))
+    .filter((x) => x.n > 0)
+    .map((x) => `<span class="tally lv-${x.level}"><i></i>${x.n} ${LEVEL_WORD[x.level as Level].toLowerCase()}</span>`)
+    .join("");
+  const stampClass = opts.stamp === "ON THE LIST" ? "yes" : opts.stamp === "NOT A LAUNCH" ? "mid" : "no";
+  return `<section class="verdict v-${v.kind}">
+    <div class="vhead">
+      <div class="vwho">
+        <span class="vsym">${opts.sym}</span>
+        <span class="vname">${opts.name}</span>
+        <span class="vstamp ${stampClass}">${opts.stamp}</span>
+      </div>
+      <button class="vaddr" type="button" data-copy="${esc(opts.address)}" title="Copy the address">${esc(opts.address)}</button>
+    </div>
+    <div class="vbody">
+      <div class="vword" aria-label="Verdict">${v.word}</div>
+      <div class="vsay">
+        <p class="vlead">${esc(opts.lead)}</p>
+        <p class="vsub">${esc(v.line)}</p>
+      </div>
+    </div>
+    <div class="vfoot">
+      <div class="tallies">${counts || '<span class="tally lv-info"><i></i>nothing to flag</span>'}</div>
+      <div class="vat">${opts.at}</div>
+      <div class="vacts">${opts.actions}</div>
+    </div>
+  </section>`;
+}
+
+/**
+ * The five questions, each with the notes that answer it. A question nobody
+ * has an answer for is not shown — an empty card reads as "checked and fine",
+ * and nothing here checked it.
+ *
+ * "What BOUNCER could not read" is never one of the cards. It is its own
+ * strip below them, because a gap folded in among findings reads as a clean
+ * result, and that is the one mistake this whole project is built to avoid.
+ */
+function answerCards(notes: DoorNote[]): string {
+  const cards = TOPIC_ORDER.filter((t) => t !== "unread")
+    .map((topic) => {
+      const mine = notes.filter((n) => topicOf(n.code) === topic);
+      if (!mine.length) return "";
+      const worst = mine.some((n) => n.level === "stop") ? "stop" : mine.some((n) => n.level === "watch") ? "watch" : "info";
+      const rows = mine
+        .map((n) => `<li class="ans lv-${n.level}"><span class="dot" aria-hidden="true"></span><span>${esc(n.text)}</span></li>`)
+        .join("");
+      return `<article class="qcard lv-${worst}">
+        <h2>${esc(TOPIC_QUESTION[topic])}</h2>
+        <p class="qblurb">${esc(TOPIC_BLURB[topic])}</p>
+        <ul class="answers">${rows}</ul>
+      </article>`;
+    })
+    .join("");
+  return cards ? `<div class="qgrid">${cards}</div>` : "";
+}
+
+/** What did not answer. Its own strip, always, never folded in with the findings. */
+function unreadStrip(notes: DoorNote[], skipped: { section: string; reason: string }[]): string {
+  const mine = notes.filter((n) => topicOf(n.code) === "unread");
+  if (!mine.length && !skipped.length) return "";
+  const rows = mine.map((n) => `<li>${esc(n.text)}</li>`).join("");
+  return `<section class="unread">
+    <h2>${esc(TOPIC_QUESTION.unread)}</h2>
+    <p class="qblurb">${esc(TOPIC_BLURB.unread)}</p>
+    <ul>${rows}</ul>
+  </section>`;
+}
+
+/**
  * One collapsible section of a slip. Shared by every renderer: it used to be a
  * local inside renderSlip, which meant the Solana slip referred to a name that
  * did not exist there and threw for every visitor.
@@ -476,7 +616,6 @@ function renderSplSlip(slip: SplSlip): void {
         <div class="tile"><div class="l">Top 10 holders</div><div class="v ${slip.holders && slip.holders.top10Bps !== null && slip.holders.top10Bps >= 5_000 ? "bad" : ""}">${slip.holders && slip.holders.top10Bps !== null ? `${(slip.holders.top10Bps / 100).toFixed(0)}%` : "—"}</div><div class="s">${slip.holders?.distinctOwners ? `of supply · ${slip.holders.distinctOwners} distinct wallets` : "not read"}</div></div>
       </div>`
     : "";
-  const notes = slip.notes.map((n) => `<div class="note"><span class="lvl ${n.level}">${LEVEL_WORD[n.level as Level]}</span><span>${esc(n.text)}</span></div>`).join("");
   const explorer = chain().explorerUrl;
   const link = (addr: string) => (explorer ? `<a href="${esc(explorer)}/account/${esc(addr)}" target="_blank" rel="noopener"><span class="mono">${esc(shortSol(addr))}</span></a>` : `<span class="mono">${esc(shortSol(addr))}</span>`);
   const idBody = m
@@ -504,19 +643,19 @@ function renderSplSlip(slip: SplSlip): void {
     : "";
 
   out.innerHTML = `<div class="slip">
-    <div class="summary">
-      <div class="top">
-        <div class="who"><div class="sym">${sym}</div><div class="name">${name}</div><div class="addr">${esc(slip.subject)}</div><div class="at">${esc(slip.chain.name)} · slot ${slip.at.slot}${slip.at.timestamp ? ` · ${isoUtc(slip.at.timestamp)}` : ""}</div></div>
-        <div class="stamp ${slip.stamp === "NOT A LAUNCH" ? "mid" : "no"}">${slip.stamp}</div>
-      </div>
-      <p class="lead">${esc(splSentence(slip, blocked))}</p>
-      ${tiles}
-      <div class="actions" style="margin-top:16px">
-        <button class="ghost" id="act-json" type="button">Copy JSON</button>
-        <button class="ghost" id="act-link" type="button">Copy link</button>
-      </div>
-    </div>
-    <div class="notes"><h2>What to know</h2>${notes}</div>
+    ${verdictBlock({
+      sym,
+      name,
+      address: slip.subject,
+      stamp: slip.stamp,
+      at: `${esc(slip.chain.name)} · slot ${slip.at.slot}${slip.at.timestamp ? ` · ${isoUtc(slip.at.timestamp)}` : ""}`,
+      notes: slip.notes as DoorNote[],
+      lead: splSentence(slip, blocked),
+      actions: `<button class="ghost" id="act-json" type="button">JSON</button><button class="ghost" id="act-link" type="button">Link</button>`,
+    })}
+    ${tiles}
+    ${answerCards(slip.notes as DoorNote[])}
+    ${unreadStrip(slip.notes as DoorNote[], slip.skipped)}
     <div class="stack">
       ${section("s-id", "Is it real?", "What this address actually is, who can print more of it, and who can freeze what you hold.", idBody, true)}
       ${extBody ? section("s-ext", "Token-2022 extensions", "The rules the token program itself enforces on every transfer.", extBody, true) : ""}
@@ -659,7 +798,6 @@ function renderSlip(slip: DoorSlip): void {
     ? openDoorTiles(slip)
     : "";
 
-  const notes = slip.notes.map((n) => `<div class="note"><span class="lvl ${n.level}">${LEVEL_WORD[n.level as Level]}</span><span>${esc(n.text)}</span></div>`).join("");
 
   // ---- details, plain words first
   const idFlags = (x: typeof t) => {
@@ -727,24 +865,23 @@ function renderSlip(slip: DoorSlip): void {
         <div class="tbl"><table class="buys"><thead><tr><th>address</th><th>from the factory?</th><th>stage</th><th>launch block</th></tr></thead><tbody>${l.candidates.slice(0, 8).map((x) => `<tr><td><a href="#/${mode === "demo" ? "demo" : "t"}/${x.address}${routeChain()}">${shortAddress(x.address)}</a>${x.address === l.subject ? " · this one" : ""}</td><td>${x.registered ? '<span class="flag ok">yes</span>' : '<span class="flag bad">no</span>'}</td><td>${x.phase !== null ? PHASE_LABEL[x.phase] : "—"}</td><td>${x.launchBlock ?? "—"}</td></tr>`).join("")}</tbody></table></div>`
     : "";
 
-  const watchBody = `<div class="watch"><button class="ghost" id="act-watch" type="button" aria-pressed="false">Start watching</button><span style="color:var(--muted);font-size:13px">Checks every ${mode === "demo" ? "5" : "15"} s while this tab is open: the dev selling or moving tokens, the tax recipient changing, buyback switching, graduation${crew?.crews.length ? `, and ${crew.crews.flatMap((x) => x.wallets).length} grouped wallets leaving together` : ""}. Browser notifications if you allow them.</span></div><div class="events"></div>`;
+  const watchBody = `<div class="watchbar"><button class="ghost" id="act-watch" type="button" aria-pressed="false">Start watching</button><span style="color:var(--muted);font-size:13px">Checks every ${mode === "demo" ? "5" : "15"} s while this tab is open: the dev selling or moving tokens, the tax recipient changing, buyback switching, graduation${crew?.crews.length ? `, and ${crew.crews.flatMap((x) => x.wallets).length} grouped wallets leaving together` : ""}. Browser notifications if you allow them.</span></div><div class="events"></div>`;
 
   out.innerHTML = `<div class="slip">
-    <div class="summary">
-      <div class="top">
-        <div class="who"><div class="sym">${sym}</div><div class="name">${name}</div><div class="addr">${esc(slip.subject)}</div><div class="at">${mode === "demo" ? "DEMO · " : ""}${esc(slip.chain.name)} · block ${slip.at.block} · ${isoUtc(slip.at.timestamp)}</div></div>
-        <div class="stamp ${slip.stamp === "ON THE LIST" ? "" : slip.stamp === "NOT A LAUNCH" ? "mid" : "no"}">${slip.stamp}</div>
-      </div>
-      <p class="lead">${esc(summarySentence(slip))}</p>
-      ${tiles}
-      <div class="actions" style="margin-top:16px">
-        <button class="ghost" id="act-card" type="button">Show as image</button>
-        <button class="ghost" id="act-json" type="button">Copy JSON</button>
-        <button class="ghost" id="act-link" type="button">Copy link</button>
-      </div>
-    </div>
+    ${verdictBlock({
+      sym,
+      name,
+      address: slip.subject,
+      stamp: slip.stamp,
+      at: `${mode === "demo" ? "DEMO · " : ""}${esc(slip.chain.name)} · block ${slip.at.block} · ${isoUtc(slip.at.timestamp)}`,
+      notes: slip.notes,
+      lead: summarySentence(slip),
+      actions: `<button class="ghost" id="act-card" type="button">Image</button><button class="ghost" id="act-json" type="button">JSON</button><button class="ghost" id="act-link" type="button">Link</button>`,
+    })}
     <div class="card-wrap" id="card"></div>
-    <div class="notes"><h2>What to know</h2>${notes || `<div class="note"><span class="lvl info">Note</span><span>Nothing stands out. ${registered ? "The factory made this token and none of its terms needs a second look." : "Nothing in the code or the holder list needs a second look."}</span></div>`}</div>
+    ${tiles}
+    ${answerCards(slip.notes)}
+    ${unreadStrip(slip.notes, slip.skipped)}
     <div class="stack">
       ${section("s-id", "Is it real?", "Did the launchpad's factory deploy this token, and can its code change later?", idBody, !o)}
       ${o ? section("s-control", "Who controls it", "Which switches the code has (mint, pause, blacklist, fees), who holds the keys, and whether holders can move tokens right now.", controlBody(slip), true) : ""}
