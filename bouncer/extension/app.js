@@ -632,6 +632,7 @@
 
   // src/bouncer/trade.ts
   var REFERRAL = { gmgn: "save", basedbot: "bot" };
+  var VENUE_NAMES = { gmgn: "GMGN", basedbot: "BasedBot" };
   var TRADE_SLUGS = {
     robinhood: { gmgn: "robinhood", basedbot: "robinhood" },
     // both from real URLs
@@ -663,6 +664,11 @@
       });
     }
     return out2;
+  }
+  function missingVenues(chainKey) {
+    const slugs = TRADE_SLUGS[chainKey];
+    if (!slugs) return [];
+    return Object.keys(VENUE_NAMES).filter((v) => !slugs[v]).map((v) => VENUE_NAMES[v]);
   }
 
   // src/chain/chains.ts
@@ -6479,13 +6485,13 @@
           <span class="buy-go" aria-hidden="true">\u2197</span>
         </a>`
     ).join("");
+    const missing = missingVenues(chainKey);
+    const gap = missing.length ? `<p class="buy-gap">${esc2(missing.join(" and "))} ${missing.length === 1 ? "is" : "are"} not linked on this chain: BOUNCER has no confirmed address for ${missing.length === 1 ? "it" : "them"} here, and a guessed link is a dead one.</p>` : "";
     return `<section class="buy">
-    <div class="buy-head">
-      <h2>Buy it</h2>
-      <span class="buy-tag">referral links</span>
-    </div>
-    <p class="qblurb">BOUNCER cannot trade and holds no key. These open the token on someone else's venue, and they carry this project's referral code \u2014 which is how it is paid for. Read the slip above first; nothing here changes what it says.</p>
+    <div class="buy-head"><h2>Buy it</h2></div>
+    <p class="qblurb">BOUNCER cannot trade and holds no key. These open the token on someone else's venue. Read the slip above first; nothing here changes what it says.</p>
     <div class="buy-links">${links}</div>
+    ${gap}
   </section>`;
   }
   function section(id, title, what, body, open) {

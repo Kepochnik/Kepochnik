@@ -22,8 +22,11 @@ export interface TradeVenue {
   url: string;
 }
 
-/** The referral codes these links carry. Stated here rather than buried in a template. */
+/** The codes these links carry. Stated here rather than buried in a template. */
 export const REFERRAL = { gmgn: "save", basedbot: "bot" } as const;
+
+/** Every venue the tool can link to, so a missing one can be named rather than silently dropped. */
+export const VENUE_NAMES: Record<"gmgn" | "basedbot", string> = { gmgn: "GMGN", basedbot: "BasedBot" };
 
 /**
  * How each venue spells each chain, and how sure we are.
@@ -76,4 +79,18 @@ export function tradeVenues(chainKey: string, address: string): TradeVenue[] {
     });
   }
   return out;
+}
+
+/**
+ * Venues that exist but have no slug for this chain.
+ *
+ * Dropping them silently was the wrong call and it showed: BasedBot simply
+ * vanished on every chain but Robinhood and the page gave no reason, so it
+ * read as a bug rather than as a gap. This whole tool says what it could
+ * not read; a venue it cannot link to is the same kind of fact.
+ */
+export function missingVenues(chainKey: string): string[] {
+  const slugs = TRADE_SLUGS[chainKey];
+  if (!slugs) return [];
+  return (Object.keys(VENUE_NAMES) as Array<"gmgn" | "basedbot">).filter((v) => !slugs[v]).map((v) => VENUE_NAMES[v]);
 }
