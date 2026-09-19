@@ -152,10 +152,12 @@ export async function readDoor(rpc: RpcClient, input: string, options: DoorOptio
         dex: chain.dex,
         lockers: chain.lockers,
         liquidity: options.skipLiquidity !== true,
-        // A week of this chain's blocks, capped so a fast chain does not turn
-        // one section into the whole read. A token older than the window reads
-        // as "no position opened here", which names the flag that widens it.
-        liquidityFromBlock: head.number - (options.liquidityBlocks ?? Math.min(500_000, Math.round(7 * 86_400 * chain.blocksPerSecond))),
+        // A day, not a week. This is read before a trade, and the measured
+        // cost of a week on Base was the better part of a minute for a section
+        // that then reported nothing. What matters for "can they pull it now"
+        // is who holds the liquidity now; --liquidity-blocks widens it for
+        // anyone who wants the longer history and will wait for it.
+        liquidityFromBlock: head.number - (options.liquidityBlocks ?? Math.min(200_000, Math.round(86_400 * chain.blocksPerSecond))),
         v4PoolManager: await resolveV4Manager(rpc, chain, options.factory, head.number),
       });
     });

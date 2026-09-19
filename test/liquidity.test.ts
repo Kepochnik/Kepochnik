@@ -250,3 +250,42 @@ test("a truncated window makes the read partial, so its shares are never stated 
   assert.equal(lock.partial, true, "a window that was not finished must not read as a statement about the pool");
   assert.match(lockInWords(lock), /positions read/);
 });
+
+test("a failed receipt batch costs the NFT owners, not the whole section", async () => {
+  // Measured on Base twice: sixty seconds of mint history read, then one
+  // batch of receipts failed as a whole and the entire liquidity section came
+  // back MISSING. The positions are still known; only who holds their NFTs is
+  // not, and unresolved already counts as withdrawable.
+  const mintTopic = eventTopic({
+    name: "Mint",
+    inputs: [
+      { name: "sender", type: "address", indexed: false },
+      { name: "owner", type: "address", indexed: true },
+      { name: "tickLower", type: "int24", indexed: true },
+      { name: "tickUpper", type: "int24", indexed: true },
+      { name: "amount", type: "uint128", indexed: false },
+      { name: "amount0", type: "uint256", indexed: false },
+      { name: "amount1", type: "uint256", indexed: false },
+    ],
+  });
+  const rpc = {
+    getLogs: async () => [
+      {
+        address: POOL,
+        topics: [mintTopic, addressWord(MANAGER), word(0n), word(60n)],
+        data: `0x${addressWord(WALLET).slice(2)}${word(1000n).slice(2)}${word(1n).slice(2)}${word(1n).slice(2)}`,
+        blockNumber: "0xa",
+        transactionHash: `0x${"7".repeat(64)}`,
+        logIndex: "0x0",
+      },
+    ],
+    // The whole batch fails, as a transport error does.
+    sendBatchSettled: async () => { throw new Error("upstream closed the connection"); },
+    callBatchSettled: async () => [],
+  } as unknown as RpcClient;
+
+  const lock = await readV3Lock(rpc, v3Pool, undefined, MANAGER, 100, { fromBlock: 0 });
+  assert.ok(lock.holders.length > 0, "the positions were read and must not be thrown away");
+  assert.equal(lock.freeBps, 10_000, "an unresolved holder counts as able to withdraw");
+  assert.match(lock.unread, /could not be traced to an NFT holder/);
+});
