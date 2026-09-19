@@ -26,16 +26,30 @@ export interface TradeVenue {
 export const REFERRAL = { gmgn: "save", basedbot: "bot" } as const;
 
 /**
- * How each venue spells each chain. Only entries proven by a real URL or by
- * the live check are here; a missing entry means no button, which is the
- * honest outcome of not knowing.
+ * How each venue spells each chain, and how sure we are.
+ *
+ * Robinhood came from working URLs for both venues. The other three GMGN
+ * slugs are recall, and they are still unverified: both venues answer 403
+ * to any automated client — plain fetch and a real headless browser alike,
+ * from two different networks — so scripts/trade-check.mjs reports "could
+ * not be judged" rather than proving anything. It will catch a 404 the day
+ * one of them starts answering.
+ *
+ * They ship anyway because the cost of being wrong is a 404 page the reader
+ * can see, not a wrong number they would act on — the two are not the same
+ * kind of mistake, and only the second is worth withholding a feature over.
+ * A chain with no entry at all still gets no button; inventing coverage on
+ * somebody else's product is a different thing again.
  */
 export const TRADE_SLUGS: Record<string, { gmgn?: string; basedbot?: string }> = {
-  robinhood: { gmgn: "robinhood", basedbot: "robinhood" },
-  base: { gmgn: "base" },
-  bnb: { gmgn: "bsc" },
-  solana: { gmgn: "sol" },
+  robinhood: { gmgn: "robinhood", basedbot: "robinhood" }, // both from real URLs
+  base: { gmgn: "base" }, // unverified
+  bnb: { gmgn: "bsc" }, // unverified
+  solana: { gmgn: "sol" }, // unverified
 };
+
+/** Which slugs a real URL proved, as opposed to the ones still taken on recall. */
+export const PROVEN: Record<string, Array<"gmgn" | "basedbot">> = { robinhood: ["gmgn", "basedbot"] };
 
 /**
  * The links for one token on one chain. Empty when the venues do not cover

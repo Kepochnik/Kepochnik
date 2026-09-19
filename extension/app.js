@@ -634,9 +634,13 @@
   var REFERRAL = { gmgn: "save", basedbot: "bot" };
   var TRADE_SLUGS = {
     robinhood: { gmgn: "robinhood", basedbot: "robinhood" },
+    // both from real URLs
     base: { gmgn: "base" },
+    // unverified
     bnb: { gmgn: "bsc" },
+    // unverified
     solana: { gmgn: "sol" }
+    // unverified
   };
   function tradeVenues(chainKey, address) {
     const slugs = TRADE_SLUGS[chainKey];
