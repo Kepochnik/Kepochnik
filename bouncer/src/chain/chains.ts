@@ -114,13 +114,28 @@ export interface ChainConfig {
   lockers?: LockerTable;
 }
 
+/**
+ * The read-only proxy this project deploys. It is a second route to a chain
+ * rather than a second node — the same upstreams behind a different address —
+ * which is exactly what is wanted where a chain has only one public endpoint
+ * and that endpoint starts refusing this caller. Its own list is per chain and
+ * it fails over between upstreams itself.
+ */
+export const PUBLIC_PROXY = "https://bouncer-proxy.tarasenkosanja12.workers.dev";
+
 export const CHAINS: Record<string, ChainConfig> = {
   robinhood: {
     key: "robinhood",
     name: "Robinhood Chain",
     family: "evm",
     chainId: 4663,
-    rpc: ["https://rpc.mainnet.chain.robinhood.com"],
+    // Robinhood Chain publishes one endpoint, so a 403 from it used to stop
+    // every read on the chain outright — which happened during a live run
+    // today. The proxy is a different address in front of the same node, so it
+    // survives a per-caller limit even though it cannot survive the node
+    // itself going down. That is the honest half of a fix, and it is better
+    // than the nothing that was here.
+    rpc: ["https://rpc.mainnet.chain.robinhood.com", `${PUBLIC_PROXY}/rpc/robinhood`],
     blockscout: "https://robinhoodchain.blockscout.com",
     factory: "0x7eD598BcEf8bd9Edd8C97A195C6d13f40801EC7e".toLowerCase(),
     factoryV1: "0xA5aAb3F0c6EeadF30Ef1D3Eb997108E976351feB".toLowerCase(),

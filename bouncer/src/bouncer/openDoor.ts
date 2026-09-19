@@ -17,7 +17,7 @@ import { decodeOutputs, encodeCall, selector, type FunctionAbi, type Hex } from 
 import type { BlockscoutClient, TokenHolder, TokenTransfer } from "../chain/blockscout.js";
 import type { ChainConfig } from "../chain/chains.js";
 import { canPrice, readMarket, readPools, type Market, type MarketPool } from "../chain/market.js";
-import { readPoolLock, type PoolLock } from "../chain/liquidity.js";
+import { nameHolders, readPoolLock, type PoolLock } from "../chain/liquidity.js";
 import { readSelectors } from "../chain/code.js";
 import { ERC20_EVENTS, ERC20_FUNCTIONS, ZERO_ADDRESS } from "../chain/pons.js";
 import { eventTopic } from "../chain/abi.js";
@@ -263,6 +263,14 @@ export async function readOpenDoor(rpc: RpcClient, token: ContractId, meta: Toke
         liquidity = await readPoolLock(rpc, deepest, options.lockers, options.dex.v3PositionManager, block, {
           fromBlock: Math.max(0, options.liquidityFromBlock ?? block - 500_000),
         });
+        // A contract holding the liquidity is worth naming when the chain's
+        // explorer publishes a verified name for it. That is where a locker
+        // gets identified without a table of addresses recalled rather than
+        // checked — and it stays a name, not a verdict.
+        const bs = options.blockscout;
+        if (bs) {
+          liquidity = await nameHolders(liquidity, async (address) => (await bs.addressInfo(address)).name);
+        }
       } catch {
         liquidity = null;
       }
