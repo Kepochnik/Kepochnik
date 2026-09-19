@@ -88,12 +88,14 @@ jobs:
                 for (const p of m.pools) console.log("  ", p.name, p.concentrated ? "(ranged)" : "", String(p.quoteReserve), p.quoteSymbol);
                 for (const q of m.quotes) console.log("   sell", q.shareBps/100 + "%:", String(q.out), m.quoteSymbol, "(" + (q.realisedBps/100).toFixed(1) + "% of spot)");
                 console.log("note:", m.note);
-                // The liquidity lock. Its offsets into Raydium's pool account
-                // are recalled, not verified, and a shifted one reads as
-                // "burned" — the most reassuring wrong line this tool can
+                // The liquidity lock. Its offsets into the Raydium pool
+                // account are recalled, not verified, and a shifted one reads
+                // as "burned" — the most reassuring wrong line this tool can
                 // print. The code refuses to believe a layout that does not
                 // check out against itself, so a refusal HERE, on a real
                 // Raydium pool, is the signal that the offsets are wrong.
+                // (No apostrophes below: this whole script is inside a
+                // single-quoted node -e, and one apostrophe ends it.)
                 for (const l of m.locks || []) {
                   console.log("lock:", l.name, l.read ? `${l.burnedBps/100}% burned, ${l.strandedBps/100}% keyless, ${l.freeBps/100}% withdrawable` : `not read (${l.unread})`);
                 }
