@@ -341,8 +341,12 @@
         from = to + 1;
         chunk = Math.min(maxChunk, chunk * 2);
       } catch (error) {
-        if (chunk <= minChunk) throw error;
-        chunk = Math.max(minChunk, Math.floor(chunk / 2));
+        if (chunk <= minChunk) {
+          if (!chunks) throw error;
+          complete = false;
+          break;
+        }
+        chunk = Math.max(minChunk, Math.floor(chunk / 8));
       }
     }
     logs.sort((a, b) => a.blockNumber - b.blockNumber || a.logIndex - b.logIndex);
@@ -1210,8 +1214,7 @@
           for (const item of items) {
             byId.set(item.id, item);
           }
-          this.record(requests, Date.now() - startedAt, false);
-          return payload.map((request) => {
+          const answers = payload.map((request) => {
             const item = byId.get(request.id);
             if (!item) throw new RpcError(`missing response for ${request.method}`);
             if (item.error) {
@@ -1221,6 +1224,8 @@
             }
             return item.result;
           });
+          this.record(requests, Date.now() - startedAt, false);
+          return answers;
         } catch (error) {
           lastError = error;
           if (error instanceof RpcError && error.isRateLimit) {
