@@ -330,12 +330,21 @@ jobs:
           B="node bin/bouncer.mjs"
           SUBJECTS=""
           if [ "$CHAIN" = "solana" ]; then
-            for SOURCE in "https://tokens.jup.ag/tokens?tags=verified" "https://token.jup.ag/strict"; do
-              SUBJECTS=$(curl -sS --max-time 20 "$SOURCE" 2>/dev/null \
-                | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const j=JSON.parse(s);const a=(Array.isArray(j)?j:j.tokens||[]).map(t=>t.address).filter(Boolean);const out=[];for(let i=0;i<a.length&&out.length<4;i+=Math.max(1,Math.floor(a.length/40)))out.push(a[i]);console.log(out.join(" "))}catch{console.log("")}})' || true)
-              [ -n "$SUBJECTS" ] && break
-            done
-            [ -z "$SUBJECTS" ] && echo "::warning::no public mint list answered, so no arbitrary Solana mints were checked"
+            # From the chain first: every Raydium CPMM vault sits under one
+            # program-derived authority, and a token account names its mint in
+            # its first 32 bytes, so asking that authority for its accounts
+            # enumerates mints that are pooled today. The public list is only
+            # the fallback for when that read is refused.
+            SUBJECTS=$(timeout 60 node scripts/solana-movers.mjs 3 2>/tmp/solmov.err | tr '\n' ' ' || true)
+            if [ -z "$SUBJECTS" ]; then
+              echo "::notice::the on-chain mint enumeration did not answer: $(cat /tmp/solmov.err)"
+              for SOURCE in "https://tokens.jup.ag/tokens?tags=verified" "https://token.jup.ag/strict"; do
+                SUBJECTS=$(curl -sS --max-time 20 "$SOURCE" 2>/dev/null \
+                  | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const j=JSON.parse(s);const a=(Array.isArray(j)?j:j.tokens||[]).map(t=>t.address).filter(Boolean);const out=[];for(let i=0;i<a.length&&out.length<3;i+=Math.max(1,Math.floor(a.length/40)))out.push(a[i]);console.log(out.join(" "))}catch{console.log("")}})' || true)
+                [ -n "$SUBJECTS" ] && break
+              done
+            fi
+            [ -z "$SUBJECTS" ] && echo "::warning::neither the chain nor a public list gave any mints, so no arbitrary Solana tokens were checked"
           else
             SUBJECTS=$(timeout 120 node scripts/movers.mjs "$CHAIN" 3 2>/dev/null | cut -d' ' -f1 | tr '\n' ' ' || true)
             [ -z "$SUBJECTS" ] && echo "::warning::no ERC-20 transfers came back, so no arbitrary tokens were checked on $CHAIN"
