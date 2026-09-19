@@ -19,3 +19,10 @@ jobs:
       - run: npm run readonly-check
       - run: npm test
       - run: npm run site
+      # The page is measured in a real browser at phone, tablet and laptop
+      # width. A stylesheet that reads perfectly well can still scroll
+      # sideways on a phone, and nothing over the source can see it.
+      - run: npx --yes playwright-core install chromium || true
+      - run: npm run layout-check
+        env:
+          PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/.pw

@@ -504,6 +504,132 @@
     return Number.isFinite(n) ? n : null;
   }
 
+  // src/bouncer/topics.ts
+  var TOPIC_ORDER = ["id", "keep", "sell", "exit", "room", "unread"];
+  var TOPIC_QUESTION = {
+    id: "Is this the token you meant?",
+    keep: "Can they take it from you?",
+    sell: "Can you sell it right now?",
+    exit: "What would you actually get out?",
+    room: "Who is already inside?",
+    unread: "What BOUNCER could not read"
+  };
+  var TOPIC_BLURB = {
+    id: "Whether the address is the contract behind the ticker, or something wearing its name.",
+    keep: "Powers in the code and hands on the liquidity: who can still change the rules or walk off with the pool.",
+    sell: "Whether a transfer goes through at all today, and what it costs when it does.",
+    exit: "Where it trades and what a sale of your size would really pay, at this block.",
+    room: "Who holds the supply, who launched it, and whether the early buyers knew each other.",
+    unread: "Reads that did not answer. A gap here is not a clean result; it is a question still open."
+  };
+  var TOPIC_OF = {
+    // ---- is this the token you meant
+    "claimed-factory": "id",
+    "curve-input": "id",
+    deployed: "id",
+    "known-address": "id",
+    "launch-older": "id",
+    "lookalike-impostor": "id",
+    "lookalike-later": "id",
+    "lookalike-shared-ticker": "id",
+    lookalikes: "id",
+    "no-account": "id",
+    "not-a-mint": "id",
+    "not-erc20": "id",
+    "not-registered": "id",
+    spl: "id",
+    "v1-launch": "id",
+    graduated: "id",
+    "v1-not-graduated": "id",
+    "swept-no-pool": "id",
+    // ---- can they take it from you
+    burned: "keep",
+    "buyback-vests": "keep",
+    code: "keep",
+    "fee-recipient-moved": "keep",
+    "freeze-authority": "keep",
+    "liquidity-free": "keep",
+    "liquidity-held": "keep",
+    "liquidity-partial": "keep",
+    "liquidity-partly-free": "keep",
+    "metadata-frozen": "keep",
+    "metadata-mutable": "keep",
+    "mint-authority": "keep",
+    "mint-close": "keep",
+    "no-freeze": "keep",
+    "no-mint": "keep",
+    "no-powers": "keep",
+    "permanent-delegate": "keep",
+    powers: "keep",
+    "sol-liquidity-free": "keep",
+    "sol-liquidity-held": "keep",
+    "sol-liquidity-partly-free": "keep",
+    "terms-retuned": "keep",
+    // ---- can you sell it right now
+    "cover-closed": "sell",
+    "cover-open": "sell",
+    "frozen-by-default": "sell",
+    "high-tax": "sell",
+    "interest-bearing": "sell",
+    "non-transferable": "sell",
+    pausable: "sell",
+    paused: "sell",
+    "trading-closed": "sell",
+    "transfer-fee": "sell",
+    "transfer-hook": "sell",
+    "v1-caps": "sell",
+    "v4-hook": "sell",
+    "extension-unknown": "sell",
+    // ---- what would you actually get out
+    active: "exit",
+    concentrated: "exit",
+    "exit-closed": "exit",
+    "exit-thin": "exit",
+    "graduated-no-pool": "exit",
+    "no-pool": "exit",
+    "no-venue": "exit",
+    "on-the-curve": "exit",
+    pools: "exit",
+    "pools-empty": "exit",
+    price: "exit",
+    quiet: "exit",
+    "sale-price": "exit",
+    "venue-unidentified": "exit",
+    "venues-read": "exit",
+    // ---- who is already inside
+    "bundled-blocks": "room",
+    "crew-clean": "room",
+    "crew-creator": "room",
+    "deployer-holds": "room",
+    "dev-first": "room",
+    "dev-funded": "room",
+    "dev-graduated": "room",
+    "dev-holds": "room",
+    "dev-repeat": "room",
+    "dev-serial": "room",
+    "delegated-wallet": "room",
+    "in-contracts": "room",
+    "no-holders": "room",
+    "one-crew": "room",
+    "owner-holds": "room",
+    "room-wide": "room",
+    spread: "room",
+    // ---- what could not be read
+    "explorer-scam": "unread",
+    "explorer-unread": "unread",
+    "liquidity-unread": "unread",
+    "no-metadata": "unread",
+    "no-probe": "unread",
+    "shares-unknown": "unread",
+    skipped: "unread",
+    "sol-liquidity-unread": "unread",
+    "surface-unreadable": "unread",
+    unverified: "unread"
+  };
+  function topicOf(code) {
+    return TOPIC_OF[code] ?? "unread";
+  }
+
   // src/chain/chains.ts
   var PUBLIC_PROXY = "https://bouncer-proxy.tarasenkosanja12.workers.dev";
   var CHAINS = {
@@ -6010,6 +6136,20 @@
     more.innerHTML = `<span>More:</span><a href="#/board?chain=${c}">Tonight's board</a><a href="#/plan?tax=100&chain=${c}">Plan a launch</a><span>Paste "token wallet" (two addresses) to see one wallet's bag.</span>`;
     chips.appendChild(more);
   }
+  new MutationObserver(() => {
+    document.body.classList.toggle("answered", (document.getElementById("out")?.childElementCount ?? 0) > 0);
+  }).observe(document.getElementById("out"), { childList: true });
+  document.addEventListener("click", async (event) => {
+    const target = event.target?.closest("[data-copy]");
+    if (!target) return;
+    const text = target.dataset.copy ?? "";
+    try {
+      await navigator.clipboard.writeText(text);
+      showToast("Copied");
+    } catch {
+      showToast(text);
+    }
+  });
   function showToast(text) {
     toast.textContent = text;
     toast.classList.add("show");
@@ -6236,6 +6376,64 @@
     if (slip.rules?.phase === 2 || slip.rules?.phase === 3) parts.push("graduated, pool locked");
     return parts.map((x) => x.charAt(0).toUpperCase() + x.slice(1)).join(". ") + ".";
   }
+  function verdictOf(notes) {
+    const stop = notes.filter((n) => n.level === "stop").length;
+    const watch = notes.filter((n) => n.level === "watch").length;
+    if (stop) return { word: "STOP", kind: "stop", line: `${stop} thing${stop === 1 ? "" : "s"} here can cost you money outright.` };
+    if (watch) return { word: "WATCH", kind: "watch", line: `Nothing outright dangerous, ${watch} thing${watch === 1 ? "" : "s"} worth reading before you buy.` };
+    return { word: "CLEAR", kind: "clear", line: "Nothing in what was read stands out. That is not a promise about the price." };
+  }
+  function verdictBlock(opts) {
+    const v = verdictOf(opts.notes);
+    const counts = ["stop", "watch", "info"].map((level) => ({ level, n: opts.notes.filter((x) => x.level === level).length })).filter((x) => x.n > 0).map((x) => `<span class="tally lv-${x.level}"><i></i>${x.n} ${LEVEL_WORD[x.level].toLowerCase()}</span>`).join("");
+    const stampClass = opts.stamp === "ON THE LIST" ? "yes" : opts.stamp === "NOT A LAUNCH" ? "mid" : "no";
+    return `<section class="verdict v-${v.kind}">
+    <div class="vhead">
+      <div class="vwho">
+        <span class="vsym">${opts.sym}</span>
+        <span class="vname">${opts.name}</span>
+        <span class="vstamp ${stampClass}">${opts.stamp}</span>
+      </div>
+      <button class="vaddr" type="button" data-copy="${esc2(opts.address)}" title="Copy the address">${esc2(opts.address)}</button>
+    </div>
+    <div class="vbody">
+      <div class="vword" aria-label="Verdict">${v.word}</div>
+      <div class="vsay">
+        <p class="vlead">${esc2(opts.lead)}</p>
+        <p class="vsub">${esc2(v.line)}</p>
+      </div>
+    </div>
+    <div class="vfoot">
+      <div class="tallies">${counts || '<span class="tally lv-info"><i></i>nothing to flag</span>'}</div>
+      <div class="vat">${opts.at}</div>
+      <div class="vacts">${opts.actions}</div>
+    </div>
+  </section>`;
+  }
+  function answerCards(notes) {
+    const cards = TOPIC_ORDER.filter((t) => t !== "unread").map((topic) => {
+      const mine = notes.filter((n) => topicOf(n.code) === topic);
+      if (!mine.length) return "";
+      const worst = mine.some((n) => n.level === "stop") ? "stop" : mine.some((n) => n.level === "watch") ? "watch" : "info";
+      const rows = mine.map((n) => `<li class="ans lv-${n.level}"><span class="dot" aria-hidden="true"></span><span>${esc2(n.text)}</span></li>`).join("");
+      return `<article class="qcard lv-${worst}">
+        <h2>${esc2(TOPIC_QUESTION[topic])}</h2>
+        <p class="qblurb">${esc2(TOPIC_BLURB[topic])}</p>
+        <ul class="answers">${rows}</ul>
+      </article>`;
+    }).join("");
+    return cards ? `<div class="qgrid">${cards}</div>` : "";
+  }
+  function unreadStrip(notes, skipped) {
+    const mine = notes.filter((n) => topicOf(n.code) === "unread");
+    if (!mine.length && !skipped.length) return "";
+    const rows = mine.map((n) => `<li>${esc2(n.text)}</li>`).join("");
+    return `<section class="unread">
+    <h2>${esc2(TOPIC_QUESTION.unread)}</h2>
+    <p class="qblurb">${esc2(TOPIC_BLURB.unread)}</p>
+    <ul>${rows}</ul>
+  </section>`;
+  }
   function section(id, title, what, body, open) {
     return `<details class="sec" id="${id}"${open ? " open" : ""}><summary><h2>${title}</h2><span class="what">${what}</span><span class="chev">\u25B6</span></summary><div class="body">${body}</div></details>`;
   }
@@ -6266,7 +6464,6 @@
         <div class="tile"><div class="l">Tax per transfer</div><div class="v ${fee?.kind === "transfer-fee" && fee.feeBps >= 500 ? "bad" : ""}">${fee?.kind === "transfer-fee" ? `${(fee.feeBps / 100).toFixed(2)}%` : "0%"}</div><div class="s">${fee?.kind === "transfer-fee" ? fee.nextFeeBps !== fee.feeBps ? `changing to ${(fee.nextFeeBps / 100).toFixed(2)}% at epoch ${fee.nextFeeEpoch}` : fee.feeAuthority ? "and it can still be changed" : "fixed for good" : "no Token-2022 transfer fee"}</div></div>
         <div class="tile"><div class="l">Top 10 holders</div><div class="v ${slip.holders && slip.holders.top10Bps !== null && slip.holders.top10Bps >= 5e3 ? "bad" : ""}">${slip.holders && slip.holders.top10Bps !== null ? `${(slip.holders.top10Bps / 100).toFixed(0)}%` : "\u2014"}</div><div class="s">${slip.holders?.distinctOwners ? `of supply \xB7 ${slip.holders.distinctOwners} distinct wallets` : "not read"}</div></div>
       </div>` : "";
-    const notes = slip.notes.map((n) => `<div class="note"><span class="lvl ${n.level}">${LEVEL_WORD[n.level]}</span><span>${esc2(n.text)}</span></div>`).join("");
     const explorer = chain().explorerUrl;
     const link = (addr) => explorer ? `<a href="${esc2(explorer)}/account/${esc2(addr)}" target="_blank" rel="noopener"><span class="mono">${esc2(shortSol(addr))}</span></a>` : `<span class="mono">${esc2(shortSol(addr))}</span>`;
     const idBody = m ? `<dl class="kv">
@@ -6282,19 +6479,19 @@
         <dt>top 10</dt><dd>${slip.holders.top10Bps === null ? "unknown" : `${(slip.holders.top10Bps / 100).toFixed(1)}% of supply`}</dd></dl>
       <div class="tbl"><table class="buys"><thead><tr><th>#</th><th>wallet</th><th>share</th></tr></thead><tbody>${slip.holders.top.slice(0, 15).map((h, i) => `<tr><td>${i + 1}</td><td>${h.owner ? link(h.owner) : `${link(h.account)} <span class="flag">account</span>`}</td><td>${h.bps === null ? "unknown" : `${(h.bps / 100).toFixed(2)}%`}</td></tr>`).join("")}</tbody></table></div>` : "";
     out.innerHTML = `<div class="slip">
-    <div class="summary">
-      <div class="top">
-        <div class="who"><div class="sym">${sym}</div><div class="name">${name}</div><div class="addr">${esc2(slip.subject)}</div><div class="at">${esc2(slip.chain.name)} \xB7 slot ${slip.at.slot}${slip.at.timestamp ? ` \xB7 ${isoUtc(slip.at.timestamp)}` : ""}</div></div>
-        <div class="stamp ${slip.stamp === "NOT A LAUNCH" ? "mid" : "no"}">${slip.stamp}</div>
-      </div>
-      <p class="lead">${esc2(splSentence(slip, blocked))}</p>
-      ${tiles}
-      <div class="actions" style="margin-top:16px">
-        <button class="ghost" id="act-json" type="button">Copy JSON</button>
-        <button class="ghost" id="act-link" type="button">Copy link</button>
-      </div>
-    </div>
-    <div class="notes"><h2>What to know</h2>${notes}</div>
+    ${verdictBlock({
+      sym,
+      name,
+      address: slip.subject,
+      stamp: slip.stamp,
+      at: `${esc2(slip.chain.name)} \xB7 slot ${slip.at.slot}${slip.at.timestamp ? ` \xB7 ${isoUtc(slip.at.timestamp)}` : ""}`,
+      notes: slip.notes,
+      lead: splSentence(slip, blocked),
+      actions: `<button class="ghost" id="act-json" type="button">JSON</button><button class="ghost" id="act-link" type="button">Link</button>`
+    })}
+    ${tiles}
+    ${answerCards(slip.notes)}
+    ${unreadStrip(slip.notes, slip.skipped)}
     <div class="stack">
       ${section("s-id", "Is it real?", "What this address actually is, who can print more of it, and who can freeze what you hold.", idBody, true)}
       ${extBody ? section("s-ext", "Token-2022 extensions", "The rules the token program itself enforces on every transfer.", extBody, true) : ""}
@@ -6431,7 +6628,6 @@
         <div class="tile"><div class="l">${room && room.buys > 0 ? "Creator funded" : "Curve full"}</div><div class="v ${room && room.devShareBps >= 5e3 ? "bad" : ""}">${room && room.buys > 0 ? `${(room.devShareBps / 100).toFixed(0)}%` : r?.fill ? `${(r.fill.bps / 100).toFixed(0)}%` : "\u2014"}</div><div class="s">${room && room.buys > 0 ? `of all buys \xB7 ${room.buyers} buyers` : r?.fill ? "of the way to graduation" : ""}</div></div>
         <div class="tile"><div class="l">This dev before</div><div class="v ${d && d.counts.launched >= 5 && d.counts.graduated === 0 ? "bad" : ""}">${d ? `${d.counts.launched}` : "\u2014"}</div><div class="s">${d ? `launch${d.counts.launched === 1 ? "" : "es"} in ${mode === "demo" ? "8" : "24"} h \xB7 ${d.counts.graduated} graduated` : ""}</div></div>
       </div>` : o ? openDoorTiles(slip) : "";
-    const notes = slip.notes.map((n) => `<div class="note"><span class="lvl ${n.level}">${LEVEL_WORD[n.level]}</span><span>${esc2(n.text)}</span></div>`).join("");
     const idFlags = (x) => {
       const f = [];
       if (x.proxyImplementation) f.push(`<span class="flag bad">upgradeable proxy \u2192 ${shortAddress(x.proxyImplementation)}</span>`);
@@ -6479,23 +6675,22 @@
         <div class="tbl"><table class="buys"><thead><tr><th>wallet</th><th>got its money from</th><th>bought</th></tr></thead><tbody>${crew.wallets.slice(0, 10).map((w) => `<tr><td>${shortAddress(w.address)}</td><td>${w.creatorWallet ? '<span class="flag">creator wallet</span>' : w.funder ? `${shortAddress(w.funder)} <small style="color:var(--dim)">@${w.fundedAtBlock}</small>` : '<span style="color:var(--dim)">not found</span>'}</td><td>${amt(w.quoteIn)}</td></tr>`).join("")}</tbody></table></div>` : "";
     const lookBody = l ? `<dl class="kv"><dt>${esc2(l.query)}</dt><dd>${esc2(lookalikeLine(l))}</dd></dl>
         <div class="tbl"><table class="buys"><thead><tr><th>address</th><th>from the factory?</th><th>stage</th><th>launch block</th></tr></thead><tbody>${l.candidates.slice(0, 8).map((x) => `<tr><td><a href="#/${mode === "demo" ? "demo" : "t"}/${x.address}${routeChain()}">${shortAddress(x.address)}</a>${x.address === l.subject ? " \xB7 this one" : ""}</td><td>${x.registered ? '<span class="flag ok">yes</span>' : '<span class="flag bad">no</span>'}</td><td>${x.phase !== null ? PHASE_LABEL[x.phase] : "\u2014"}</td><td>${x.launchBlock ?? "\u2014"}</td></tr>`).join("")}</tbody></table></div>` : "";
-    const watchBody = `<div class="watch"><button class="ghost" id="act-watch" type="button" aria-pressed="false">Start watching</button><span style="color:var(--muted);font-size:13px">Checks every ${mode === "demo" ? "5" : "15"} s while this tab is open: the dev selling or moving tokens, the tax recipient changing, buyback switching, graduation${crew?.crews.length ? `, and ${crew.crews.flatMap((x) => x.wallets).length} grouped wallets leaving together` : ""}. Browser notifications if you allow them.</span></div><div class="events"></div>`;
+    const watchBody = `<div class="watchbar"><button class="ghost" id="act-watch" type="button" aria-pressed="false">Start watching</button><span style="color:var(--muted);font-size:13px">Checks every ${mode === "demo" ? "5" : "15"} s while this tab is open: the dev selling or moving tokens, the tax recipient changing, buyback switching, graduation${crew?.crews.length ? `, and ${crew.crews.flatMap((x) => x.wallets).length} grouped wallets leaving together` : ""}. Browser notifications if you allow them.</span></div><div class="events"></div>`;
     out.innerHTML = `<div class="slip">
-    <div class="summary">
-      <div class="top">
-        <div class="who"><div class="sym">${sym}</div><div class="name">${name}</div><div class="addr">${esc2(slip.subject)}</div><div class="at">${mode === "demo" ? "DEMO \xB7 " : ""}${esc2(slip.chain.name)} \xB7 block ${slip.at.block} \xB7 ${isoUtc(slip.at.timestamp)}</div></div>
-        <div class="stamp ${slip.stamp === "ON THE LIST" ? "" : slip.stamp === "NOT A LAUNCH" ? "mid" : "no"}">${slip.stamp}</div>
-      </div>
-      <p class="lead">${esc2(summarySentence(slip))}</p>
-      ${tiles}
-      <div class="actions" style="margin-top:16px">
-        <button class="ghost" id="act-card" type="button">Show as image</button>
-        <button class="ghost" id="act-json" type="button">Copy JSON</button>
-        <button class="ghost" id="act-link" type="button">Copy link</button>
-      </div>
-    </div>
+    ${verdictBlock({
+      sym,
+      name,
+      address: slip.subject,
+      stamp: slip.stamp,
+      at: `${mode === "demo" ? "DEMO \xB7 " : ""}${esc2(slip.chain.name)} \xB7 block ${slip.at.block} \xB7 ${isoUtc(slip.at.timestamp)}`,
+      notes: slip.notes,
+      lead: summarySentence(slip),
+      actions: `<button class="ghost" id="act-card" type="button">Image</button><button class="ghost" id="act-json" type="button">JSON</button><button class="ghost" id="act-link" type="button">Link</button>`
+    })}
     <div class="card-wrap" id="card"></div>
-    <div class="notes"><h2>What to know</h2>${notes || `<div class="note"><span class="lvl info">Note</span><span>Nothing stands out. ${registered ? "The factory made this token and none of its terms needs a second look." : "Nothing in the code or the holder list needs a second look."}</span></div>`}</div>
+    ${tiles}
+    ${answerCards(slip.notes)}
+    ${unreadStrip(slip.notes, slip.skipped)}
     <div class="stack">
       ${section("s-id", "Is it real?", "Did the launchpad's factory deploy this token, and can its code change later?", idBody, !o)}
       ${o ? section("s-control", "Who controls it", "Which switches the code has (mint, pause, blacklist, fees), who holds the keys, and whether holders can move tokens right now.", controlBody(slip), true) : ""}

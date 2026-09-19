@@ -19,7 +19,8 @@
     "test": "tsc -p tsconfig.json && node --test dist/test/*.test.js proxy/*.test.mjs",
     "readonly-check": "node scripts/readonly-check.mjs",
     "workflow-check": "node scripts/workflow-check.mjs",
-    "check": "npm run readonly-check && npm run workflow-check && npm test && npm run site",
+    "layout-check": "node scripts/layout-check.mjs",
+    "check": "npm run readonly-check && npm run workflow-check && npm test && npm run site && npm run layout-check",
     "site": "npm run build --silent && node scripts/build-site.mjs",
     "demo": "npm run build --silent && node bin/bouncer.mjs demo",
     "doctor": "npm run build --silent && node bin/bouncer.mjs doctor",
@@ -29,6 +30,7 @@
   "devDependencies": {
     "@types/node": "^22.13.0",
     "esbuild": "^0.25.0",
+    "playwright-core": "^1.63.0",
     "typescript": "^5.6.0"
   }
 }
