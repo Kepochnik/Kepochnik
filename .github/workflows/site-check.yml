@@ -1,0 +1,57 @@
+name: site-check
+
+# Looks at the deployed site the way a visitor does.
+#
+# The local layout check measures the built file, which is most of the
+# value and not all of it: a file:// page in a sandbox never loads the web
+# fonts, so the headline it measures is not the headline anybody sees. This
+# runs the same check against the real URL, with the real fonts, and keeps
+# the screenshots.
+on:
+  workflow_dispatch:
+    inputs:
+      url:
+        description: "Site URL to check"
+        required: false
+        default: "https://kepochnik.github.io/bouncer/"
+  workflow_run:
+    workflows: [pages]
+    types: [completed]
+
+jobs:
+  look:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci
+      - name: Is it actually served
+        env:
+          URL: ${{ inputs.url || 'https://kepochnik.github.io/bouncer/' }}
+        run: |
+          # A deploy that reports success and serves the previous build is a
+          # thing that happens, so the check starts by asking what is there.
+          code=$(curl -sS -o /tmp/live.html -w '%{http_code}' "$URL")
+          echo "HTTP $code · $(wc -c < /tmp/live.html) bytes"
+          [ "$code" = "200" ] || { echo "::error::the site did not answer 200"; exit 1; }
+          for needle in "CHECK IT AT THE DOOR" "qgrid" "What BOUNCER could not read" "lv-stop"; do
+            grep -q "$needle" /tmp/live.html || { echo "::error::the served page is missing: $needle — this looks like an older build"; exit 1; }
+          done
+          echo "the served page carries the current markup"
+      - run: npx --yes playwright-core install chromium
+        env:
+          PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/.pw
+      - name: Measure and photograph it
+        env:
+          PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/.pw
+          BOUNCER_SHOTS: ${{ github.workspace }}/shots
+        run: |
+          mkdir -p "$BOUNCER_SHOTS"
+          node scripts/layout-check.mjs "${{ inputs.url || 'https://kepochnik.github.io/bouncer/' }}"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: live-site
+          path: shots

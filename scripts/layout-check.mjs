@@ -69,12 +69,24 @@ if (!executablePath) {
   process.exit(0);
 }
 
-const page404 = "site/dist/index.html";
-if (!existsSync(page404)) {
-  console.error("layout: site/dist/index.html is missing — run the site build first");
-  process.exit(1);
+/**
+ * The built file by default, or a deployed URL when one is given. The second
+ * is not the same check: only the real site loads the real fonts, and a
+ * headline measured in a fallback face is not the headline anybody sees.
+ */
+const target = process.argv[2] || process.env.BOUNCER_SITE_URL;
+let url;
+if (target) {
+  url = target;
+} else {
+  const built = "site/dist/index.html";
+  if (!existsSync(built)) {
+    console.error("layout: site/dist/index.html is missing — run the site build first");
+    process.exit(1);
+  }
+  url = `file://${process.cwd()}/${built}`;
 }
-const url = `file://${process.cwd()}/${page404}`;
+console.log(`layout: measuring ${url}`);
 
 const browser = await chromium.launch({ executablePath });
 let failures = 0;
@@ -111,6 +123,11 @@ for (const size of WIDTHS) {
   if (errors.length) {
     failures++;
     console.error(`::error::${size.name}: the page threw — ${errors.join(" | ")}`);
+  }
+  // One picture per width from the last route, when asked. A measurement
+  // says the page fits; only a picture says whether it is worth looking at.
+  if (process.env.BOUNCER_SHOTS) {
+    await page.screenshot({ path: `${process.env.BOUNCER_SHOTS}/${size.name}.png`, fullPage: true });
   }
   await page.close();
 }
