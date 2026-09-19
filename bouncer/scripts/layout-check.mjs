@@ -91,6 +91,7 @@ console.log(`layout: measuring ${url}`);
 const browser = await chromium.launch({ executablePath });
 let failures = 0;
 let checked = 0;
+let warnedFont = false;
 for (const size of WIDTHS) {
   const page = await browser.newPage({ viewport: { width: size.w, height: size.h } });
   const errors = [];
@@ -101,6 +102,47 @@ for (const size of WIDTHS) {
     if (route.hash) await page.evaluate((h) => { location.hash = h; }, route.hash);
     await page.waitForTimeout(1800);
     checked++;
+    // Did the display face actually arrive?
+    //
+    // document.fonts.check() is no use here: for a family the browser does
+    // not have at all it returns true, so the first version of this check
+    // passed in a sandbox that cannot reach Google Fonts — a false green of
+    // exactly the kind this file exists to prevent. The reliable test is to
+    // render the same string twice, once in the wanted family and once in a
+    // generic, and compare: a condensed display face is not the same width
+    // as the fallback, and identical widths mean the fallback is what you
+    // are looking at.
+    //
+    // Only a failure when the page came over http(s). On a file:// page in
+    // an offline sandbox a missing webfont is the sandbox, not the page.
+    const font = await page.evaluate(async () => {
+      await (document.fonts?.ready ?? Promise.resolve());
+      const el = document.querySelector(".wordmark");
+      if (!el) return null;
+      const wanted = getComputedStyle(el).fontFamily.split(",")[0].replace(/["']/g, "").trim();
+      const measure = (family) => {
+        const probe = document.createElement("span");
+        probe.textContent = "BOUNCER HANDGLOVES 0123456789";
+        probe.style.cssText = `position:absolute;left:-9999px;white-space:nowrap;font:900 64px ${family}`;
+        document.body.appendChild(probe);
+        const w = probe.getBoundingClientRect().width;
+        probe.remove();
+        return w;
+      };
+      return { wanted, real: measure(`"${wanted}", sans-serif`), fallback: measure("sans-serif") };
+    });
+    if (font && Math.abs(font.real - font.fallback) < 1) {
+      const remote = url.startsWith("http");
+      const say = `the display face ${font.wanted} is not being used — the page is rendering in the fallback`;
+      if (remote) {
+        failures++;
+        console.error(`::error::${size.name}, ${route.what}: ${say}`);
+      } else if (!warnedFont) {
+        warnedFont = true;
+        console.log(`layout: ${say} (expected on a file:// page with no network; checked for real against a deployed URL)`);
+      }
+    }
+
     const over = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
     if (over > 1) {
       failures++;

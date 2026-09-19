@@ -630,6 +630,37 @@
     return TOPIC_OF[code] ?? "unread";
   }
 
+  // src/bouncer/trade.ts
+  var REFERRAL = { gmgn: "save", basedbot: "bot" };
+  var TRADE_SLUGS = {
+    robinhood: { gmgn: "robinhood", basedbot: "robinhood" },
+    base: { gmgn: "base" },
+    bnb: { gmgn: "bsc" },
+    solana: { gmgn: "sol" }
+  };
+  function tradeVenues(chainKey, address) {
+    const slugs = TRADE_SLUGS[chainKey];
+    if (!slugs || !address) return [];
+    const out2 = [];
+    if (slugs.gmgn) {
+      out2.push({
+        key: "gmgn",
+        name: "GMGN",
+        what: "chart, holders and a one-click swap",
+        url: `https://gmgn.ai/${slugs.gmgn}/token/${REFERRAL.gmgn}_${address}`
+      });
+    }
+    if (slugs.basedbot) {
+      out2.push({
+        key: "basedbot",
+        name: "BasedBot",
+        what: "buy from Telegram, no browser wallet",
+        url: `https://basedbot.app/r/${REFERRAL.basedbot}/token/${slugs.basedbot}/${address}`
+      });
+    }
+    return out2;
+  }
+
   // src/chain/chains.ts
   var PUBLIC_PROXY = "https://bouncer-proxy.tarasenkosanja12.workers.dev";
   var CHAINS = {
@@ -6434,6 +6465,25 @@
     <ul>${rows}</ul>
   </section>`;
   }
+  function buyStrip(chainKey, address) {
+    const venues = tradeVenues(chainKey, address);
+    if (!venues.length) return "";
+    const links = venues.map(
+      (v) => `<a class="buy-link" href="${esc2(v.url)}" target="_blank" rel="noopener nofollow sponsored">
+          <span class="buy-name">${esc2(v.name)}</span>
+          <span class="buy-what">${esc2(v.what)}</span>
+          <span class="buy-go" aria-hidden="true">\u2197</span>
+        </a>`
+    ).join("");
+    return `<section class="buy">
+    <div class="buy-head">
+      <h2>Buy it</h2>
+      <span class="buy-tag">referral links</span>
+    </div>
+    <p class="qblurb">BOUNCER cannot trade and holds no key. These open the token on someone else's venue, and they carry this project's referral code \u2014 which is how it is paid for. Read the slip above first; nothing here changes what it says.</p>
+    <div class="buy-links">${links}</div>
+  </section>`;
+  }
   function section(id, title, what, body, open) {
     return `<details class="sec" id="${id}"${open ? " open" : ""}><summary><h2>${title}</h2><span class="what">${what}</span><span class="chev">\u25B6</span></summary><div class="body">${body}</div></details>`;
   }
@@ -6492,6 +6542,7 @@
     ${tiles}
     ${answerCards(slip.notes)}
     ${unreadStrip(slip.notes, slip.skipped)}
+    ${buyStrip(slip.chain.key, slip.subject)}
     <div class="stack">
       ${section("s-id", "Is it real?", "What this address actually is, who can print more of it, and who can freeze what you hold.", idBody, true)}
       ${extBody ? section("s-ext", "Token-2022 extensions", "The rules the token program itself enforces on every transfer.", extBody, true) : ""}
@@ -6691,6 +6742,7 @@
     ${tiles}
     ${answerCards(slip.notes)}
     ${unreadStrip(slip.notes, slip.skipped)}
+    ${buyStrip(mode === "demo" ? "" : slip.chain.key, slip.subject)}
     <div class="stack">
       ${section("s-id", "Is it real?", "Did the launchpad's factory deploy this token, and can its code change later?", idBody, !o)}
       ${o ? section("s-control", "Who controls it", "Which switches the code has (mint, pause, blacklist, fees), who holds the keys, and whether holders can move tokens right now.", controlBody(slip), true) : ""}
