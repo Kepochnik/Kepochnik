@@ -63,7 +63,7 @@ while (Date.now() - started < DEADLINE) {
     failed: !!document.querySelector(".error"),
   }));
   if (state.failed) {
-    console.log(`speed: the site could not read ${chain} from this runner, so nothing was timed`);
+    console.log(`::warning title=speed on ${chain}::the site could not read this chain from the runner, so nothing was timed`);
     await browser.close();
     process.exit(0);
   }
@@ -82,10 +82,13 @@ if (firstAnswer === null) {
   process.exit(1);
 }
 const full = complete ?? DEADLINE;
-console.log(`speed: first answer on screen in ${(firstAnswer / 1000).toFixed(1)} s, complete in ${(full / 1000).toFixed(1)} s (${chain})`);
+// A notice, not a log line: the numbers are the point of the run and they
+// were getting buried under the artifact upload. An annotation shows in the
+// run summary and comes back from the API without wrestling a log tail.
+console.log(`::notice title=speed on ${chain}::first answer on screen in ${(firstAnswer / 1000).toFixed(1)} s, complete in ${(full / 1000).toFixed(1)} s`);
 // The whole point of the two passes. If the first answer is not meaningfully
 // sooner than the complete one, the split is costing a duplicate read and
 // buying nothing, and that is worth knowing rather than assuming.
 if (full - firstAnswer < 500) {
-  console.log("speed: the slow half arrived with the fast one — on this token the split bought nothing");
+  console.log(`::warning title=speed on ${chain}::the slow half arrived with the fast one — on this token the split bought nothing and costs a duplicate read`);
 }
