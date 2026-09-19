@@ -4070,7 +4070,8 @@
     const v4 = options.v4PoolManager && options.v4FromBlock !== void 0 ? readV4Pools(rpc, token, dex.weth, options.v4PoolManager, { fromBlock: Math.max(0, options.v4FromBlock), toBlock: block }).catch(() => []) : Promise.resolve([]);
     if (!calls.length) {
       const only = await v4;
-      const extra = options.candidates?.length ? await discoverPools(rpc, token, dex.weth, options.candidates, block, new Set(only.map((p) => p.address))).catch(() => []) : [];
+      const candidates2 = await resolveCandidates(options.candidates);
+      const extra = candidates2.length ? await discoverPools(rpc, token, dex.weth, candidates2, block, new Set(only.map((p) => p.address))).catch(() => []) : [];
       return [...only, ...extra].sort(byDepth);
     }
     const raws = await rpc.callBatch(calls, block);
@@ -4088,12 +4089,21 @@
     const v4Pools = await v4;
     if (found.length) await hydrate(rpc, token, dex.weth, found, block);
     const all = [...found, ...v4Pools];
-    if (options.candidates?.length) {
+    const candidates = await resolveCandidates(options.candidates);
+    if (candidates.length) {
       const known = new Set(all.map((p) => p.address));
-      const extra = await discoverPools(rpc, token, dex.weth, options.candidates, block, known).catch(() => []);
+      const extra = await discoverPools(rpc, token, dex.weth, candidates, block, known).catch(() => []);
       all.push(...extra);
     }
     return all.sort(byDepth);
+  }
+  async function resolveCandidates(candidates) {
+    if (!candidates) return [];
+    try {
+      return await candidates;
+    } catch {
+      return [];
+    }
   }
   async function hydrate(rpc, token, quote, pools, block) {
     const calls = [];
@@ -4614,18 +4624,17 @@
     let liquidity = null;
     if (options.dex) {
       try {
-        const listed = await holderList;
         pools = await readPools(rpc, address, options.dex, block, meta?.decimals ?? 18, {
           v4PoolManager: options.v4PoolManager,
           v4FromBlock: options.liquidityFromBlock,
-          // Contracts only: a wallet is not a pool, and asking one costs two
-          // calls for a certain revert. The explorer's name for the contract is
-          // passed along because it is the only thing that can name the venue.
-          // The twenty largest contract holders, no more. The list is
-          // largest-first and a pool is a large holder by definition, so the
-          // tail is two calls each against a rate-limited endpoint for
-          // candidates that are not pools.
-          candidates: (listed ?? []).filter((h) => h.isContract && !h.delegated).slice(0, 20).map((h) => ({ address: h.address, name: h.name }))
+          // The promise, not its value. Awaiting it here would put an explorer
+          // round trip in front of every factory read that could have been
+          // running meanwhile; readPools needs it only at the end.
+          //
+          // Contracts only, and only the twenty largest: a wallet is not a pool,
+          // the list is largest-first, and a pool is a large holder by
+          // definition, so the tail is two calls each for a certain revert.
+          candidates: holderList.then((listed) => (listed ?? []).filter((h) => h.isContract && !h.delegated).slice(0, 20).map((h) => ({ address: h.address, name: h.name })))
         });
         const position = options.position ?? (supply !== null && supply > 0n ? supply / 100n : 0n);
         if (position > 0n) market = readMarket(pools, position, meta?.decimals ?? 18, options.dex.wethSymbol);
@@ -4641,7 +4650,13 @@
           });
           const bs2 = options.blockscout;
           if (bs2) {
-            liquidity = await nameHolders(liquidity, async (address2) => (await bs2.addressInfo(address2)).name);
+            const byAddress = new Map((await holderList.catch(() => null) ?? []).filter((h) => h.name).map((h) => [h.address.toLowerCase(), h.name]));
+            const named = nameHolders(liquidity, async (address2) => {
+              const known = byAddress.get(address2.toLowerCase());
+              if (known) return known;
+              return (await bs2.addressInfo(address2)).name;
+            }, 4);
+            liquidity = await Promise.race([named, new Promise((resolve) => setTimeout(() => resolve(liquidity), 4e3))]);
           }
           const total = (pools ?? []).reduce((a, p) => a + (depth(p) > 0n ? depth(p) : 0n), 0n);
           const mine = depth(deepest) > 0n ? depth(deepest) : 0n;
@@ -5052,7 +5067,7 @@
         slip.open = await readOpenDoor(rpc, id.token, id.meta, head.number, {
           blockscout: options.blockscout ?? null,
           dex: chain2.dex,
-          lockers: chain2.lockers,
+          lockers: await resolveLockers(rpc, chain2, factory, id.v1?.factory, head.number),
           liquidity: options.skipLiquidity !== true,
           // A day, not a week. This is read before a trade, and the measured
           // cost of a week on Base was the better part of a minute for a section
@@ -5289,6 +5304,33 @@
     } catch {
       return void 0;
     }
+  }
+  async function resolveLockers(rpc, chain2, factory, v1Factory, block) {
+    const family = chain2.launchpad ? chain2.launchpad.replace(/ V\d+$/, "") : "launchpad";
+    const factories = [
+      { address: factory, name: `the ${chain2.launchpad ?? "launchpad"} locker` },
+      // The V1 factory that registered THIS token where the identify step found
+      // one, because a chain can have had more than one, and a locker read off
+      // the wrong factory is exactly the kind of near-miss this file exists to
+      // avoid. The configured address is the fallback.
+      { address: v1Factory ?? chain2.factoryV1, name: `the ${family} V1 locker` }
+    ].filter((f) => Boolean(f.address));
+    if (!factories.length) return chain2.lockers;
+    const table = { ...chain2.lockers ?? {} };
+    try {
+      const raws = await rpc.callBatchSettled(factories.map((f) => ({ to: f.address, data: encodeCall(V1_FACTORY_FUNCTIONS.locker, []) })), block);
+      raws.forEach((raw, i) => {
+        if (raw instanceof Error) return;
+        try {
+          const address = decodeOutputs(V1_FACTORY_FUNCTIONS.locker, raw)[0].toLowerCase();
+          if (address && address !== ZERO_ADDRESS) table[address] = factories[i].name;
+        } catch {
+        }
+      });
+    } catch {
+      return chain2.lockers;
+    }
+    return Object.keys(table).length ? table : chain2.lockers;
   }
   function openDoorFactNotes(slip, o) {
     const notes = [];

@@ -251,18 +251,17 @@ export async function readOpenDoor(rpc: RpcClient, token: ContractId, meta: Toke
   let liquidity: PoolLock | null = null;
   if (options.dex) {
     try {
-      const listed = await holderList;
       pools = await readPools(rpc, address, options.dex, block, meta?.decimals ?? 18, {
         v4PoolManager: options.v4PoolManager,
         v4FromBlock: options.liquidityFromBlock,
-        // Contracts only: a wallet is not a pool, and asking one costs two
-        // calls for a certain revert. The explorer's name for the contract is
-        // passed along because it is the only thing that can name the venue.
-        // The twenty largest contract holders, no more. The list is
-        // largest-first and a pool is a large holder by definition, so the
-        // tail is two calls each against a rate-limited endpoint for
-        // candidates that are not pools.
-        candidates: (listed ?? []).filter((h) => h.isContract && !h.delegated).slice(0, 20).map((h) => ({ address: h.address, name: h.name })),
+        // The promise, not its value. Awaiting it here would put an explorer
+        // round trip in front of every factory read that could have been
+        // running meanwhile; readPools needs it only at the end.
+        //
+        // Contracts only, and only the twenty largest: a wallet is not a pool,
+        // the list is largest-first, and a pool is a large holder by
+        // definition, so the tail is two calls each for a certain revert.
+        candidates: holderList.then((listed) => (listed ?? []).filter((h) => h.isContract && !h.delegated).slice(0, 20).map((h) => ({ address: h.address, name: h.name }))),
       });
       const position = options.position ?? (supply !== null && supply > 0n ? supply / 100n : 0n);
       if (position > 0n) market = readMarket(pools, position, meta?.decimals ?? 18, options.dex.wethSymbol);
@@ -292,7 +291,19 @@ export async function readOpenDoor(rpc: RpcClient, token: ContractId, meta: Toke
         // checked — and it stays a name, not a verdict.
         const bs = options.blockscout;
         if (bs) {
-          liquidity = await nameHolders(liquidity, async (address) => (await bs.addressInfo(address)).name);
+          // The holder list is already in hand and already carries the
+          // explorer's names, so most lookups here are free. Only an address
+          // the list does not mention — an NFT owner on a V3 pool, say —
+          // costs a request, and those are capped and raced against a
+          // deadline: a name is a nicety, and a throttled explorer must not
+          // be able to hold up the section it is decorating.
+          const byAddress = new Map((await holderList.catch(() => null) ?? []).filter((h) => h.name).map((h) => [h.address.toLowerCase(), h.name as string]));
+          const named = nameHolders(liquidity, async (address) => {
+            const known = byAddress.get(address.toLowerCase());
+            if (known) return known;
+            return (await bs.addressInfo(address)).name;
+          }, 4);
+          liquidity = await Promise.race([named, new Promise<PoolLock>((resolve) => setTimeout(() => resolve(liquidity as PoolLock), 4_000))]);
         }
         // How much of the market this pool actually is. Depth, not count: a
         // reader needs to know whether "all of it can be withdrawn" is about
