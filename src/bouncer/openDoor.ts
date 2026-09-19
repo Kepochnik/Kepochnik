@@ -306,6 +306,7 @@ export async function readOpenDoor(rpc: RpcClient, token: ContractId, meta: Toke
                   pool: deepest.address,
                   dex: deepest.dex,
                   kind: deepest.kind,
+                  read: false,
                   burnedBps: 0,
                   lockedBps: 0,
                   freeBps: 0,

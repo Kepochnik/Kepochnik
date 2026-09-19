@@ -854,10 +854,15 @@ export function doorReceipt(slip: DoorSlip): Receipt {
             ? [
                 {
                   label: o.liquidity.partial ? `liquidity (${o.liquidity.positionsRead} of ${o.liquidity.positionsFound} positions)` : "liquidity held by",
-                  value:
-                    o.liquidity.holders.length === 0
-                      ? o.liquidity.unread || "not read"
-                      : `${(o.liquidity.burnedBps / 100).toFixed(1)}% burned · ${(o.liquidity.lockedBps / 100).toFixed(1)}% locked · ${(o.liquidity.freeBps / 100).toFixed(1)}% withdrawable`,
+                  // The flag, not the holder count. An unlocked V2 pool has
+                  // no holders to list — the read asks the burn addresses and
+                  // the lockers, and everything else is the remainder — so
+                  // counting holders hid a real 100%-withdrawable reading
+                  // behind "not read", and showed a read that never happened
+                  // as three zeroes.
+                  value: !o.liquidity.read
+                    ? o.liquidity.unread || "not read"
+                    : `${(o.liquidity.burnedBps / 100).toFixed(1)}% burned · ${(o.liquidity.lockedBps / 100).toFixed(1)}% locked · ${(o.liquidity.freeBps / 100).toFixed(1)}% withdrawable`,
                   note: o.liquidity.unread || undefined,
                 },
                 ...o.liquidity.holders.slice(0, 5).map((h) => ({

@@ -24,6 +24,7 @@ function lock(holders: LiquidityHolder[], over = 10_000): PoolLock {
     pool: POOL,
     dex: "PancakeSwap V2",
     kind: "v2",
+    read: true,
     burnedBps: 0,
     lockedBps: 0,
     freeBps: 10_000,
@@ -128,4 +129,30 @@ test("a pool holding a sliver of the market is information whatever its shape", 
   assert.ok(n);
   assert.equal(n.level, "info");
   assert.match(n.text, /0\.5% of this token's liquidity/);
+});
+
+test("a read that did not happen is never shown as three zeroes", async () => {
+  // A live BNB run printed "0% burned, 0% locked, 0% withdrawable" for two of
+  // three tokens. Three zeroes add to zero, not a hundred, so they were
+  // plainly not a reading — but only to somebody checking the arithmetic. The
+  // receipt now asks the flag.
+  const { doorReceipt } = await import("../src/bouncer/door.js");
+  const unread: PoolLock = { ...lock([]), read: false, freeBps: 0, unread: "the endpoint did not answer the liquidity history within 30 seconds" };
+  const rows = doorReceipt(slipWith(unread)).sections.flatMap((s) => s.rows);
+  const row = rows.find((r) => String(r.label).startsWith("liquidity"));
+  assert.ok(row);
+  assert.match(String(row.value), /did not answer/);
+  assert.doesNotMatch(String(row.value), /0\.0% burned/, "zeroes from a read that never ran must not be printed as shares");
+});
+
+test("an unlocked pool with nothing to list still shows its shares", async () => {
+  // The mirror image, and the bug the flag also fixes. A V2 read asks the
+  // burn addresses and the lockers; a pool with neither has no holders to
+  // list, and counting holders hid a real 100%-withdrawable reading behind
+  // "not read".
+  const { doorReceipt } = await import("../src/bouncer/door.js");
+  const rows = doorReceipt(slipWith(lock([]))).sections.flatMap((s) => s.rows);
+  const row = rows.find((r) => String(r.label).startsWith("liquidity"));
+  assert.ok(row);
+  assert.match(String(row.value), /100\.0% withdrawable/);
 });

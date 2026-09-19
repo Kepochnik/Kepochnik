@@ -367,7 +367,7 @@ jobs:
                 const o = j.open;
                 if (o) {
                   console.log("  pools:", (o.pools||[]).map((p)=>p.kind+" "+p.dex).join(", ") || "none");
-                  if (o.liquidity) console.log("  liquidity:", o.liquidity.read === false ? "not read" : `${o.liquidity.burnedBps/100}% burned, ${o.liquidity.lockedBps/100}% locked, ${o.liquidity.freeBps/100}% withdrawable over ${o.liquidity.shareOfLiquidityBps/100}% of the market`);
+                  if (o.liquidity) console.log("  liquidity:", o.liquidity.read ? `${o.liquidity.burnedBps/100}% burned, ${o.liquidity.lockedBps/100}% locked, ${o.liquidity.freeBps/100}% withdrawable over ${o.liquidity.shareOfLiquidityBps/100}% of the market` : `NOT READ — ${o.liquidity.unread}`);
                 }
                 const mk = j.market;
                 if (mk) {
