@@ -5415,10 +5415,13 @@
           text: `Of the ${l.positionsRead} largest liquidity positions in the ${l.dex} pool (${l.positionsFound} were found), ${pct2(l.freeBps)} can be withdrawn${l.burnedBps ? `, ${pct2(l.burnedBps)} is burned` : ""}${l.lockedBps ? `, ${pct2(l.lockedBps)} is locked` : ""}. ${heldBy} The rest of the pool's positions were not read, so this is not a statement about the whole pool.`
         });
       } else if (l.burnedBps + l.lockedBps === 0 && l.freeBps > 0) {
+        const biggest = held.length ? Math.max(...held.map((h2) => h2.shareBps)) : 0;
+        const enumerated = held.length > 0;
+        const concentrated = enumerated && biggest >= 5e3;
         notes.push({
-          level: sliver ? "info" : "stop",
+          level: sliver ? "info" : concentrated || !enumerated ? "stop" : "watch",
           code: "liquidity-free",
-          text: `Every bit of the ${l.dex} pool's liquidity can be withdrawn: none of it is burned and none sits in a locker BOUNCER knows. ${heldBy} Whoever holds it can take the pool away, and then there is nothing to sell into.${size}`
+          text: enumerated ? concentrated ? `None of the ${l.dex} pool's liquidity is burned or in a locker BOUNCER knows, and one address holds ${pct2(biggest)} of it. ${heldBy} That one address can take most of the pool away on its own, and then there is nothing to sell into.${size}` : `None of the ${l.dex} pool's liquidity is burned or in a locker BOUNCER knows, so all of it can be withdrawn \u2014 but it is spread across ${held.length} holders and the largest has ${pct2(biggest)}, so no single one can empty the pool. ${heldBy} That is the ordinary shape of an unlocked pool, not by itself a trap.${size}` : `Every bit of the ${l.dex} pool's liquidity can be withdrawn: none of it is burned and none sits in a locker BOUNCER knows. Who holds the rest was not enumerated \u2014 this read asks the burn addresses and the lockers it knows, and everything else is the remainder \u2014 so whether that is one address or ten thousand is unknown, and one address would be enough.${size}`
         });
       } else if (l.freeBps >= 2e3) {
         notes.push({
