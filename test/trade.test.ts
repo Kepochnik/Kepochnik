@@ -5,7 +5,7 @@
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { PROVEN, REFERRAL, TRADE_SLUGS, tradeVenues } from "../src/bouncer/trade.js";
+import { PROVEN, REFERRAL, TRADE_SLUGS, missingVenues, tradeVenues } from "../src/bouncer/trade.js";
 
 const PONS = "0x39dbed3a2bd333467115de45665cc57f813c4571";
 
@@ -63,4 +63,15 @@ test("the table says which slugs were proven and which are recall", () => {
     assert.equal(PROVEN[chain], undefined, `${chain} has no proven slug and must not claim one`);
     assert.ok(tradeVenues(chain, PONS).length > 0, `${chain} still ships its recalled slug`);
   }
+});
+
+test("a venue with no link on this chain is named, not dropped", () => {
+  // Dropping it silently made BasedBot look broken everywhere but
+  // Robinhood. A venue the tool cannot link to is the same kind of fact as
+  // a read that did not answer, and this tool states those.
+  assert.deepEqual(missingVenues("robinhood"), []);
+  for (const chain of ["base", "bnb", "solana"]) {
+    assert.deepEqual(missingVenues(chain), ["BasedBot"], `${chain} should say BasedBot is missing`);
+  }
+  assert.deepEqual(missingVenues("a-chain-with-no-venues"), [], "a chain with no venues at all has nothing to explain");
 });

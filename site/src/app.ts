@@ -9,7 +9,7 @@
  */
 import { BlockscoutClient } from "../../src/chain/blockscout.js";
 import { TOPIC_BLURB, TOPIC_ORDER, TOPIC_QUESTION, topicOf } from "../../src/bouncer/topics.js";
-import { tradeVenues } from "../../src/bouncer/trade.js";
+import { missingVenues, tradeVenues } from "../../src/bouncer/trade.js";
 import { CHAINS, chainByKey, type ChainConfig } from "../../src/chain/chains.js";
 import { PHASE_LABEL } from "../../src/chain/pons.js";
 import { PonsReader } from "../../src/chain/reader.js";
@@ -581,11 +581,13 @@ function unreadStrip(notes: DoorNote[], skipped: { section: string; reason: stri
 /**
  * Where to buy it, if the slip has not put you off.
  *
- * These are referral links and they say so. The tool's only asset is that
- * it does not sell you anything, so: below the verdict and below the
- * answers, never beside them; the same quiet treatment whatever the
- * verdict says, because a buy button that gets louder on a CLEAR is an
- * opinion; and nothing reorders for a venue.
+ * Below the verdict and below the answers, never beside them, and the same
+ * quiet treatment whatever the verdict says: a buy button that gets louder
+ * on a CLEAR is an opinion, and this tool does not have opinions.
+ *
+ * A venue with no link for this chain is named rather than dropped. Leaving
+ * it out silently made BasedBot look broken on every chain but Robinhood,
+ * when the truth was that nobody had a working URL for it there.
  */
 function buyStrip(chainKey: string, address: string): string {
   const venues = tradeVenues(chainKey, address);
@@ -600,13 +602,15 @@ function buyStrip(chainKey: string, address: string): string {
         </a>`,
     )
     .join("");
+  const missing = missingVenues(chainKey);
+  const gap = missing.length
+    ? `<p class="buy-gap">${esc(missing.join(" and "))} ${missing.length === 1 ? "is" : "are"} not linked on this chain: BOUNCER has no confirmed address for ${missing.length === 1 ? "it" : "them"} here, and a guessed link is a dead one.</p>`
+    : "";
   return `<section class="buy">
-    <div class="buy-head">
-      <h2>Buy it</h2>
-      <span class="buy-tag">referral links</span>
-    </div>
-    <p class="qblurb">BOUNCER cannot trade and holds no key. These open the token on someone else's venue, and they carry this project's referral code — which is how it is paid for. Read the slip above first; nothing here changes what it says.</p>
+    <div class="buy-head"><h2>Buy it</h2></div>
+    <p class="qblurb">BOUNCER cannot trade and holds no key. These open the token on someone else's venue. Read the slip above first; nothing here changes what it says.</p>
     <div class="buy-links">${links}</div>
+    ${gap}
   </section>`;
 }
 
