@@ -109,6 +109,12 @@ jobs:
                 for (const r of rpc.stats()) console.log(`  ${r.method}: ${r.calls} calls, ${r.ms} ms total, ${r.failures} failed`);
               });
           ' "$ADDR" "$CHAIN"
+      - name: What is still slow in the half that is supposed to be fast
+        if: inputs.chain != 'solana' && inputs.address != ''
+        env:
+          ADDR: ${{ inputs.address }}
+          CHAIN: ${{ inputs.chain }}
+        run: node scripts/fast-profile.mjs "$CHAIN" "$ADDR"
       - name: Which Solana endpoints serve the heavy reads
         if: inputs.chain == 'solana'
         run: |
