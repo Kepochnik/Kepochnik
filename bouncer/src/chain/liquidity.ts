@@ -96,6 +96,19 @@ export interface PoolLock {
   dex: string;
   kind: MarketPool["kind"];
   /**
+   * True when the shares below were actually worked out. False means they are
+   * zeroes because nothing was read — a refused endpoint, a budget spent, a
+   * pool shape with no LP token — and they are not a finding.
+   *
+   * This exists because a live BNB run printed "0% burned, 0% locked, 0%
+   * withdrawable" for two of three tokens. Three zeroes add to zero, not to a
+   * hundred, so the numbers were plainly not a reading — but only to somebody
+   * who checked the arithmetic. The Solana lock has carried this flag from
+   * the start; the EVM one signalled the same thing through a string that
+   * nothing rendering the numbers had to look at.
+   */
+  read: boolean;
+  /**
    * The shares below are of what this read actually accounted for, which for a
    * V2 pool is the whole LP supply and for a V3 pool is the positions it
    * resolved. When `partial` is true they are NOT a statement about the pool.
@@ -148,7 +161,7 @@ const bps = (part: bigint, whole: bigint): number => (whole > 0n ? Number((part 
  * explorer and no log scan; what is left over is held by somebody.
  */
 export async function readV2Lock(rpc: RpcClient, pool: MarketPool, lockers: LockerTable | undefined, block: number): Promise<PoolLock> {
-  const base: PoolLock = { pool: pool.address, dex: pool.dex, kind: pool.kind, burnedBps: 0, lockedBps: 0, freeBps: 0, partial: false, positionsFound: 0, positionsRead: 0, holders: [], shareOfLiquidityBps: 10_000, unread: "" };
+  const base: PoolLock = { pool: pool.address, dex: pool.dex, kind: pool.kind, read: false, burnedBps: 0, lockedBps: 0, freeBps: 0, partial: false, positionsFound: 0, positionsRead: 0, holders: [], shareOfLiquidityBps: 10_000, unread: "" };
   const lockerAddresses = Object.keys(lockers ?? {});
   const asked = [ZERO, DEAD, ...lockerAddresses];
   const calls = [
@@ -193,6 +206,7 @@ export async function readV2Lock(rpc: RpcClient, pool: MarketPool, lockers: Lock
   const freeBps = Math.max(0, 10_000 - burnedBps - lockedBps);
   return {
     ...base,
+    read: true,
     burnedBps,
     lockedBps,
     freeBps,
@@ -257,7 +271,7 @@ export async function readV3Lock(
   block: number,
   options: V3LockOptions,
 ): Promise<PoolLock> {
-  const base: PoolLock = { pool: pool.address, dex: pool.dex, kind: pool.kind, burnedBps: 0, lockedBps: 0, freeBps: 0, partial: false, positionsFound: 0, positionsRead: 0, holders: [], shareOfLiquidityBps: 10_000, unread: "" };
+  const base: PoolLock = { pool: pool.address, dex: pool.dex, kind: pool.kind, read: false, burnedBps: 0, lockedBps: 0, freeBps: 0, partial: false, positionsFound: 0, positionsRead: 0, holders: [], shareOfLiquidityBps: 10_000, unread: "" };
   // Twelve was too few: a live pool can carry a hundred positions, and the one
   // that matters — the locked launch position — is rarely among the newest.
   const maxPositions = options.maxPositions ?? 60;
@@ -400,7 +414,7 @@ export async function readV3Lock(
   const unresolved = holders.filter((h) => manager && h.address === manager);
   if (unresolved.length) notes.push("some positions could not be traced to an NFT holder and are counted as withdrawable");
 
-  return { ...base, burnedBps, lockedBps, freeBps, partial: partial || !windowComplete, holders: holders.sort((a, b) => b.shareBps - a.shareBps), unread: notes.join("; ") };
+  return { ...base, read: true, burnedBps, lockedBps, freeBps, partial: partial || !windowComplete, holders: holders.sort((a, b) => b.shareBps - a.shareBps), unread: notes.join("; ") };
 }
 
 /** Whichever read this pool's shape calls for. */
@@ -417,12 +431,12 @@ export async function readPoolLock(
     // A V4 pool is a row inside a singleton. It has no LP token, and its
     // positions belong to whatever the hook or the position manager decides,
     // which is not one shape to read.
-    return { pool: pool.address, dex: pool.dex, kind: pool.kind, burnedBps: 0, lockedBps: 0, freeBps: 0, partial: false, positionsFound: 0, positionsRead: 0, holders: [], shareOfLiquidityBps: 10_000, unread: "a Uniswap V4 pool holds no LP token of its own, so who can withdraw its liquidity is not read here" };
+    return { pool: pool.address, dex: pool.dex, kind: pool.kind, read: false, burnedBps: 0, lockedBps: 0, freeBps: 0, partial: false, positionsFound: 0, positionsRead: 0, holders: [], shareOfLiquidityBps: 10_000, unread: "a Uniswap V4 pool holds no LP token of its own, so who can withdraw its liquidity is not read here" };
   }
   if (pool.kind === "unknown") {
     // Found by discovery and it answered none of the shape probes. Reading it
     // as a V2 pool would be the same guess this file exists to refuse.
-    return { pool: pool.address, dex: pool.dex, kind: pool.kind, burnedBps: 0, lockedBps: 0, freeBps: 0, partial: false, positionsFound: 0, positionsRead: 0, holders: [], shareOfLiquidityBps: 10_000, unread: "this venue was found by checking which contracts hold the token, and it is not a pool shape BOUNCER knows how to read liquidity ownership from" };
+    return { pool: pool.address, dex: pool.dex, kind: pool.kind, read: false, burnedBps: 0, lockedBps: 0, freeBps: 0, partial: false, positionsFound: 0, positionsRead: 0, holders: [], shareOfLiquidityBps: 10_000, unread: "this venue was found by checking which contracts hold the token, and it is not a pool shape BOUNCER knows how to read liquidity ownership from" };
   }
   return readV2Lock(rpc, pool, lockers, block);
 }

@@ -4284,7 +4284,7 @@
   }
   var bps2 = (part, whole) => whole > 0n ? Number(part * 10000n / whole) : 0;
   async function readV2Lock(rpc, pool, lockers, block) {
-    const base = { pool: pool.address, dex: pool.dex, kind: pool.kind, burnedBps: 0, lockedBps: 0, freeBps: 0, partial: false, positionsFound: 0, positionsRead: 0, holders: [], shareOfLiquidityBps: 1e4, unread: "" };
+    const base = { pool: pool.address, dex: pool.dex, kind: pool.kind, read: false, burnedBps: 0, lockedBps: 0, freeBps: 0, partial: false, positionsFound: 0, positionsRead: 0, holders: [], shareOfLiquidityBps: 1e4, unread: "" };
     const lockerAddresses = Object.keys(lockers ?? {});
     const asked = [ZERO2, DEAD, ...lockerAddresses];
     const calls = [
@@ -4327,6 +4327,7 @@
     const freeBps = Math.max(0, 1e4 - burnedBps - lockedBps);
     return {
       ...base,
+      read: true,
       burnedBps,
       lockedBps,
       freeBps,
@@ -4351,7 +4352,7 @@
     return lock;
   }
   async function readV3Lock(rpc, pool, lockers, positionManager, block, options) {
-    const base = { pool: pool.address, dex: pool.dex, kind: pool.kind, burnedBps: 0, lockedBps: 0, freeBps: 0, partial: false, positionsFound: 0, positionsRead: 0, holders: [], shareOfLiquidityBps: 1e4, unread: "" };
+    const base = { pool: pool.address, dex: pool.dex, kind: pool.kind, read: false, burnedBps: 0, lockedBps: 0, freeBps: 0, partial: false, positionsFound: 0, positionsRead: 0, holders: [], shareOfLiquidityBps: 1e4, unread: "" };
     const maxPositions = options.maxPositions ?? 60;
     let logs;
     let windowComplete = true;
@@ -4464,15 +4465,15 @@
     if (!manager) notes.push("this DEX's position manager is not in BOUNCER's table, so an NFT position is reported under the manager rather than its holder");
     const unresolved = holders.filter((h) => manager && h.address === manager);
     if (unresolved.length) notes.push("some positions could not be traced to an NFT holder and are counted as withdrawable");
-    return { ...base, burnedBps, lockedBps, freeBps, partial: partial || !windowComplete, holders: holders.sort((a, b) => b.shareBps - a.shareBps), unread: notes.join("; ") };
+    return { ...base, read: true, burnedBps, lockedBps, freeBps, partial: partial || !windowComplete, holders: holders.sort((a, b) => b.shareBps - a.shareBps), unread: notes.join("; ") };
   }
   async function readPoolLock(rpc, pool, lockers, positionManager, block, options) {
     if (pool.kind === "v3") return readV3Lock(rpc, pool, lockers, positionManager, block, options);
     if (pool.kind === "v4") {
-      return { pool: pool.address, dex: pool.dex, kind: pool.kind, burnedBps: 0, lockedBps: 0, freeBps: 0, partial: false, positionsFound: 0, positionsRead: 0, holders: [], shareOfLiquidityBps: 1e4, unread: "a Uniswap V4 pool holds no LP token of its own, so who can withdraw its liquidity is not read here" };
+      return { pool: pool.address, dex: pool.dex, kind: pool.kind, read: false, burnedBps: 0, lockedBps: 0, freeBps: 0, partial: false, positionsFound: 0, positionsRead: 0, holders: [], shareOfLiquidityBps: 1e4, unread: "a Uniswap V4 pool holds no LP token of its own, so who can withdraw its liquidity is not read here" };
     }
     if (pool.kind === "unknown") {
-      return { pool: pool.address, dex: pool.dex, kind: pool.kind, burnedBps: 0, lockedBps: 0, freeBps: 0, partial: false, positionsFound: 0, positionsRead: 0, holders: [], shareOfLiquidityBps: 1e4, unread: "this venue was found by checking which contracts hold the token, and it is not a pool shape BOUNCER knows how to read liquidity ownership from" };
+      return { pool: pool.address, dex: pool.dex, kind: pool.kind, read: false, burnedBps: 0, lockedBps: 0, freeBps: 0, partial: false, positionsFound: 0, positionsRead: 0, holders: [], shareOfLiquidityBps: 1e4, unread: "this venue was found by checking which contracts hold the token, and it is not a pool shape BOUNCER knows how to read liquidity ownership from" };
     }
     return readV2Lock(rpc, pool, lockers, block);
   }
@@ -4662,6 +4663,7 @@
                   pool: deepest.address,
                   dex: deepest.dex,
                   kind: deepest.kind,
+                  read: false,
                   burnedBps: 0,
                   lockedBps: 0,
                   freeBps: 0,
