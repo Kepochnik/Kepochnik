@@ -29,6 +29,7 @@
 import { base58Decode, base58Encode } from "./base58.js";
 import { findProgramAddress, type AccountInfo, type SolanaRpc } from "./solana.js";
 import { readDerivedPools, USDC, WSOL } from "./solanaDerived.js";
+import { readSolanaLock, type SolanaPoolLock } from "./solanaLiquidity.js";
 
 export { WSOL, USDC } from "./solanaDerived.js";
 export const PUMP_PROGRAM = "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P";
@@ -95,6 +96,13 @@ export interface SolanaMarket {
   spot: number | null;
   quoteSymbol: string;
   quotes: SolanaSaleQuote[];
+  /**
+   * Whether anyone can pull the liquidity out, for the venues where that is
+   * readable. Empty means no pool was found; an entry with `read: false`
+   * means the pool was found and its ownership was not readable, which is a
+   * different thing and must not be shown as "nothing is locked".
+   */
+  locks: SolanaPoolLock[];
   /** What the numbers above do and do not include, in one sentence. */
   note: string;
 }
@@ -264,7 +272,7 @@ const SHARES = [1_000, 2_500, 5_000, 10_000];
  * otherwise, and what selling a position would pay at each of four sizes.
  */
 export async function readSolanaMarket(rpc: SolanaRpc, mint: string, position: bigint, tokenDecimals: number, scan?: HolderScan): Promise<SolanaMarket> {
-  const empty: SolanaMarket = { curve: null, pools: [], best: null, spot: null, quoteSymbol: "SOL", quotes: [], note: "" };
+  const empty: SolanaMarket = { curve: null, pools: [], best: null, spot: null, quoteSymbol: "SOL", quotes: [], locks: [], note: "" };
 
   // The curve first: while it is live it IS the market, and it is one read.
   let curve: PumpCurve | null = null;
@@ -289,6 +297,7 @@ export async function readSolanaMarket(rpc: SolanaRpc, mint: string, position: b
       spot,
       quoteSymbol: "SOL",
       quotes,
+      locks: [],
       note: "Priced on the pump.fun bonding curve's own virtual reserves, with its 1% fee, and capped at the SOL the curve actually holds. It has not graduated, so there is no pool yet.",
     };
   }
@@ -340,6 +349,7 @@ export async function readSolanaMarket(rpc: SolanaRpc, mint: string, position: b
       curve,
       pools,
       quoteSymbol: pools[0].quoteSymbol,
+      locks: await readLocks(rpc, pools),
       note: `Found ${pools.length} pool${pools.length === 1 ? "" : "s"}, ${pools.every((p) => p.concentrated) ? "all of them concentrated" : "none of them priceable"}. A concentrated pool keeps its liquidity in ranges, so its vault balances are not what a trade moves through and pricing a sale from them would overstate it — the reserves are shown, the sale is not priced.`,
     };
   }
@@ -353,8 +363,32 @@ export async function readSolanaMarket(rpc: SolanaRpc, mint: string, position: b
     spot,
     quoteSymbol: best.quoteSymbol,
     quotes,
+    locks: await readLocks(rpc, pools),
     note: marketNote(pools, best, quotes),
   };
+}
+
+/**
+ * The liquidity lock for the venues worth reading: the deepest pool, plus the
+ * deepest one with an LP token when that is a different pool. Reading every
+ * pool would be a round trip each for an answer the reader does not use;
+ * reading only the deepest would hide a burned Raydium LP behind an Orca pool
+ * whose ownership cannot be read at all.
+ */
+async function readLocks(rpc: SolanaRpc, pools: SolanaPool[]): Promise<SolanaPoolLock[]> {
+  const wanted = [pools[0]];
+  const withLp = pools.find((p) => !p.concentrated);
+  if (withLp && withLp !== pools[0]) wanted.push(withLp);
+  const locks: SolanaPoolLock[] = [];
+  for (const pool of wanted) {
+    if (!pool) continue;
+    try {
+      locks.push(await readSolanaLock(rpc, pool));
+    } catch {
+      // A lock that did not answer must not cost the market read that did.
+    }
+  }
+  return locks;
 }
 
 /**

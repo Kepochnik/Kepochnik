@@ -1907,6 +1907,94 @@
     return pools.sort((a, b) => b.quoteReserve > a.quoteReserve ? 1 : b.quoteReserve < a.quoteReserve ? -1 : 0);
   }
 
+  // src/chain/solanaLiquidity.ts
+  var CPMM_LP_MINT = 136;
+  var CPMM_LP_DECIMALS = 330;
+  var CPMM_LP_SUPPLY = 333;
+  var ASSOCIATED_TOKEN_PROGRAM = "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL";
+  var BURN_OWNERS = {
+    "1nc1nerator11111111111111111111111111111111": "the incinerator",
+    "11111111111111111111111111111111": "the system address"
+  };
+  function u64At2(data, offset) {
+    if (data.length < offset + 8) return 0n;
+    let value = 0n;
+    for (let i = 7; i >= 0; i--) value = value << 8n | BigInt(data[offset + i] ?? 0);
+    return value;
+  }
+  function pubkeyAt2(data, offset) {
+    if (data.length < offset + 32) return null;
+    return base58Encode(data.slice(offset, offset + 32));
+  }
+  function associatedTokenAddress(owner, mint) {
+    try {
+      const pda = findProgramAddress([base58Decode(owner), base58Decode(TOKEN_PROGRAM), base58Decode(mint)], ASSOCIATED_TOKEN_PROGRAM);
+      return pda?.address ?? null;
+    } catch {
+      return null;
+    }
+  }
+  var bps = (part, whole) => whole === 0n ? 0 : Number(part * 10000n / whole);
+  async function readSolanaLock(rpc, pool, poolAccount) {
+    const base = { pool: pool.address, name: pool.name, read: false, burnedBps: 0, strandedBps: 0, freeBps: 0, lpMint: null, unread: "" };
+    if (pool.program !== CPMM_PROGRAM) {
+      return {
+        ...base,
+        unread: pool.concentrated ? `${pool.name} holds liquidity as NFT positions rather than LP tokens, and finding who owns them needs an account search no free endpoint answers, so whether it can be withdrawn was not read` : `${pool.name} is not a pool type BOUNCER can read liquidity ownership from`
+      };
+    }
+    const account = poolAccount ?? await rpc.accountInfo(pool.address);
+    if (!account) return { ...base, unread: "the pool account did not answer, so who holds its liquidity was not read" };
+    const lpMint = pubkeyAt2(account.data, CPMM_LP_MINT);
+    const issued = u64At2(account.data, CPMM_LP_SUPPLY);
+    if (!lpMint) return { ...base, unread: "the pool account was shorter than its layout, so the LP token was not found" };
+    if (issued === 0n) return { ...base, lpMint, unread: "the pool records no LP tokens issued, so there is no share to work out" };
+    const burnAccounts = Object.keys(BURN_OWNERS).map((owner) => ({ owner, address: associatedTokenAddress(owner, lpMint) }));
+    const wanted = [lpMint, ...burnAccounts.map((b) => b.address).filter((a) => a !== null)];
+    let accounts;
+    try {
+      accounts = await rpc.multipleAccounts(wanted);
+    } catch {
+      return { ...base, lpMint, unread: "the LP token did not answer, so who holds this pool's liquidity was not read" };
+    }
+    const mintAccount = accounts[0];
+    const mint = mintAccount ? parseMint(mintAccount) : null;
+    if (!mint) return { ...base, lpMint, unread: "the LP token account could not be read, so how much of it still exists is unknown" };
+    const alive = mint.supply;
+    if (account.data[CPMM_LP_DECIMALS] !== mint.decimals) {
+      return { ...base, lpMint, unread: "the pool's own record of its LP token disagrees with the LP token itself, so BOUNCER is not reading this pool's layout correctly and will not guess at it" };
+    }
+    if (alive > issued) {
+      return { ...base, lpMint, unread: "more of this pool's LP token exists than the pool records issuing, which means one of the two numbers is not what BOUNCER thinks it is" };
+    }
+    const burned = issued - alive;
+    let stranded = 0n;
+    const strandedAt = [];
+    burnAccounts.forEach((entry, i) => {
+      if (!entry.address) return;
+      const held = accounts[i + 1];
+      if (!held) return;
+      if (pubkeyAt2(held.data, 0) !== lpMint) return;
+      const amount = u64At2(held.data, 64);
+      if (amount === 0n) return;
+      stranded += amount;
+      strandedAt.push(BURN_OWNERS[entry.owner]);
+    });
+    const burnedBps = bps(burned, issued);
+    const strandedBps = bps(stranded, issued);
+    return {
+      ...base,
+      read: true,
+      lpMint,
+      burnedBps,
+      strandedBps,
+      freeBps: Math.max(0, 1e4 - burnedBps - strandedBps),
+      // Naming the wallets that hold the rest would need the account search the
+      // endpoints refuse. Not naming them does not make them harmless.
+      unread: strandedAt.length ? `${strandedAt.join(" and ")} hold${strandedAt.length === 1 ? "s" : ""} LP tokens that can never move` : ""
+    };
+  }
+
   // src/chain/solanaPools.ts
   var PUMP_PROGRAM = "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P";
   var POOL_PROGRAMS = {
@@ -2013,7 +2101,7 @@
   }
   var SHARES = [1e3, 2500, 5e3, 1e4];
   async function readSolanaMarket(rpc, mint, position, tokenDecimals, scan) {
-    const empty = { curve: null, pools: [], best: null, spot: null, quoteSymbol: "SOL", quotes: [], note: "" };
+    const empty = { curve: null, pools: [], best: null, spot: null, quoteSymbol: "SOL", quotes: [], locks: [], note: "" };
     let curve = null;
     const curveAddress = pumpCurveAddress(mint);
     if (curveAddress) {
@@ -2034,6 +2122,7 @@
         spot: spot2,
         quoteSymbol: "SOL",
         quotes: quotes2,
+        locks: [],
         note: "Priced on the pump.fun bonding curve's own virtual reserves, with its 1% fee, and capped at the SOL the curve actually holds. It has not graduated, so there is no pool yet."
       };
     }
@@ -2067,6 +2156,7 @@
         curve,
         pools,
         quoteSymbol: pools[0].quoteSymbol,
+        locks: await readLocks(rpc, pools),
         note: `Found ${pools.length} pool${pools.length === 1 ? "" : "s"}, ${pools.every((p) => p.concentrated) ? "all of them concentrated" : "none of them priceable"}. A concentrated pool keeps its liquidity in ranges, so its vault balances are not what a trade moves through and pricing a sale from them would overstate it \u2014 the reserves are shown, the sale is not priced.`
       };
     }
@@ -2080,8 +2170,23 @@
       spot,
       quoteSymbol: best.quoteSymbol,
       quotes,
+      locks: await readLocks(rpc, pools),
       note: marketNote(pools, best, quotes)
     };
+  }
+  async function readLocks(rpc, pools) {
+    const wanted = [pools[0]];
+    const withLp = pools.find((p) => !p.concentrated);
+    if (withLp && withLp !== pools[0]) wanted.push(withLp);
+    const locks = [];
+    for (const pool of wanted) {
+      if (!pool) continue;
+      try {
+        locks.push(await readSolanaLock(rpc, pool));
+      } catch {
+      }
+    }
+    return locks;
   }
   function marketNote(pools, best, quotes) {
     const concentrated = pools.filter((p) => p.concentrated);
@@ -2253,8 +2358,8 @@
   function short(address) {
     return address.length > 12 ? `${address.slice(0, 4)}\u2026${address.slice(-4)}` : address;
   }
-  function pct(bps2) {
-    return bps2 === null ? "an unknown share" : `${(bps2 / 100).toFixed(1)}%`;
+  function pct(bps3) {
+    return bps3 === null ? "an unknown share" : `${(bps3 / 100).toFixed(1)}%`;
   }
   function splNotes(slip) {
     const notes = [];
@@ -2380,6 +2485,32 @@
         });
       }
       if (!mk.best) notes.push({ level: "watch", code: "no-venue", text: mk.note });
+      for (const lock of mk.locks) {
+        if (!lock.read) {
+          notes.push({ level: "watch", code: "sol-liquidity-unread", text: `${lock.unread}. Treat this pool's liquidity as withdrawable until you have checked it yourself.` });
+          continue;
+        }
+        const held = lock.burnedBps + lock.strandedBps;
+        if (held === 0) {
+          notes.push({
+            level: "stop",
+            code: "sol-liquidity-free",
+            text: `Every LP token of the ${lock.name} pool is still held by somebody: none of it was burned and none sits at an address with no key. Whoever holds it can withdraw the pool, and then there is nothing to sell into.`
+          });
+        } else if (lock.freeBps >= 2e3) {
+          notes.push({
+            level: "watch",
+            code: "sol-liquidity-partly-free",
+            text: `${pct(lock.freeBps)} of the ${lock.name} pool's LP tokens can still be withdrawn against (${pct(held)} is gone for good). Taking the rest out would thin the pool by that much.`
+          });
+        } else {
+          notes.push({
+            level: "info",
+            code: "sol-liquidity-held",
+            text: `${pct(held)} of the ${lock.name} pool's LP tokens are gone for good${lock.burnedBps ? ` (${pct(lock.burnedBps)} burned)` : ""}${lock.strandedBps ? ` (${pct(lock.strandedBps)} at an address with no key)` : ""}, so that share of the liquidity stays put. That is not a promise about the price.`
+          });
+        }
+      }
     }
     for (const s of slip.skipped) notes.push({ level: "info", code: "skipped", text: `${s.section} could not be read: ${s.reason}` });
     notes.push({
@@ -2405,9 +2536,9 @@
     const text = fractionText ? `${wholeText}.${fractionText}` : wholeText;
     return negative ? `-${text}` : text;
   }
-  function formatBps(bps2) {
-    const whole = bps2 / 100n;
-    const fraction = bps2 % 100n;
+  function formatBps(bps3) {
+    const whole = bps3 / 100n;
+    const fraction = bps3 % 100n;
     return fraction === 0n ? `${whole}%` : `${whole}.${fraction.toString().padStart(2, "0").replace(/0$/, "")}%`;
   }
   function formatPercent(numerator, denominator, digits = 1) {
@@ -3284,9 +3415,9 @@
       if (url.pathname === `/api/v2/tokens/${plain.token}/counters`) return json({ token_holders_count: "143", transfers_count: "2210" });
       if (url.pathname === `/api/v2/tokens/${plain.token}/holders`) {
         return json({
-          items: plain.holders.map(([hash, bps2, is_contract, name, delegated]) => ({
+          items: plain.holders.map(([hash, bps3, is_contract, name, delegated]) => ({
             address: { hash, is_contract, name, proxy_type: delegated ? "eip7702" : null },
-            value: (plain.supply * BigInt(bps2) / 10000n).toString()
+            value: (plain.supply * BigInt(bps3) / 10000n).toString()
           })),
           next_page_params: null
         });
@@ -4028,7 +4159,7 @@
     if (known) return { kind: "locked", name: known };
     return { kind: hasCode ? "contract" : "wallet" };
   }
-  var bps = (part, whole) => whole > 0n ? Number(part * 10000n / whole) : 0;
+  var bps2 = (part, whole) => whole > 0n ? Number(part * 10000n / whole) : 0;
   async function readV2Lock(rpc, pool, lockers, block) {
     const base = { pool: pool.address, dex: pool.dex, kind: pool.kind, burnedBps: 0, lockedBps: 0, freeBps: 0, partial: false, positionsFound: 0, positionsRead: 0, holders: [], unread: "" };
     const lockerAddresses = Object.keys(lockers ?? {});
@@ -4066,7 +4197,7 @@
       if (balance === 0n) return;
       accounted += balance;
       const { kind, name } = classify(address, lockers, true);
-      holders.push({ address, kind, name, shareBps: bps(balance, supply) });
+      holders.push({ address, kind, name, shareBps: bps2(balance, supply) });
     });
     const burnedBps = holders.filter((h) => h.kind === "burned").reduce((a, h) => a + h.shareBps, 0);
     const lockedBps = holders.filter((h) => h.kind === "locked").reduce((a, h) => a + h.shareBps, 0);
@@ -4199,7 +4330,7 @@
       const code = codes[i];
       const hasCode = code instanceof Error ? null : typeof code === "string" && code.length > 2;
       const { kind, name } = classify(address, lockers, hasCode);
-      return { address, kind, name, shareBps: bps(merged.get(address) ?? 0n, total) };
+      return { address, kind, name, shareBps: bps2(merged.get(address) ?? 0n, total) };
     });
     const burnedBps = holders.filter((h) => h.kind === "burned").reduce((a, h) => a + h.shareBps, 0);
     const lockedBps = holders.filter((h) => h.kind === "locked").reduce((a, h) => a + h.shareBps, 0);
@@ -4361,7 +4492,7 @@
       break;
     }
     const supply = meta?.totalSupply ?? null;
-    const bps2 = (v) => supply !== null && supply > 0n ? Number(v * 10000n / supply) : null;
+    const bps3 = (v) => supply !== null && supply > 0n ? Number(v * 10000n / supply) : null;
     let pools = null;
     let market = null;
     let liquidity = null;
@@ -4423,7 +4554,7 @@
             }
           }
           const balance = await readBalance(rpc, address, read.creator, block).catch(() => null);
-          deployer = { address: read.creator, creationTx: read.creationTx, createdAtBlock, createdAt, balance: balance ?? 0n, bps: balance === null ? null : bps2(balance) };
+          deployer = { address: read.creator, creationTx: read.creationTx, createdAtBlock, createdAt, balance: balance ?? 0n, bps: balance === null ? null : bps3(balance) };
         }
       } catch (error) {
         note(error);
@@ -4444,7 +4575,7 @@
         const top = list.map((h) => ({
           address: h.address,
           value: h.value,
-          bps: bps2(h.value),
+          bps: bps3(h.value),
           isContract: h.isContract && !h.delegated,
           delegated: h.delegated,
           name: h.name,
@@ -4476,7 +4607,7 @@
         activity = null;
       }
     }
-    const ownerBalance = owner && !owner.renounced ? await readBalance(rpc, address, owner.address, block).then((balance) => ({ balance, bps: bps2(balance) })).catch(() => null) : null;
+    const ownerBalance = owner && !owner.renounced ? await readBalance(rpc, address, owner.address, block).then((balance) => ({ balance, bps: bps3(balance) })).catch(() => null) : null;
     const probes = [];
     let probesSkipped = null;
     if (!has(TRANSFER_SIGNATURE)) {
@@ -5012,8 +5143,8 @@
     for (const s of slip.skipped) notes.push({ level: "info", code: "skipped", text: `${s.section} could not be read: ${s.reason}` });
     return notes;
   }
-  function pct2(bps2) {
-    return bps2 === null ? "an unknown share" : `${(bps2 / 100).toFixed(1)}%`;
+  function pct2(bps3) {
+    return bps3 === null ? "an unknown share" : `${(bps3 / 100).toFixed(1)}%`;
   }
   async function resolveV4Manager(rpc, chain2, factory, block) {
     const configured = chain2.dex?.v4PoolManager;
@@ -6222,8 +6353,8 @@
     const flat = text.replace(/[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u2028\u2029\u202a-\u202e\u2066-\u2069]/g, " ").replace(/\s+/g, " ").trim();
     return flat.length > max ? `${flat.slice(0, max - 1)}\u2026` : flat;
   }
-  function pctText(bps2) {
-    return bps2 === null ? "unknown" : `${(bps2 / 100).toFixed(1)}%`;
+  function pctText(bps3) {
+    return bps3 === null ? "unknown" : `${(bps3 / 100).toFixed(1)}%`;
   }
   function money2(value) {
     if (!Number.isFinite(value)) return "unreadable";

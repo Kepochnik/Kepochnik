@@ -400,6 +400,34 @@ export function splNotes(slip: SplSlip): DoorNote[] {
       });
     }
     if (!mk.best) notes.push({ level: "watch", code: "no-venue", text: mk.note });
+
+    // ---- can they pull the liquidity out from under you
+    for (const lock of mk.locks) {
+      if (!lock.read) {
+        notes.push({ level: "watch", code: "sol-liquidity-unread", text: `${lock.unread}. Treat this pool's liquidity as withdrawable until you have checked it yourself.` });
+        continue;
+      }
+      const held = lock.burnedBps + lock.strandedBps;
+      if (held === 0) {
+        notes.push({
+          level: "stop",
+          code: "sol-liquidity-free",
+          text: `Every LP token of the ${lock.name} pool is still held by somebody: none of it was burned and none sits at an address with no key. Whoever holds it can withdraw the pool, and then there is nothing to sell into.`,
+        });
+      } else if (lock.freeBps >= 2_000) {
+        notes.push({
+          level: "watch",
+          code: "sol-liquidity-partly-free",
+          text: `${pct(lock.freeBps)} of the ${lock.name} pool's LP tokens can still be withdrawn against (${pct(held)} is gone for good). Taking the rest out would thin the pool by that much.`,
+        });
+      } else {
+        notes.push({
+          level: "info",
+          code: "sol-liquidity-held",
+          text: `${pct(held)} of the ${lock.name} pool's LP tokens are gone for good${lock.burnedBps ? ` (${pct(lock.burnedBps)} burned)` : ""}${lock.strandedBps ? ` (${pct(lock.strandedBps)} at an address with no key)` : ""}, so that share of the liquidity stays put. That is not a promise about the price.`,
+        });
+      }
+    }
   }
 
   for (const s of slip.skipped) notes.push({ level: "info", code: "skipped", text: `${s.section} could not be read: ${s.reason}` });
@@ -466,6 +494,11 @@ export function splReceipt(slip: SplSlip): Receipt {
           label: `${p.name}${p.concentrated ? " (ranged)" : ""}`,
           value: `${amount(p.quoteReserve, p.quoteDecimals, 3)} ${p.quoteSymbol} · ${amount(p.tokenReserve, dec, 0)} tokens`,
           note: p.address,
+        })),
+        ...mk.locks.map((l) => ({
+          label: `${l.name} liquidity`,
+          value: l.read ? `${(l.burnedBps / 100).toFixed(1)}% burned · ${(l.strandedBps / 100).toFixed(1)}% at a keyless address · ${(l.freeBps / 100).toFixed(1)}% withdrawable` : "not read",
+          note: l.unread || undefined,
         })),
         ...(mk.spot !== null ? [{ label: "spot", value: `${mk.spot.toPrecision(6)} ${mk.quoteSymbol} per token` }] : []),
         ...mk.quotes.map((q) => ({
