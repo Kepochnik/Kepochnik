@@ -20,8 +20,11 @@ export interface TapeRequest {
 export interface TapeResult {
   logs: DecodedLog[];
   fromBlock: number;
+  /** The last block actually covered, which is short of the one asked for when a budget ran out. */
   toBlock: number;
   chunks: number;
+  /** False when a request budget stopped the walk before the whole window was read. */
+  complete?: boolean;
 }
 
 export async function readTape(rpc: RpcClient, request: TapeRequest): Promise<TapeResult> {
@@ -54,6 +57,15 @@ export interface AdaptiveChunking {
   startChunk?: number;
   minChunk?: number;
   maxChunk?: number;
+  /**
+   * Most requests this walk may spend. Without one the loop has no upper
+   * bound at all: a busy contract makes the endpoint refuse every wide chunk,
+   * the span halves to minChunk, and a window of three hundred thousand
+   * blocks becomes three hundred thousand requests. That is not a slow read,
+   * it is a read that never finishes, and on Base it turned a door that took
+   * seconds into one that took ten minutes and then gave up.
+   */
+  maxRequests?: number;
 }
 
 /**
@@ -73,12 +85,23 @@ export async function readTapeAdaptive(rpc: RpcClient, request: TapeRequest, chu
   const maxChunk = chunking.maxChunk ?? 200_000;
   let chunk = Math.min(maxChunk, Math.max(minChunk, chunking.startChunk ?? 50_000));
 
+  const maxRequests = chunking.maxRequests ?? Infinity;
   const logs: DecodedLog[] = [];
   let chunks = 0;
+  let requests = 0;
   let from = request.fromBlock;
+  let complete = true;
   while (from <= request.toBlock) {
+    if (requests >= maxRequests) {
+      // Out of budget with window left. Returning what was read, and saying so,
+      // beats both alternatives: carrying on for minutes, or throwing away
+      // logs that were paid for.
+      complete = false;
+      break;
+    }
     const to = Math.min(from + chunk - 1, request.toBlock);
     try {
+      requests++;
       const raw = await rpc.getLogs({ address: request.address, topics: filterTopics, fromBlock: from, toBlock: to });
       chunks++;
       for (const log of raw) logs.push(decodeRaw(byTopic, log));
@@ -90,7 +113,7 @@ export async function readTapeAdaptive(rpc: RpcClient, request: TapeRequest, chu
     }
   }
   logs.sort((a, b) => a.blockNumber - b.blockNumber || a.logIndex - b.logIndex);
-  return { logs, fromBlock: request.fromBlock, toBlock: request.toBlock, chunks };
+  return { logs, fromBlock: request.fromBlock, toBlock: complete ? request.toBlock : Math.max(request.fromBlock, from - 1), chunks, complete };
 }
 
 /** Pad a 20-byte address to a 32-byte topic for indexed-address filters. */
