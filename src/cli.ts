@@ -42,6 +42,7 @@ import { watchToken } from "./bouncer/tokenWatch.js";
 import { readSolanaMarket } from "./chain/solanaPools.js";
 import { watchLaunch } from "./bouncer/watch.js";
 import { formatBps, formatDuration, formatUnits, isoUtc, shortAddress } from "./format.js";
+import { probeEndpoint, probeInWords, whatItCosts } from "./chain/solanaProbe.js";
 
 export const REPO = "github.com/Kepochnik/bouncer";
 export const MARK = "$BOUNCER";
@@ -635,12 +636,29 @@ async function runSolana(
   emit: (text: string) => void,
   write: (text: string) => void,
 ): Promise<number> {
-  const urls = [flagString(args.flags, "rpc") ?? process.env.SOLANA_RPC_URL ?? chain.rpc[0], ...chain.rpc.slice(1)];
+  const urls = [flagString(args.flags, "rpc") ?? rpcOverride(chain) ?? chain.rpc[0], ...chain.rpc.slice(1)];
   const rpc = new SolanaRpc({ urls });
 
   if (command === "doctor") {
     const slot = await rpc.slot();
     const timestamp = await rpc.blockTime(slot);
+    // Which reads this endpoint actually serves. Public Solana endpoints
+    // differ, and the difference decides whether whole sections of a slip
+    // exist — so when a section is missing, this is the page that says why,
+    // and whether pointing BOUNCER somewhere else would fix it.
+    const probes = await probeEndpoint(urls[0]).catch(() => []);
+    const verdicts = probes.length
+      ? [
+          {
+            title: "WHAT THIS ENDPOINT SERVES",
+            rows: probes.map((p) => ({
+              label: p.method,
+              value: p.verdict === "served" ? `served in ${p.ms} ms` : `${p.verdict}${p.detail ? ` — ${p.detail}` : ""}`,
+              note: p.verdict === "served" ? undefined : whatItCosts(p.method),
+            })),
+          },
+        ]
+      : [];
     emit(
       renderReceipt(
         {
@@ -656,10 +674,14 @@ async function runSolana(
                 { label: "token programs", value: "SPL Token and Token-2022" },
               ],
             },
+            ...verdicts,
             { title: "BOUNDARIES", rows: [{ label: "keys", value: "none" }, { label: "signing", value: "none" }, { label: "transactions", value: "none" }] },
           ],
-          footnotes: ["Every value above was read from the chain at the moment shown; nothing is cached or inferred."],
-          meta: { slot },
+          footnotes: [
+            "Every value above was read from the chain at the moment shown; nothing is cached or inferred.",
+            ...(probes.length ? [probeInWords(probes), `Point BOUNCER at your own endpoint with RPC_URL_SOLANA=<url>, or --rpc <url> for one command.`] : []),
+          ],
+          meta: { slot, endpoint: urls[0], serves: probes.filter((p) => p.verdict === "served").map((p) => p.method).join(", ") },
         },
         asReceiptFormat(format),
       ),
@@ -731,8 +753,23 @@ async function runSolana(
   return 1;
 }
 
+/**
+ * The endpoint the user pointed us at, if any.
+ *
+ * `RPC_URL_<CHAIN>` is the one the slips tell people to set when a public
+ * endpoint throttles them, and until now only the MCP server read it — the
+ * CLI read `RPC_URL` and `SOLANA_RPC_URL`, so the advice printed on the slip
+ * did nothing for the tool that printed it. All three work; the per-chain one
+ * wins, because somebody who set both meant the specific one.
+ */
+export function rpcOverride(chain: ChainConfig): string | undefined {
+  const perChain = process.env[`RPC_URL_${chain.key.toUpperCase().replace(/-/g, "_")}`];
+  const legacy = chain.family === "solana" ? process.env.SOLANA_RPC_URL : undefined;
+  return perChain?.trim() || legacy?.trim() || process.env.RPC_URL?.trim() || undefined;
+}
+
 function liveRpc(chain: ChainConfig, override?: string): RpcClient {
-  const primary = override ?? process.env.RPC_URL ?? chain.rpc[0];
+  const primary = override ?? rpcOverride(chain) ?? chain.rpc[0];
   const fallbacks = [...(process.env.RPC_FALLBACK_URLS ?? "").split(",").map((u) => u.trim()).filter(Boolean), ...(override ? [] : chain.rpc.slice(1))];
   return new RpcClient({ urls: [primary, ...fallbacks], expectedChainId: chain.chainId });
 }

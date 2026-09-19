@@ -1936,7 +1936,7 @@
   }
   var bps = (part, whole) => whole === 0n ? 0 : Number(part * 10000n / whole);
   async function readSolanaLock(rpc, pool, poolAccount) {
-    const base = { pool: pool.address, name: pool.name, read: false, burnedBps: 0, strandedBps: 0, freeBps: 0, lpMint: null, unread: "" };
+    const base = { pool: pool.address, name: pool.name, read: false, burnedBps: 0, strandedBps: 0, freeBps: 0, lpMint: null, shareOfLiquidityBps: 1e4, unread: "" };
     if (pool.program !== CPMM_PROGRAM) {
       return {
         ...base,
@@ -2178,11 +2178,15 @@
     const wanted = [pools[0]];
     const withLp = pools.find((p) => !p.concentrated);
     if (withLp && withLp !== pools[0]) wanted.push(withLp);
+    const totalFor = (quoteMint) => pools.filter((p) => p.quoteMint === quoteMint).reduce((a, p) => a + p.quoteReserve, 0n);
     const locks = [];
     for (const pool of wanted) {
       if (!pool) continue;
       try {
-        locks.push(await readSolanaLock(rpc, pool));
+        const lock = await readSolanaLock(rpc, pool);
+        const total = totalFor(pool.quoteMint);
+        lock.shareOfLiquidityBps = total > 0n ? Number(pool.quoteReserve * 10000n / total) : 1e4;
+        locks.push(lock);
       } catch {
       }
     }
@@ -2491,17 +2495,19 @@
           continue;
         }
         const held = lock.burnedBps + lock.strandedBps;
+        const sliver = lock.shareOfLiquidityBps < 1e3;
+        const size = sliver ? ` That pool holds ${pct(lock.shareOfLiquidityBps)} of this token's readable liquidity, so it is not where a sale of any size would go.` : "";
         if (held === 0) {
           notes.push({
-            level: "stop",
+            level: sliver ? "info" : "stop",
             code: "sol-liquidity-free",
-            text: `Every LP token of the ${lock.name} pool is still held by somebody: none of it was burned and none sits at an address with no key. Whoever holds it can withdraw the pool, and then there is nothing to sell into.`
+            text: `Every LP token of the ${lock.name} pool is still held by somebody: none of it was burned and none sits at an address with no key. Whoever holds it can withdraw the pool, and then there is nothing to sell into.${size}`
           });
         } else if (lock.freeBps >= 2e3) {
           notes.push({
-            level: "watch",
+            level: sliver ? "info" : "watch",
             code: "sol-liquidity-partly-free",
-            text: `${pct(lock.freeBps)} of the ${lock.name} pool's LP tokens can still be withdrawn against (${pct(held)} is gone for good). Taking the rest out would thin the pool by that much.`
+            text: `${pct(lock.freeBps)} of the ${lock.name} pool's LP tokens can still be withdrawn against (${pct(held)} is gone for good). Taking the rest out would thin the pool by that much.${size}`
           });
         } else {
           notes.push({

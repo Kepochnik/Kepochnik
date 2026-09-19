@@ -52,7 +52,10 @@ jobs:
 
           FAMILY=$(node -e 'const{CHAINS}=require("./dist/src/chain/chains.js");console.log((CHAINS[process.argv[1]]||{}).family||"evm")' "$CHAIN")
           if [ "$FAMILY" = "solana" ]; then
-            run "doctor" $B doctor --chain "$CHAIN"
+            # doctor now probes the endpoint for every read BOUNCER makes, so
+            # this is also the live check that the probe classifies rather
+            # than throws. No apostrophes anywhere near a node -e block.
+            run "doctor (with the endpoint capability probe)" $B doctor --chain "$CHAIN"
             MINT="${TOKEN_IN:-EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v}"          # USDC
             run "door (text)" $B door "$MINT" --chain "$CHAIN"
             run "door (json)" $B door "$MINT" --chain "$CHAIN" --format json
