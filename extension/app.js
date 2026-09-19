@@ -500,13 +500,20 @@
   }
 
   // src/chain/chains.ts
+  var PUBLIC_PROXY = "https://bouncer-proxy.tarasenkosanja12.workers.dev";
   var CHAINS = {
     robinhood: {
       key: "robinhood",
       name: "Robinhood Chain",
       family: "evm",
       chainId: 4663,
-      rpc: ["https://rpc.mainnet.chain.robinhood.com"],
+      // Robinhood Chain publishes one endpoint, so a 403 from it used to stop
+      // every read on the chain outright — which happened during a live run
+      // today. The proxy is a different address in front of the same node, so it
+      // survives a per-caller limit even though it cannot survive the node
+      // itself going down. That is the honest half of a fix, and it is better
+      // than the nothing that was here.
+      rpc: ["https://rpc.mainnet.chain.robinhood.com", `${PUBLIC_PROXY}/rpc/robinhood`],
       blockscout: "https://robinhoodchain.blockscout.com",
       factory: "0x7eD598BcEf8bd9Edd8C97A195C6d13f40801EC7e".toLowerCase(),
       factoryV1: "0xA5aAb3F0c6EeadF30Ef1D3Eb997108E976351feB".toLowerCase(),
@@ -4069,11 +4076,25 @@
       burnedBps,
       lockedBps,
       freeBps,
-      holders,
+      holders: holders.sort((a, b) => b.shareBps - a.shareBps),
       // The remainder is held by addresses this read did not enumerate. Naming
       // them needs an explorer; not naming them does not make them safe.
       unread: freeBps > 0 ? "the rest of the LP tokens sit in wallets this read does not enumerate; any of them can withdraw" : ""
     };
+  }
+  async function nameHolders(lock, nameOf, limit = 6) {
+    if (!nameOf) return lock;
+    const unnamed = lock.holders.filter((h) => !h.name && h.kind === "contract").slice(0, limit);
+    if (!unnamed.length) return lock;
+    const names = await Promise.all(unnamed.map((h) => nameOf(h.address).catch(() => null)));
+    unnamed.forEach((holder, i) => {
+      const name = names[i];
+      if (name) {
+        holder.name = name;
+        holder.namedByExplorer = true;
+      }
+    });
+    return lock;
   }
   async function readV3Lock(rpc, pool, lockers, positionManager, block, options) {
     const base = { pool: pool.address, dex: pool.dex, kind: pool.kind, burnedBps: 0, lockedBps: 0, freeBps: 0, partial: false, positionsFound: 0, positionsRead: 0, holders: [], unread: "" };
@@ -4361,6 +4382,10 @@
           liquidity = await readPoolLock(rpc, deepest, options.lockers, options.dex.v3PositionManager, block, {
             fromBlock: Math.max(0, options.liquidityFromBlock ?? block - 5e5)
           });
+          const bs2 = options.blockscout;
+          if (bs2) {
+            liquidity = await nameHolders(liquidity, async (address2) => (await bs2.addressInfo(address2)).name);
+          }
         } catch {
           liquidity = null;
         }
@@ -5067,7 +5092,8 @@
     if (o.liquidity) {
       const l = o.liquidity;
       const held = l.holders.filter((h2) => h2.kind === "wallet" || h2.kind === "contract");
-      const heldBy = held.length ? `Held by ${held.slice(0, 3).map((h2) => shortAddress(h2.address)).join(", ")}${held.length > 3 ? ` and ${held.length - 3} more` : ""}.` : "";
+      const shown = held.slice(0, 3);
+      const heldBy = held.length ? `Held by ${shown.map((h2) => h2.name ? `${h2.name} (${shortAddress(h2.address)})` : shortAddress(h2.address)).join(", ")}${held.length > 3 ? ` and ${held.length - 3} more` : ""}.${shown.some((h2) => h2.namedByExplorer) ? " Those names come from the explorer's verified source, not from anything BOUNCER checked: a contract called a locker can still be told to release." : ""}` : "";
       if (l.partial) {
         notes.push({
           level: "watch",

@@ -8,7 +8,7 @@ import { test } from "node:test";
 import { eventTopic } from "../src/chain/abi.js";
 import type { MarketPool } from "../src/chain/market.js";
 import type { RpcClient } from "../src/chain/rpc.js";
-import { DEAD, ZERO, lockInWords, readV2Lock, readV3Lock } from "../src/chain/liquidity.js";
+import { DEAD, ZERO, lockInWords, nameHolders, readV2Lock, readV3Lock, type PoolLock } from "../src/chain/liquidity.js";
 
 const E18 = 10n ** 18n;
 const POOL = "0x00000000000000000000000000000000000000p0".slice(0, 42);
@@ -288,4 +288,72 @@ test("a failed receipt batch costs the NFT owners, not the whole section", async
   assert.ok(lock.holders.length > 0, "the positions were read and must not be thrown away");
   assert.equal(lock.freeBps, 10_000, "an unresolved holder counts as able to withdraw");
   assert.match(lock.unread, /could not be traced to an NFT holder/);
+});
+
+test("an explorer name says what is holding the liquidity — and does not make it locked", async () => {
+  // The dangerous version of this feature: the explorer says the contract
+  // calls itself "UNCX_ProofOfReservesV2", and the slip quietly promotes it to
+  // "locked". A name is a label somebody chose. It is not a lock.
+  const lock: PoolLock = {
+    pool: POOL,
+    dex: "Test V3",
+    kind: "v3",
+    burnedBps: 0,
+    lockedBps: 0,
+    freeBps: 10_000,
+    partial: false,
+    positionsFound: 1,
+    positionsRead: 1,
+    holders: [{ address: LOCKER, kind: "contract", shareBps: 10_000 }],
+    unread: "",
+  };
+  const named = await nameHolders(lock, async () => "UNCX_ProofOfReservesV2");
+  assert.equal(named.holders[0].name, "UNCX_ProofOfReservesV2");
+  assert.equal(named.holders[0].namedByExplorer, true, "the reader must be able to tell where the name came from");
+  assert.equal(named.holders[0].kind, "contract", "a name must never promote a holder to locked");
+  assert.equal(named.lockedBps, 0);
+  assert.equal(named.freeBps, 10_000, "and it must not move a single basis point out of withdrawable");
+});
+
+test("naming never costs the liquidity read: no explorer, a silent one, or a broken one", async () => {
+  const base: PoolLock = {
+    pool: POOL,
+    dex: "Test V3",
+    kind: "v3",
+    burnedBps: 0,
+    lockedBps: 0,
+    freeBps: 10_000,
+    partial: false,
+    positionsFound: 1,
+    positionsRead: 1,
+    holders: [{ address: LOCKER, kind: "contract", shareBps: 6_000 }, { address: WALLET, kind: "wallet", shareBps: 4_000 }],
+    unread: "",
+  };
+  const clone = (): PoolLock => ({ ...base, holders: base.holders.map((h) => ({ ...h })) });
+
+  assert.equal((await nameHolders(clone(), undefined)).holders[0].name, undefined);
+  assert.equal((await nameHolders(clone(), async () => null)).holders[0].namedByExplorer, undefined, "an unnamed contract must not be marked as named");
+
+  // An explorer that 429s mid-read used to be able to take the whole section
+  // down, because this runs inside the try that sets liquidity to null.
+  const survived = await nameHolders(clone(), async () => { throw new Error("blockscout 429"); });
+  assert.equal(survived.holders.length, 2);
+  assert.equal(survived.freeBps, 10_000);
+});
+
+test("only contracts are asked about, and only the first few of them", async () => {
+  const asked: string[] = [];
+  const holders = Array.from({ length: 9 }, (_, i) => ({
+    address: `0x${String(i).repeat(40)}`,
+    kind: (i === 0 ? "wallet" : "contract") as "wallet" | "contract",
+    shareBps: 1_000,
+  }));
+  await nameHolders({ pool: POOL, dex: "d", kind: "v3", burnedBps: 0, lockedBps: 0, freeBps: 10_000, partial: false, positionsFound: 9, positionsRead: 9, holders, unread: "" }, async (a) => {
+    asked.push(a);
+    return null;
+  });
+  // A wallet has no published name and asking about one is a wasted request
+  // against a rate-limited explorer; eight contracts must not become eight.
+  assert.ok(!asked.includes(holders[0].address), "a wallet has nothing for the explorer to name");
+  assert.equal(asked.length, 6);
 });

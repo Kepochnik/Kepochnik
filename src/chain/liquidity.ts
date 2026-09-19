@@ -77,8 +77,16 @@ export type HolderKind = "burned" | "locked" | "wallet" | "contract";
 export interface LiquidityHolder {
   address: string;
   kind: HolderKind;
-  /** The locker's name when the address is a known one. */
+  /**
+   * What this address is called. Either a locker BOUNCER knows by address, or
+   * a contract's verified name as the chain's explorer publishes it. The
+   * second is a source, not a verdict: knowing a contract calls itself
+   * "UNCX_ProofOfReservesV2" tells the reader what is holding their liquidity
+   * without this file deciding that it is therefore safe.
+   */
   name?: string;
+  /** True when the name came from the explorer rather than from the locker table. */
+  namedByExplorer?: boolean;
   /** Share of this pool's liquidity, in basis points. */
   shareBps: number;
 }
@@ -176,11 +184,38 @@ export async function readV2Lock(rpc: RpcClient, pool: MarketPool, lockers: Lock
     burnedBps,
     lockedBps,
     freeBps,
-    holders,
+    holders: holders.sort((a, b) => b.shareBps - a.shareBps),
     // The remainder is held by addresses this read did not enumerate. Naming
     // them needs an explorer; not naming them does not make them safe.
     unread: freeBps > 0 ? "the rest of the LP tokens sit in wallets this read does not enumerate; any of them can withdraw" : "",
   };
+}
+
+/** Resolves a contract's published name. Supplied by the caller, since this module has no explorer. */
+export type NameResolver = (address: string) => Promise<string | null>;
+
+/**
+ * Attach published names to the holders that have no entry in the locker
+ * table. This is the honest half of naming a locker: the address is not
+ * recalled from memory, it is asked about, and the answer is labelled as
+ * coming from the explorer so nobody mistakes a name for a guarantee.
+ */
+export async function nameHolders(lock: PoolLock, nameOf: NameResolver | undefined, limit = 6): Promise<PoolLock> {
+  if (!nameOf) return lock;
+  // One request per holder, against an explorer that rate-limits. The holders
+  // are already largest-first, and the slip shows five, so asking about the
+  // tail would buy nothing and could cost the whole section.
+  const unnamed = lock.holders.filter((h) => !h.name && h.kind === "contract").slice(0, limit);
+  if (!unnamed.length) return lock;
+  const names = await Promise.all(unnamed.map((h) => nameOf(h.address).catch(() => null)));
+  unnamed.forEach((holder, i) => {
+    const name = names[i];
+    if (name) {
+      holder.name = name;
+      holder.namedByExplorer = true;
+    }
+  });
+  return lock;
 }
 
 export interface V3LockOptions {

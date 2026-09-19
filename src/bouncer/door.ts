@@ -527,7 +527,14 @@ function openDoorFactNotes(slip: DoorSlip, o: OpenDoor): DoorNote[] {
   if (o.liquidity) {
     const l = o.liquidity;
     const held = l.holders.filter((h) => h.kind === "wallet" || h.kind === "contract");
-    const heldBy = held.length ? `Held by ${held.slice(0, 3).map((h) => shortAddress(h.address)).join(", ")}${held.length > 3 ? ` and ${held.length - 3} more` : ""}.` : "";
+    // A name the explorer publishes tells the reader what is holding their
+    // liquidity. It is not a verdict: a contract that calls itself a locker is
+    // still a contract that can be told to release, so the name is shown and
+    // its source is said out loud rather than folded into "locked".
+    const shown = held.slice(0, 3);
+    const heldBy = held.length
+      ? `Held by ${shown.map((h) => (h.name ? `${h.name} (${shortAddress(h.address)})` : shortAddress(h.address))).join(", ")}${held.length > 3 ? ` and ${held.length - 3} more` : ""}.${shown.some((h) => h.namedByExplorer) ? " Those names come from the explorer's verified source, not from anything BOUNCER checked: a contract called a locker can still be told to release." : ""}`
+      : "";
     if (l.partial) {
       // A share of what was sampled is not a share of the pool. Saying "all of
       // it can be withdrawn" after reading a tenth of the positions would be
