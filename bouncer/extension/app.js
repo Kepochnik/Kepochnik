@@ -322,12 +322,17 @@
     const maxChunk = chunking.maxChunk ?? 2e5;
     let chunk = Math.min(maxChunk, Math.max(minChunk, chunking.startChunk ?? 5e4));
     const maxRequests = chunking.maxRequests ?? Infinity;
+    const deadline = chunking.budgetMs === void 0 ? Infinity : Date.now() + chunking.budgetMs;
     const logs = [];
     let chunks = 0;
     let requests = 0;
     let from = request.fromBlock;
     let complete = true;
     while (from <= request.toBlock) {
+      if (Date.now() >= deadline) {
+        complete = false;
+        break;
+      }
       if (requests >= maxRequests) {
         complete = false;
         break;
@@ -3872,7 +3877,7 @@
     const lower = token.toLowerCase();
     const quoteLower = quote.toLowerCase();
     const window2 = { address: poolManager, events: [V4_EVENTS.Initialize], fromBlock: options.fromBlock, toBlock: options.toBlock };
-    const chunking = { minChunk: 1, startChunk: options.chunkSize ?? 5e3, maxChunk: 2e5, maxRequests: options.maxRequests ?? 20 };
+    const chunking = { minChunk: 1, startChunk: options.chunkSize ?? 5e3, maxChunk: 2e5, maxRequests: options.maxRequests ?? 20, budgetMs: options.budgetMs ?? 15e3 };
     const [asCurrency0, asCurrency1] = await Promise.all([
       readTapeAdaptive(rpc, { ...window2, topics: [addressTopic(lower)] }, chunking),
       readTapeAdaptive(rpc, { ...window2, topics: [null, addressTopic(lower)] }, chunking)
@@ -4359,7 +4364,7 @@
         // the endpoint refuse every wide chunk, so the span halves to a single
         // block and a week's window becomes hundreds of thousands of requests —
         // ten minutes of a door, and then nothing to show for it.
-        { minChunk: 1, startChunk: options.chunkSize ?? 2e3, maxChunk: 1e5, maxRequests: options.maxRequests ?? 15 }
+        { minChunk: 1, startChunk: options.chunkSize ?? 2e3, maxChunk: 1e5, maxRequests: options.maxRequests ?? 15, budgetMs: options.budgetMs ?? 2e4 }
       );
       logs = tape.logs;
       windowComplete = tape.complete !== false;
@@ -4645,9 +4650,32 @@
       const deepest = readable[0] ?? pools?.[0] ?? null;
       if (deepest && options.liquidity !== false) {
         try {
-          liquidity = await readPoolLock(rpc, deepest, options.lockers, options.dex.v3PositionManager, block, {
-            fromBlock: Math.max(0, options.liquidityFromBlock ?? block - 5e5)
-          });
+          const LIQUIDITY_BUDGET_MS = 3e4;
+          liquidity = await Promise.race([
+            readPoolLock(rpc, deepest, options.lockers, options.dex.v3PositionManager, block, {
+              fromBlock: Math.max(0, options.liquidityFromBlock ?? block - 5e5),
+              budgetMs: options.liquidityBudgetMs ?? 2e4
+            }),
+            new Promise(
+              (resolve) => setTimeout(
+                () => resolve({
+                  pool: deepest.address,
+                  dex: deepest.dex,
+                  kind: deepest.kind,
+                  burnedBps: 0,
+                  lockedBps: 0,
+                  freeBps: 0,
+                  partial: false,
+                  positionsFound: 0,
+                  positionsRead: 0,
+                  holders: [],
+                  shareOfLiquidityBps: 0,
+                  unread: `the endpoint did not answer the liquidity history within ${LIQUIDITY_BUDGET_MS / 1e3} seconds, so who can withdraw this pool was not read`
+                }),
+                LIQUIDITY_BUDGET_MS
+              )
+            )
+          ]);
           const bs2 = options.blockscout;
           if (bs2) {
             const byAddress = new Map((await holderList.catch(() => null) ?? []).filter((h) => h.name).map((h) => [h.address.toLowerCase(), h.name]));

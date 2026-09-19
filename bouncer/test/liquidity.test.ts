@@ -359,3 +359,46 @@ test("only contracts are asked about, and only the first few of them", async () 
   assert.ok(!asked.includes(holders[0].address), "a wallet has nothing for the explorer to name");
   assert.equal(asked.length, 6);
 });
+
+test("a walk stops on the clock, not only on the request count", async () => {
+  // Measured on BNB Chain: five log requests, all five refused, a hundred and
+  // seventy seconds. The request budget was never spent — each request took
+  // thirty-four seconds to fail, because a refusal travels through a
+  // fifteen-second timeout on every endpoint in turn. Counting requests
+  // cannot bound a read when one request costs more than the read is worth.
+  const { readTapeAdaptive } = await import("../src/chain/tape.js");
+  let calls = 0;
+  const slow = {
+    getLogs: async () => {
+      calls++;
+      await new Promise((r) => setTimeout(r, 40));
+      return [];
+    },
+  } as unknown as RpcClient;
+
+  const started = Date.now();
+  const out = await readTapeAdaptive(
+    slow,
+    { address: POOL, events: [{ name: "Mint", inputs: [{ name: "owner", type: "address", indexed: true }] }], fromBlock: 0, toBlock: 1_000_000 },
+    { minChunk: 1, startChunk: 1, maxChunk: 1, maxRequests: 1_000, budgetMs: 120 },
+  );
+  const spent = Date.now() - started;
+  assert.ok(calls < 1_000, `the clock must stop it long before the request budget: ${calls} calls`);
+  assert.ok(spent < 1_000, `a 120 ms budget must not run for ${spent} ms`);
+  assert.equal(out.complete, false, "a walk cut short by the clock is incomplete, never a clean empty tape");
+  assert.ok(out.toBlock < 1_000_000, "and it must say how far it actually got");
+});
+
+test("a budget that is never reached does not cut a walk short", async () => {
+  // The other direction, which matters more: a bound that fires early would
+  // turn complete reads into partial ones and every share into a hedge.
+  const { readTapeAdaptive } = await import("../src/chain/tape.js");
+  const fast = { getLogs: async () => [] } as unknown as RpcClient;
+  const out = await readTapeAdaptive(
+    fast,
+    { address: POOL, events: [{ name: "Mint", inputs: [{ name: "owner", type: "address", indexed: true }] }], fromBlock: 0, toBlock: 100 },
+    { minChunk: 10, startChunk: 10, maxChunk: 10, maxRequests: 100, budgetMs: 60_000 },
+  );
+  assert.equal(out.complete, true);
+  assert.equal(out.toBlock, 100);
+});
