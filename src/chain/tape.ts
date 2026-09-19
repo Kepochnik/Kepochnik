@@ -108,8 +108,20 @@ export async function readTapeAdaptive(rpc: RpcClient, request: TapeRequest, chu
       from = to + 1;
       chunk = Math.min(maxChunk, chunk * 2);
     } catch (error) {
-      if (chunk <= minChunk) throw error;
-      chunk = Math.max(minChunk, Math.floor(chunk / 2));
+      if (chunk <= minChunk) {
+        // Cannot ask for less than the floor. Throwing here discards every log
+        // already paid for — on Base that was sixty-three seconds of reading
+        // thrown away to report nothing — so the walk stops and says it is
+        // incomplete. Only a walk that read nothing at all is an error, since
+        // there is then no answer to give.
+        if (!chunks) throw error;
+        complete = false;
+        break;
+      }
+      // Eighths, not halves. The endpoint's real limit is usually far below
+      // the opening guess, and halving from five thousand to one costs twelve
+      // refused requests before the first useful one; this costs four.
+      chunk = Math.max(minChunk, Math.floor(chunk / 8));
     }
   }
   logs.sort((a, b) => a.blockNumber - b.blockNumber || a.logIndex - b.logIndex);

@@ -275,8 +275,7 @@ export class RpcClient {
         for (const item of items as { id: number; result?: unknown; error?: { code: number; message: string; data?: unknown } }[]) {
           byId.set(item.id, item);
         }
-        this.record(requests, Date.now() - startedAt, false);
-        return payload.map((request) => {
+        const answers = payload.map((request) => {
           const item = byId.get(request.id);
           if (!item) throw new RpcError(`missing response for ${request.method}`);
           if (item.error) {
@@ -288,6 +287,12 @@ export class RpcClient {
           }
           return item.result;
         });
+        // Recorded only once the answer is actually in hand. Recording before
+        // this line counted a batch again on every retry, which is how the
+        // profile reported 286 receipt calls for a read that asks for at most
+        // sixty — an instrument that lies is worse than no instrument.
+        this.record(requests, Date.now() - startedAt, false);
+        return answers;
       } catch (error) {
         lastError = error;
         if (error instanceof RpcError && error.isRateLimit) {
