@@ -128,19 +128,31 @@ export class RpcClient {
     return Number(BigInt(hex));
   }
 
+  /**
+   * The head block and the chain-identity check in one round trip.
+   *
+   * Every read starts here, and it used to cost three: eth_chainId, then
+   * eth_blockNumber, then eth_getBlockByNumber for that number. The first two
+   * answers are not needed to ask the third, and "latest" already returns the
+   * number, so all three were one batch pretending to be a queue.
+   */
+  async head(): Promise<BlockHeader> {
+    if (this.verifiedChain) return this.getBlock("latest");
+    const [idHex, raw] = await this.sendBatch([
+      { method: "eth_chainId", params: [] },
+      { method: "eth_getBlockByNumber", params: ["latest", false] },
+    ]);
+    const id = Number(BigInt(idHex as string));
+    if (id !== this.expectedChainId) {
+      throw new RpcError(`endpoint ${this.activeUrl} reports chain ${id}, expected ${this.expectedChainId}`);
+    }
+    this.verifiedChain = true;
+    return toHeader(raw, "latest");
+  }
+
   async getBlock(blockNumber: number | "latest"): Promise<BlockHeader> {
     const tag = blockNumber === "latest" ? "latest" : toHex(blockNumber);
-    const block = (await this.send("eth_getBlockByNumber", [tag, false])) as {
-      number: string;
-      timestamp: string;
-      hash: string;
-    } | null;
-    if (!block) throw new RpcError(`block ${tag} not found`);
-    return {
-      number: Number(BigInt(block.number)),
-      timestamp: Number(BigInt(block.timestamp)),
-      hash: block.hash,
-    };
+    return toHeader(await this.send("eth_getBlockByNumber", [tag, false]), tag);
   }
 
   async call(to: string, data: Hex, blockNumber: number | "latest" = "latest"): Promise<Hex> {
@@ -320,6 +332,12 @@ export class RpcClient {
     if (wait > 0) await new Promise((resolve) => setTimeout(resolve, wait));
     this.lastRequestAt = Date.now();
   }
+}
+
+function toHeader(raw: unknown, tag: string): BlockHeader {
+  const block = raw as { number: string; timestamp: string; hash: string } | null;
+  if (!block) throw new RpcError(`block ${tag} not found`);
+  return { number: Number(BigInt(block.number)), timestamp: Number(BigInt(block.timestamp)), hash: block.hash };
 }
 
 export function toHex(value: number | bigint): Hex {

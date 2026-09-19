@@ -19,6 +19,7 @@ import type { ChainConfig } from "../chain/chains.js";
 import { canPrice, depth, readMarket, readPools, type Market, type MarketPool } from "../chain/market.js";
 import { nameHolders, readPoolLock, type PoolLock } from "../chain/liquidity.js";
 import { readSelectors } from "../chain/code.js";
+import { ReadBatch } from "../chain/batch.js";
 import { ERC20_EVENTS, ERC20_FUNCTIONS, ZERO_ADDRESS } from "../chain/pons.js";
 import { eventTopic } from "../chain/abi.js";
 import type { TokenMeta } from "../chain/reader.js";
@@ -198,21 +199,37 @@ const BURN_ADDRESSES = new Set([ZERO_ADDRESS, "0x0000000000000000000000000000000
 export async function readOpenDoor(rpc: RpcClient, token: ContractId, meta: TokenMeta | null, block: number, options: OpenDoorOptions = {}): Promise<OpenDoor> {
   const address = token.address.toLowerCase();
 
-  // ---- the function surface, from the code that actually runs
-  let surfaceFrom: OpenDoor["surfaceFrom"] = "token";
-  let code = await rpc.getCode(address, block);
+  // ---- the function surface, who is in charge, and whether the door is open
+  //
+  // One batch, and it used to be five round trips in a row: the token's code
+  // (already in hand from the ID check, and read again for no reason), the
+  // implementation's code, owner(), paused(), and the first trading switch.
+  // None of them needs another's answer.
+  //
+  // Every trading view is asked, not just the one the bytecode scan saw. A
+  // slot in a batch already going out is free, and the answer is still only
+  // reported for a view the surface actually carries — which is a decision
+  // made below, once the surface is known, rather than a round trip spent
+  // waiting to find out which question to ask.
+  //
+  // The owner views are asked whether or not the bytecode heuristic saw
+  // them: a dispatcher shape it does not recognise must not turn into "this
+  // token has no owner".
   const implementation = token.proxyImplementation ?? token.proxyBeacon ?? token.code.minimalProxyTarget;
+  const head = new ReadBatch(rpc, block);
+  const implSlot = implementation ? head.getCode(implementation) : null;
+  const ownerSlot = head.call(address, encodeCall(OWNER_FUNCTIONS.owner, []));
+  const getOwnerSlot = head.call(address, encodeCall(OWNER_FUNCTIONS.getOwner, []));
+  const pausedSlot = head.call(address, encodeCall(OWNER_FUNCTIONS.paused, []));
+  const tradingSlots = TRADING_VIEWS.map((view) => head.call(address, encodeCall({ name: view.slice(0, -2), inputs: [], outputs: ["bool"] }, [])));
+  await head.run();
+
+  let surfaceFrom: OpenDoor["surfaceFrom"] = "token";
+  let code: string = token.runtime;
   if (implementation) {
-    surfaceFrom = "implementation-unreadable";
-    try {
-      const implCode = await rpc.getCode(implementation, block);
-      if (implCode.length > 2) {
-        code = implCode;
-        surfaceFrom = "implementation";
-      }
-    } catch {
-      // stays unreadable: the caller must not read an empty surface as "no powers"
-    }
+    const implCode = head.hex(implSlot);
+    surfaceFrom = implCode && implCode.length > 2 ? "implementation" : "implementation-unreadable";
+    if (implCode && implCode.length > 2) code = implCode;
   }
   const { all: present, push4 } = readSelectors(code);
   const has = (signature: string) => present.has(selector(signature));
@@ -222,17 +239,24 @@ export async function readOpenDoor(rpc: RpcClient, token: ContractId, meta: Toke
   }
   const ownable = RENOUNCE_SIGNATURES.some(has);
 
-  // ---- who is in charge, and is the door open. The owner views are one call
-  // each and cost nothing to try, so they are asked whether or not the
-  // bytecode heuristic saw them: a dispatcher shape it does not recognise
-  // must not turn into "this token has no owner".
-  const ownerRead = await readOwner(rpc, address, block);
+  const ownerRead = readOwnerFrom(head.answer(ownerSlot), head.answer(getOwnerSlot));
   const owner = ownerRead.owner;
-  const paused = await readBool(rpc, address, OWNER_FUNCTIONS.paused, block);
+  // Whether the owner is a contract is one more read, and nothing above
+  // needs it. It runs alongside everything below and is awaited at the end.
+  const ownerIsContract =
+    owner && !owner.renounced
+      ? rpc
+          .getCode(owner.address, block)
+          .then((c) => c.length > 2)
+          // an unread code size does not make the owner disappear
+          .catch(() => false)
+      : Promise.resolve(false);
+  const paused = readBoolFrom(OWNER_FUNCTIONS.paused, head.answer(pausedSlot));
   let tradingOpen: OpenDoor["tradingOpen"] = null;
-  for (const view of TRADING_VIEWS) {
+  for (let i = 0; i < TRADING_VIEWS.length; i++) {
+    const view = TRADING_VIEWS[i];
     if (!has(view)) continue;
-    const open = await readBool(rpc, address, { name: view.slice(0, -2), inputs: [], outputs: ["bool"] }, block);
+    const open = readBoolFrom({ name: view.slice(0, -2), inputs: [], outputs: ["bool"] }, head.answer(tradingSlots[i]));
     if (open !== null) tradingOpen = { view, open };
     break;
   }
@@ -503,10 +527,15 @@ export async function readOpenDoor(rpc: RpcClient, token: ContractId, meta: Toke
     } else {
       // Aim the sale at the deepest pool that actually holds the quote asset.
       const deepest = (pools ?? []).filter((p) => (p.quoteReserve ?? 0n) > 0n || canPrice(p))[0] ?? null;
+      // One batch, not one round trip each. Six simulations that do not depend
+      // on one another were costing six round trips: at a quarter-second hop
+      // that is a second and a half of a reader's wait for nothing.
+      const wanted: { from: string; to: string; target: TransferProbe["target"]; source: TransferProbe["source"] }[] = [];
       for (const c of candidates) {
-        probes.push(await probeTransfer(rpc, address, c.address, PROBE_RECIPIENT, "fresh-wallet", c.source, block));
-        if (deepest) probes.push(await probeTransfer(rpc, address, c.address, deepest.address, "pool", c.source, block));
+        wanted.push({ from: c.address, to: PROBE_RECIPIENT, target: "fresh-wallet", source: c.source });
+        if (deepest) wanted.push({ from: c.address, to: deepest.address, target: "pool", source: c.source });
       }
+      probes.push(...(await probeTransfers(rpc, address, wanted, block)));
     }
   }
 
@@ -516,7 +545,7 @@ export async function readOpenDoor(rpc: RpcClient, token: ContractId, meta: Toke
     surfaceFrom,
     powers,
     ownable,
-    owner,
+    owner: owner ? { ...owner, isContract: await ownerIsContract } : null,
     ownerUnread: ownerRead.unread,
     paused,
     tradingOpen,
@@ -635,36 +664,41 @@ async function recentRecipients(rpc: RpcClient, token: string, block: number, ex
   return out;
 }
 
-async function readOwner(rpc: RpcClient, token: string, block: number): Promise<{ owner: OpenDoor["owner"]; unread: boolean }> {
-  for (const fn of [OWNER_FUNCTIONS.owner, OWNER_FUNCTIONS.getOwner]) {
-    let address: string;
-    try {
-      const [raw] = await rpc.callBatch([{ to: token, data: encodeCall(fn, []) }], block);
-      [address] = decodeOutputs(fn, raw) as [string];
-    } catch (error) {
-      // A revert means this token has no such view; anything else means the
-      // chain would not answer, which is not the same thing at all.
-      if (error instanceof RpcError && error.isRevert) continue;
+/**
+ * owner(), falling back to getOwner(), from answers already in hand.
+ *
+ * `isContract` is left false here and filled in by the caller: it needs a
+ * read of its own, and nothing this function decides depends on it.
+ */
+function readOwnerFrom(ownerAnswer: Hex | RpcError | null, getOwnerAnswer: Hex | RpcError | null): { owner: OpenDoor["owner"]; unread: boolean } {
+  for (const [fn, answer] of [
+    [OWNER_FUNCTIONS.owner, ownerAnswer],
+    [OWNER_FUNCTIONS.getOwner, getOwnerAnswer],
+  ] as [FunctionAbi, Hex | RpcError | null][]) {
+    // A revert means this token has no such view; anything else means the
+    // chain would not answer, which is not the same thing at all.
+    if (answer instanceof RpcError) {
+      if (answer.isRevert) continue;
       return { owner: null, unread: true };
     }
-    const renounced = address === ZERO_ADDRESS || BURN_ADDRESSES.has(address);
-    let isContract = false;
-    if (!renounced) {
-      try {
-        isContract = (await rpc.getCode(address, block)).length > 2;
-      } catch {
-        // an unread code size does not make the owner disappear
-      }
+    if (answer === null) continue;
+    let address: string;
+    try {
+      [address] = decodeOutputs(fn, answer) as [string];
+    } catch {
+      continue;
     }
-    return { owner: { address, renounced, isContract }, unread: false };
+    const renounced = address === ZERO_ADDRESS || BURN_ADDRESSES.has(address);
+    return { owner: { address, renounced, isContract: false }, unread: false };
   }
   return { owner: null, unread: false };
 }
 
-async function readBool(rpc: RpcClient, token: string, fn: FunctionAbi, block: number): Promise<boolean | null> {
+/** A boolean view from an answer already in hand; null for anything unreadable. */
+function readBoolFrom(fn: FunctionAbi, answer: Hex | RpcError | null): boolean | null {
+  if (answer === null || answer instanceof RpcError) return null;
   try {
-    const [raw] = await rpc.callBatch([{ to: token, data: encodeCall(fn, []) }], block);
-    const [value] = decodeOutputs(fn, raw) as [boolean];
+    const [value] = decodeOutputs(fn, answer) as [boolean];
     return value;
   } catch {
     return null;
@@ -694,21 +728,64 @@ export async function probeTransfer(
   source: TransferProbe["source"],
   block: number,
 ): Promise<TransferProbe> {
-  const data = encodeCall(OWNER_FUNCTIONS.transfer, [to, 1n]);
+  const [probe] = await probeTransfers(rpc, token, [{ from, to, target, source }], block);
+  return probe;
+}
+
+export interface ProbeRequest {
+  from: string;
+  to: string;
+  target: TransferProbe["target"];
+  source: TransferProbe["source"];
+}
+
+/**
+ * Several simulated transfers in one JSON-RPC batch. Nothing is sent: every
+ * one is an eth_call, and a call that reverts is an answer, not a failure,
+ * which is why the batch is a settled one — one honeypot reverting must not
+ * discard the five reads next to it.
+ *
+ * An endpoint that refuses batches is a real thing, so a batch that fails as
+ * a whole falls back to one call each rather than reporting six unreadable
+ * probes.
+ */
+export async function probeTransfers(rpc: RpcClient, token: string, requests: ProbeRequest[], block: number): Promise<TransferProbe[]> {
+  if (!requests.length) return [];
+  const calls = requests.map((r) => ({
+    method: "eth_call",
+    params: [{ from: r.from, to: token, data: encodeCall(OWNER_FUNCTIONS.transfer, [r.to, 1n]) }, toTag(block)],
+  }));
+  let answers: (unknown | RpcError)[];
   try {
-    const raw = (await rpc.send("eth_call", [{ from, to: token, data }, toTag(block)])) as Hex;
-    // A standard ERC-20 returns a bool. Returning nothing is the old
-    // non-standard shape (USDT and friends) and counts as success; anything
-    // shorter than a word that is not empty is not an answer we can read.
-    if (raw === "0x") return { from, to, target, status: "ok", reason: null, source };
-    if (raw.length < 66) return { from, to, target, status: "unread", reason: "the call returned data too short to read", source };
-    return BigInt(raw.slice(0, 66)) !== 0n
-      ? { from, to, target, status: "ok", reason: null, source }
-      : { from, to, target, status: "reverts", reason: "transfer returned false", source };
-  } catch (error) {
-    if (error instanceof RpcError && error.isRevert) return { from, to, target, status: "reverts", reason: revertReason(error), source };
-    return { from, to, target, status: "unread", reason: error instanceof Error ? error.message : String(error), source };
+    answers = await rpc.sendBatchSettled(calls);
+  } catch {
+    answers = [];
+    for (const call of calls) {
+      try {
+        answers.push(await rpc.send(call.method, call.params));
+      } catch (error) {
+        answers.push(error instanceof RpcError ? error : new RpcError(error instanceof Error ? error.message : String(error)));
+      }
+    }
   }
+  return requests.map((r, i) => readProbe(r, answers[i]));
+}
+
+/** Turns one answer — a hex return, a revert, or a transport failure — into a probe. */
+function readProbe({ from, to, target, source }: ProbeRequest, answer: unknown): TransferProbe {
+  if (answer instanceof RpcError) {
+    if (answer.isRevert) return { from, to, target, status: "reverts", reason: revertReason(answer), source };
+    return { from, to, target, status: "unread", reason: answer.message, source };
+  }
+  const raw = answer as Hex;
+  // A standard ERC-20 returns a bool. Returning nothing is the old
+  // non-standard shape (USDT and friends) and counts as success; anything
+  // shorter than a word that is not empty is not an answer we can read.
+  if (raw === "0x") return { from, to, target, status: "ok", reason: null, source };
+  if (typeof raw !== "string" || raw.length < 66) return { from, to, target, status: "unread", reason: "the call returned data too short to read", source };
+  return BigInt(raw.slice(0, 66)) !== 0n
+    ? { from, to, target, status: "ok", reason: null, source }
+    : { from, to, target, status: "reverts", reason: "transfer returned false", source };
 }
 
 function toTag(block: number): string {

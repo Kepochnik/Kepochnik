@@ -1293,15 +1293,30 @@
       const hex = await this.send("eth_blockNumber", []);
       return Number(BigInt(hex));
     }
+    /**
+     * The head block and the chain-identity check in one round trip.
+     *
+     * Every read starts here, and it used to cost three: eth_chainId, then
+     * eth_blockNumber, then eth_getBlockByNumber for that number. The first two
+     * answers are not needed to ask the third, and "latest" already returns the
+     * number, so all three were one batch pretending to be a queue.
+     */
+    async head() {
+      if (this.verifiedChain) return this.getBlock("latest");
+      const [idHex, raw] = await this.sendBatch([
+        { method: "eth_chainId", params: [] },
+        { method: "eth_getBlockByNumber", params: ["latest", false] }
+      ]);
+      const id = Number(BigInt(idHex));
+      if (id !== this.expectedChainId) {
+        throw new RpcError(`endpoint ${this.activeUrl} reports chain ${id}, expected ${this.expectedChainId}`);
+      }
+      this.verifiedChain = true;
+      return toHeader(raw, "latest");
+    }
     async getBlock(blockNumber) {
       const tag = blockNumber === "latest" ? "latest" : toHex(blockNumber);
-      const block = await this.send("eth_getBlockByNumber", [tag, false]);
-      if (!block) throw new RpcError(`block ${tag} not found`);
-      return {
-        number: Number(BigInt(block.number)),
-        timestamp: Number(BigInt(block.timestamp)),
-        hash: block.hash
-      };
+      return toHeader(await this.send("eth_getBlockByNumber", [tag, false]), tag);
     }
     async call(to, data, blockNumber = "latest") {
       const tag = blockNumber === "latest" ? "latest" : toHex(blockNumber);
@@ -1454,6 +1469,11 @@
       this.lastRequestAt = Date.now();
     }
   };
+  function toHeader(raw, tag) {
+    const block = raw;
+    if (!block) throw new RpcError(`block ${tag} not found`);
+    return { number: Number(BigInt(block.number)), timestamp: Number(BigInt(block.timestamp)), hash: block.hash };
+  }
   function toHex(value) {
     return `0x${value.toString(16)}`;
   }
@@ -3758,6 +3778,82 @@
   // src/bouncer/idCheck.ts
   init_abi();
 
+  // src/chain/batch.ts
+  var ReadBatch = class {
+    constructor(rpc, block) {
+      this.rpc = rpc;
+      this.block = block;
+    }
+    requests = [];
+    answers = [];
+    ran = false;
+    slot(request) {
+      if (this.ran) throw new Error("ReadBatch: add every question before run()");
+      this.requests.push(request);
+      return this.requests.length - 1;
+    }
+    /** An eth_call, pinned to this batch's block. */
+    call(to, data) {
+      return this.slot({ method: "eth_call", params: [{ to, data }, this.tag] });
+    }
+    /** An eth_call from a given sender, which is how a transfer is simulated. */
+    callFrom(from, to, data) {
+      return this.slot({ method: "eth_call", params: [{ from, to, data }, this.tag] });
+    }
+    getCode(address) {
+      return this.slot({ method: "eth_getCode", params: [address, this.tag] });
+    }
+    getStorageAt(address, storageSlot) {
+      return this.slot({ method: "eth_getStorageAt", params: [address, storageSlot, this.tag] });
+    }
+    get size() {
+      return this.requests.length;
+    }
+    get tag() {
+      return `0x${this.block.toString(16)}`;
+    }
+    async run() {
+      this.ran = true;
+      if (!this.requests.length) return;
+      try {
+        this.answers = await this.rpc.sendBatchSettled(this.requests);
+        return;
+      } catch (whole) {
+        this.answers = [];
+        for (const request of this.requests) {
+          try {
+            this.answers.push(await this.rpc.send(request.method, request.params));
+          } catch (single) {
+            this.answers.push(asRpcError(single));
+          }
+        }
+        if (this.answers.every((answer) => answer instanceof RpcError)) {
+          const failure = asRpcError(whole);
+          this.answers = this.requests.map(() => failure);
+        }
+      }
+    }
+    /**
+     * The raw answer at a slot: the hex the node returned, the error it gave,
+     * or null when the question was never asked (slot === null).
+     */
+    answer(slot) {
+      if (slot === null) return null;
+      const value = this.answers[slot];
+      if (value instanceof RpcError) return value;
+      if (typeof value === "string") return value;
+      return new RpcError("no answer in the batch for this read");
+    }
+    /** The hex at a slot, or null for anything that is not a readable answer. */
+    hex(slot) {
+      const value = this.answer(slot);
+      return value === null || value instanceof RpcError ? null : value;
+    }
+  };
+  function asRpcError(error) {
+    return error instanceof RpcError ? error : new RpcError(error instanceof Error ? error.message : String(error));
+  }
+
   // src/bouncer/v1.ts
   init_abi();
   async function readV1Launch(rpc, factory, token, block, native) {
@@ -3828,15 +3924,27 @@
     if (!isAddress(input)) throw new Error(`${input} is not an address`);
     const address = normalizeAddress(input);
     const reader = new PonsReader(rpc, factory);
+    const v2Factory = factory || PONS_V2_FACTORY;
+    const opening = new ReadBatch(rpc, block);
+    const v2Slot = options.skipLaunchLookup ? null : opening.call(v2Factory, encodeCall(FACTORY_FUNCTIONS.getLaunchedToken, [address]));
+    const curveSlot = options.skipLaunchLookup ? null : opening.call(address, encodeCall(CURVE_FUNCTIONS.token, []));
+    const v1Slot = options.factoryV1 ? opening.call(options.factoryV1, encodeCall(V1_FACTORY_FUNCTIONS.getLaunchedToken, [address])) : null;
+    const idSlots = contractIdSlots(opening, address);
+    const metaFields = metaSlots(opening, address);
+    await opening.run();
     let launch = null;
     let resolvedAs = "unknown";
-    try {
-      if (options.skipLaunchLookup) throw new NotAPonsLaunch(address);
-      launch = await reader.launchedToken(address, block);
-      resolvedAs = "token";
-    } catch (error) {
-      if (!(error instanceof NotAPonsLaunch)) throw error;
-      const viaCurve = options.skipLaunchLookup ? null : await tokenOfCurve(rpc, address, block);
+    const v2Raw = opening.answer(v2Slot);
+    if (v2Raw instanceof RpcError) throw v2Raw;
+    if (v2Raw !== null) {
+      const record = decodeLaunchedToken(decodeOutputs(FACTORY_FUNCTIONS.getLaunchedToken, v2Raw));
+      if (record.exists) {
+        launch = record;
+        resolvedAs = "token";
+      }
+    }
+    if (!launch) {
+      const viaCurve = decodeAddress(CURVE_FUNCTIONS.token, opening.answer(curveSlot));
       if (viaCurve) {
         try {
           const record = await reader.launchedToken(viaCurve, block);
@@ -3852,17 +3960,20 @@
     const native = options.native ?? { symbol: "ETH", decimals: 18 };
     let v1 = null;
     if (!launch && options.factoryV1) {
+      const v1Raw = opening.answer(v1Slot);
       try {
-        v1 = await readV1Launch(rpc, options.factoryV1, address, block, native);
-        if (v1) resolvedAs = "token";
+        if (v1Raw !== null && !(v1Raw instanceof RpcError) && decodeV1LaunchedToken(decodeOutputs(V1_FACTORY_FUNCTIONS.getLaunchedToken, v1Raw)).exists) {
+          v1 = await readV1Launch(rpc, options.factoryV1, address, block, native);
+          if (v1) resolvedAs = "token";
+        }
       } catch {
         v1 = null;
       }
     }
     const tokenAddress = launch ? launch.token.toLowerCase() : address;
-    const token = await readContractId(rpc, tokenAddress, block);
+    const token = tokenAddress === address ? contractIdOf(opening, address, idSlots) : await readContractId(rpc, tokenAddress, block);
     const curve = launch ? await readContractId(rpc, launch.curve.toLowerCase(), block) : null;
-    const meta = token.code.empty ? null : await readMetaSafely(rpc, tokenAddress, block);
+    const meta = token.code.empty ? null : tokenAddress === address ? metaOf(opening, metaFields) ?? await readMetaSafely(rpc, tokenAddress, block) : await readMetaSafely(rpc, tokenAddress, block);
     let claimedFactory = null;
     if (!launch && !v1 && !token.code.empty && token.code.selectors.has(selector("launchFactory()"))) {
       claimedFactory = await launchFactoryOf(rpc, tokenAddress, block);
@@ -3878,6 +3989,55 @@
     }
     return { input: address, resolvedAs, registered: launch !== null || v1 !== null, launchpad: launch ? "v2" : v1 ? "v1" : null, launch, v1, token, meta, curve, claimedFactory };
   }
+  function contractIdSlots(batch, address) {
+    return [batch.getCode(address), batch.getStorageAt(address, EIP1967_IMPLEMENTATION_SLOT), batch.getStorageAt(address, EIP1967_BEACON_SLOT)];
+  }
+  function contractIdOf(batch, address, [codeSlot, implSlot, beaconSlot]) {
+    const code = scanBytecode(batch.hex(codeSlot) ?? "0x");
+    if (code.empty) return { address, code, runtime: "0x", proxyImplementation: null, proxyBeacon: null };
+    const implementation = batch.hex(implSlot);
+    const beacon = batch.hex(beaconSlot);
+    return {
+      address,
+      code,
+      runtime: batch.hex(codeSlot) ?? "0x",
+      proxyImplementation: implementation && storageWordIsSet(implementation) ? storageWordAddress(implementation) : null,
+      proxyBeacon: beacon && storageWordIsSet(beacon) ? storageWordAddress(beacon) : null
+    };
+  }
+  function metaSlots(batch, address) {
+    return [
+      batch.call(address, encodeCall(ERC20_FUNCTIONS.name, [])),
+      batch.call(address, encodeCall(ERC20_FUNCTIONS.symbol, [])),
+      batch.call(address, encodeCall(ERC20_FUNCTIONS.decimals, [])),
+      batch.call(address, encodeCall(ERC20_FUNCTIONS.totalSupply, []))
+    ];
+  }
+  function metaOf(batch, [nameSlot, symbolSlot, decimalsSlot, supplySlot]) {
+    try {
+      const raw = (slot) => {
+        const value = batch.hex(slot);
+        if (value === null) throw new Error("unread");
+        return value;
+      };
+      const [name] = decodeOutputs(ERC20_FUNCTIONS.name, raw(nameSlot));
+      const [symbol] = decodeOutputs(ERC20_FUNCTIONS.symbol, raw(symbolSlot));
+      const [decimals] = decodeOutputs(ERC20_FUNCTIONS.decimals, raw(decimalsSlot));
+      const [totalSupply] = decodeOutputs(ERC20_FUNCTIONS.totalSupply, raw(supplySlot));
+      return { name, symbol, decimals: Number(decimals), totalSupply };
+    } catch {
+      return null;
+    }
+  }
+  function decodeAddress(fn, raw) {
+    if (raw === null || raw instanceof RpcError) return null;
+    try {
+      const [value] = decodeOutputs(fn, raw);
+      return value && value !== ZERO_ADDRESS ? value.toLowerCase() : null;
+    } catch {
+      return null;
+    }
+  }
   async function launchFactoryOf(rpc, token, block) {
     try {
       const [raw] = await rpc.callBatch([{ to: token, data: encodeCall(LAUNCH_FACTORY_VIEW, []) }], block);
@@ -3888,25 +4048,10 @@
     }
   }
   async function readContractId(rpc, address, block) {
-    const code = scanBytecode(await rpc.getCode(address, block));
-    if (code.empty) return { address, code, proxyImplementation: null, proxyBeacon: null };
-    const implementation = await rpc.getStorageAt(address, EIP1967_IMPLEMENTATION_SLOT, block);
-    const beacon = await rpc.getStorageAt(address, EIP1967_BEACON_SLOT, block);
-    return {
-      address,
-      code,
-      proxyImplementation: storageWordIsSet(implementation) ? storageWordAddress(implementation) : null,
-      proxyBeacon: storageWordIsSet(beacon) ? storageWordAddress(beacon) : null
-    };
-  }
-  async function tokenOfCurve(rpc, curve, block) {
-    try {
-      const [raw] = await rpc.callBatch([{ to: curve, data: encodeCall(CURVE_FUNCTIONS.token, []) }], block);
-      const [token] = decodeOutputs(CURVE_FUNCTIONS.token, raw);
-      return token && token !== ZERO_ADDRESS ? token.toLowerCase() : null;
-    } catch {
-      return null;
-    }
+    const batch = new ReadBatch(rpc, block);
+    const slots = contractIdSlots(batch, address);
+    await batch.run();
+    return contractIdOf(batch, address, slots);
   }
   async function readMetaSafely(rpc, token, block) {
     const one = async (fn) => (await rpc.callBatch([{ to: token, data: encodeCall(fn, []) }], block))[0];
@@ -4793,19 +4938,20 @@
   var BURN_ADDRESSES2 = /* @__PURE__ */ new Set([ZERO_ADDRESS, "0x000000000000000000000000000000000000dead", "0x0000000000000000000000000000000000000001"]);
   async function readOpenDoor(rpc, token, meta, block, options = {}) {
     const address = token.address.toLowerCase();
-    let surfaceFrom = "token";
-    let code = await rpc.getCode(address, block);
     const implementation = token.proxyImplementation ?? token.proxyBeacon ?? token.code.minimalProxyTarget;
+    const head = new ReadBatch(rpc, block);
+    const implSlot = implementation ? head.getCode(implementation) : null;
+    const ownerSlot = head.call(address, encodeCall(OWNER_FUNCTIONS.owner, []));
+    const getOwnerSlot = head.call(address, encodeCall(OWNER_FUNCTIONS.getOwner, []));
+    const pausedSlot = head.call(address, encodeCall(OWNER_FUNCTIONS.paused, []));
+    const tradingSlots = TRADING_VIEWS.map((view2) => head.call(address, encodeCall({ name: view2.slice(0, -2), inputs: [], outputs: ["bool"] }, [])));
+    await head.run();
+    let surfaceFrom = "token";
+    let code = token.runtime;
     if (implementation) {
-      surfaceFrom = "implementation-unreadable";
-      try {
-        const implCode = await rpc.getCode(implementation, block);
-        if (implCode.length > 2) {
-          code = implCode;
-          surfaceFrom = "implementation";
-        }
-      } catch {
-      }
+      const implCode = head.hex(implSlot);
+      surfaceFrom = implCode && implCode.length > 2 ? "implementation" : "implementation-unreadable";
+      if (implCode && implCode.length > 2) code = implCode;
     }
     const { all: present, push4 } = readSelectors(code);
     const has = (signature) => present.has(selector(signature));
@@ -4814,13 +4960,15 @@
       for (const signature of POWER_SIGNATURES[kind]) if (has(signature)) powers.push({ kind, signature });
     }
     const ownable = RENOUNCE_SIGNATURES.some(has);
-    const ownerRead = await readOwner(rpc, address, block);
+    const ownerRead = readOwnerFrom(head.answer(ownerSlot), head.answer(getOwnerSlot));
     const owner = ownerRead.owner;
-    const paused = await readBool(rpc, address, OWNER_FUNCTIONS.paused, block);
+    const ownerIsContract = owner && !owner.renounced ? rpc.getCode(owner.address, block).then((c) => c.length > 2).catch(() => false) : Promise.resolve(false);
+    const paused = readBoolFrom(OWNER_FUNCTIONS.paused, head.answer(pausedSlot));
     let tradingOpen = null;
-    for (const view2 of TRADING_VIEWS) {
+    for (let i = 0; i < TRADING_VIEWS.length; i++) {
+      const view2 = TRADING_VIEWS[i];
       if (!has(view2)) continue;
-      const open = await readBool(rpc, address, { name: view2.slice(0, -2), inputs: [], outputs: ["bool"] }, block);
+      const open = readBoolFrom({ name: view2.slice(0, -2), inputs: [], outputs: ["bool"] }, head.answer(tradingSlots[i]));
       if (open !== null) tradingOpen = { view: view2, open };
       break;
     }
@@ -5007,10 +5155,12 @@
         probesSkipped = "no wallet with a readable balance to simulate from";
       } else {
         const deepest = (pools ?? []).filter((p) => (p.quoteReserve ?? 0n) > 0n || canPrice(p))[0] ?? null;
+        const wanted = [];
         for (const c of candidates) {
-          probes.push(await probeTransfer(rpc, address, c.address, PROBE_RECIPIENT, "fresh-wallet", c.source, block));
-          if (deepest) probes.push(await probeTransfer(rpc, address, c.address, deepest.address, "pool", c.source, block));
+          wanted.push({ from: c.address, to: PROBE_RECIPIENT, target: "fresh-wallet", source: c.source });
+          if (deepest) wanted.push({ from: c.address, to: deepest.address, target: "pool", source: c.source });
         }
+        probes.push(...await probeTransfers(rpc, address, wanted, block));
       }
     }
     return {
@@ -5019,7 +5169,7 @@
       surfaceFrom,
       powers,
       ownable,
-      owner,
+      owner: owner ? { ...owner, isContract: await ownerIsContract } : null,
       ownerUnread: ownerRead.unread,
       paused,
       tradingOpen,
@@ -5103,32 +5253,31 @@
     }
     return out2;
   }
-  async function readOwner(rpc, token, block) {
-    for (const fn of [OWNER_FUNCTIONS.owner, OWNER_FUNCTIONS.getOwner]) {
-      let address;
-      try {
-        const [raw] = await rpc.callBatch([{ to: token, data: encodeCall(fn, []) }], block);
-        [address] = decodeOutputs(fn, raw);
-      } catch (error) {
-        if (error instanceof RpcError && error.isRevert) continue;
+  function readOwnerFrom(ownerAnswer, getOwnerAnswer) {
+    for (const [fn, answer] of [
+      [OWNER_FUNCTIONS.owner, ownerAnswer],
+      [OWNER_FUNCTIONS.getOwner, getOwnerAnswer]
+    ]) {
+      if (answer instanceof RpcError) {
+        if (answer.isRevert) continue;
         return { owner: null, unread: true };
       }
-      const renounced = address === ZERO_ADDRESS || BURN_ADDRESSES2.has(address);
-      let isContract = false;
-      if (!renounced) {
-        try {
-          isContract = (await rpc.getCode(address, block)).length > 2;
-        } catch {
-        }
+      if (answer === null) continue;
+      let address;
+      try {
+        [address] = decodeOutputs(fn, answer);
+      } catch {
+        continue;
       }
-      return { owner: { address, renounced, isContract }, unread: false };
+      const renounced = address === ZERO_ADDRESS || BURN_ADDRESSES2.has(address);
+      return { owner: { address, renounced, isContract: false }, unread: false };
     }
     return { owner: null, unread: false };
   }
-  async function readBool(rpc, token, fn, block) {
+  function readBoolFrom(fn, answer) {
+    if (answer === null || answer instanceof RpcError) return null;
     try {
-      const [raw] = await rpc.callBatch([{ to: token, data: encodeCall(fn, []) }], block);
-      const [value] = decodeOutputs(fn, raw);
+      const [value] = decodeOutputs(fn, answer);
       return value;
     } catch {
       return null;
@@ -5139,17 +5288,36 @@
     const [balance] = decodeOutputs(ERC20_FUNCTIONS.balanceOf, raw);
     return balance;
   }
-  async function probeTransfer(rpc, token, from, to, target, source, block) {
-    const data = encodeCall(OWNER_FUNCTIONS.transfer, [to, 1n]);
+  async function probeTransfers(rpc, token, requests, block) {
+    if (!requests.length) return [];
+    const calls = requests.map((r) => ({
+      method: "eth_call",
+      params: [{ from: r.from, to: token, data: encodeCall(OWNER_FUNCTIONS.transfer, [r.to, 1n]) }, toTag(block)]
+    }));
+    let answers;
     try {
-      const raw = await rpc.send("eth_call", [{ from, to: token, data }, toTag(block)]);
-      if (raw === "0x") return { from, to, target, status: "ok", reason: null, source };
-      if (raw.length < 66) return { from, to, target, status: "unread", reason: "the call returned data too short to read", source };
-      return BigInt(raw.slice(0, 66)) !== 0n ? { from, to, target, status: "ok", reason: null, source } : { from, to, target, status: "reverts", reason: "transfer returned false", source };
-    } catch (error) {
-      if (error instanceof RpcError && error.isRevert) return { from, to, target, status: "reverts", reason: revertReason(error), source };
-      return { from, to, target, status: "unread", reason: error instanceof Error ? error.message : String(error), source };
+      answers = await rpc.sendBatchSettled(calls);
+    } catch {
+      answers = [];
+      for (const call of calls) {
+        try {
+          answers.push(await rpc.send(call.method, call.params));
+        } catch (error) {
+          answers.push(error instanceof RpcError ? error : new RpcError(error instanceof Error ? error.message : String(error)));
+        }
+      }
     }
+    return requests.map((r, i) => readProbe(r, answers[i]));
+  }
+  function readProbe({ from, to, target, source }, answer) {
+    if (answer instanceof RpcError) {
+      if (answer.isRevert) return { from, to, target, status: "reverts", reason: revertReason(answer), source };
+      return { from, to, target, status: "unread", reason: answer.message, source };
+    }
+    const raw = answer;
+    if (raw === "0x") return { from, to, target, status: "ok", reason: null, source };
+    if (typeof raw !== "string" || raw.length < 66) return { from, to, target, status: "unread", reason: "the call returned data too short to read", source };
+    return BigInt(raw.slice(0, 66)) !== 0n ? { from, to, target, status: "ok", reason: null, source } : { from, to, target, status: "reverts", reason: "transfer returned false", source };
   }
   function toTag(block) {
     return `0x${block.toString(16)}`;
@@ -5262,9 +5430,7 @@
     const chain2 = options.chain ?? DEFAULT_CHAIN;
     const factory = (options.factory ?? chain2.factory ?? "").toLowerCase();
     const launchpadKnown = Boolean(factory);
-    await rpc.assertChain();
-    const headNumber = await rpc.blockNumber();
-    const head = await rpc.getBlock(headNumber);
+    const head = await rpc.head();
     const searchBlocks = options.launchSearchBlocks ?? Math.round(7 * 86400 * chain2.blocksPerSecond);
     const id = await readIdCheck(rpc, input, head.number, factory || void 0, {
       factoryV1: chain2.factoryV1,

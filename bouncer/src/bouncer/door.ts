@@ -96,9 +96,8 @@ export async function readDoor(rpc: RpcClient, input: string, options: DoorOptio
   // sections do, so the slip says the launch question could not be asked
   // rather than refusing to answer any question.
   const launchpadKnown = Boolean(factory);
-  await rpc.assertChain();
-  const headNumber = await rpc.blockNumber();
-  const head = await rpc.getBlock(headNumber);
+  // Chain identity and the head block, one round trip. See rpc.head().
+  const head = await rpc.head();
   const searchBlocks = options.launchSearchBlocks ?? Math.round(7 * 86_400 * chain.blocksPerSecond);
 
   const id = await readIdCheck(rpc, input, head.number, factory || undefined, {

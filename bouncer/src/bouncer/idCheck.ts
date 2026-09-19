@@ -6,16 +6,23 @@
  * trusted deployers. The bytecode scan is the second question, asked of
  * every address, Pons or not: can this contract change or disappear?
  */
-import { decodeOutputs, encodeCall, isAddress, normalizeAddress, selector, type FunctionAbi } from "../chain/abi.js";
+import { decodeOutputs, encodeCall, isAddress, normalizeAddress, selector, type FunctionAbi, type Hex } from "../chain/abi.js";
 import { EIP1967_BEACON_SLOT, EIP1967_IMPLEMENTATION_SLOT, pushedSelectors, scanBytecode, storageWordAddress, storageWordIsSet, type CodeScan } from "../chain/code.js";
-import { CURVE_FUNCTIONS, ERC20_FUNCTIONS, ZERO_ADDRESS, type LaunchedToken } from "../chain/pons.js";
+import { CURVE_FUNCTIONS, ERC20_FUNCTIONS, FACTORY_FUNCTIONS, PONS_V2_FACTORY, V1_FACTORY_FUNCTIONS, ZERO_ADDRESS, decodeLaunchedToken, decodeV1LaunchedToken, type LaunchedToken } from "../chain/pons.js";
 import { NotAPonsLaunch, PonsReader, type TokenMeta } from "../chain/reader.js";
-import type { RpcClient } from "../chain/rpc.js";
+import { RpcError, type RpcClient } from "../chain/rpc.js";
+import { ReadBatch } from "../chain/batch.js";
 import { readV1Launch, type V1Launch } from "./v1.js";
 
 export interface ContractId {
   address: string;
   code: CodeScan;
+  /**
+   * The runtime bytecode exactly as the node returned it. Carried so the
+   * open-door check can read the function surface off it instead of asking
+   * for the same code a second time; "0x" for an address with no code.
+   */
+  runtime: Hex;
   /** EIP-1967 implementation slot, when set: an upgradeable proxy. */
   proxyImplementation: string | null;
   proxyBeacon: string | null;
@@ -57,17 +64,48 @@ export async function readIdCheck(rpc: RpcClient, input: string, block: number, 
   if (!isAddress(input)) throw new Error(`${input} is not an address`);
   const address = normalizeAddress(input);
   const reader = new PonsReader(rpc, factory);
+  // The reader falls back to the published V2 factory when the caller names
+  // none, and the batch below has to ask the same one the reader would.
+  const v2Factory = factory || PONS_V2_FACTORY;
+
+  // ---- every question that can be asked about the pasted address, at once
+  //
+  // These used to be seven round trips in a row: is it a V2 launch, is it a
+  // curve, is it a V1 launch, then its code, then its two proxy slots, then
+  // its name/symbol/decimals/supply. Not one of them needs another's answer,
+  // and a round trip on a public endpoint is a quarter of a second, so the
+  // door spent about a second and a half asking questions it could have
+  // asked in one breath.
+  //
+  // Two of them are speculative. The V1 factory is asked even when the V2
+  // record might turn up, and the code and metadata are read for the pasted
+  // address even though a pasted CURVE would send them to the wrong one —
+  // that case is re-read below. A wasted slot in a batch already going out
+  // costs nothing; a round trip costs everyone who pastes an address.
+  const opening = new ReadBatch(rpc, block);
+  const v2Slot = options.skipLaunchLookup ? null : opening.call(v2Factory, encodeCall(FACTORY_FUNCTIONS.getLaunchedToken, [address]));
+  const curveSlot = options.skipLaunchLookup ? null : opening.call(address, encodeCall(CURVE_FUNCTIONS.token, []));
+  const v1Slot = options.factoryV1 ? opening.call(options.factoryV1, encodeCall(V1_FACTORY_FUNCTIONS.getLaunchedToken, [address])) : null;
+  const idSlots = contractIdSlots(opening, address);
+  const metaFields = metaSlots(opening, address);
+  await opening.run();
 
   let launch: LaunchedToken | null = null;
   let resolvedAs: IdCheck["resolvedAs"] = "unknown";
-  try {
-    if (options.skipLaunchLookup) throw new NotAPonsLaunch(address);
-    launch = await reader.launchedToken(address, block);
-    resolvedAs = "token";
-  } catch (error) {
-    if (!(error instanceof NotAPonsLaunch)) throw error;
+  // A factory that answers with an error is not the same as a factory that
+  // says no: the first is rethrown, exactly as the sequential version did.
+  const v2Raw = opening.answer(v2Slot);
+  if (v2Raw instanceof RpcError) throw v2Raw;
+  if (v2Raw !== null) {
+    const record = decodeLaunchedToken(decodeOutputs(FACTORY_FUNCTIONS.getLaunchedToken, v2Raw));
+    if (record.exists) {
+      launch = record;
+      resolvedAs = "token";
+    }
+  }
+  if (!launch) {
     // Maybe the caller pasted the curve. A Pons curve knows its token.
-    const viaCurve = options.skipLaunchLookup ? null : await tokenOfCurve(rpc, address, block);
+    const viaCurve = decodeAddress(CURVE_FUNCTIONS.token, opening.answer(curveSlot));
     if (viaCurve) {
       try {
         const record = await reader.launchedToken(viaCurve, block);
@@ -84,18 +122,25 @@ export async function readIdCheck(rpc: RpcClient, input: string, block: number, 
   const native = options.native ?? { symbol: "ETH", decimals: 18 };
   let v1: V1Launch | null = null;
   if (!launch && options.factoryV1) {
+    const v1Raw = opening.answer(v1Slot);
     try {
-      v1 = await readV1Launch(rpc, options.factoryV1, address, block, native);
-      if (v1) resolvedAs = "token";
+      // The record is already in hand; readV1Launch is only asked for the
+      // rest of the terms, and only when there is a record to have terms.
+      if (v1Raw !== null && !(v1Raw instanceof RpcError) && decodeV1LaunchedToken(decodeOutputs(V1_FACTORY_FUNCTIONS.getLaunchedToken, v1Raw)).exists) {
+        v1 = await readV1Launch(rpc, options.factoryV1, address, block, native);
+        if (v1) resolvedAs = "token";
+      }
     } catch {
       v1 = null;
     }
   }
 
   const tokenAddress = launch ? launch.token.toLowerCase() : address;
-  const token = await readContractId(rpc, tokenAddress, block);
+  // The speculative reads were aimed at the pasted address. When that turned
+  // out to be a curve, the token is somewhere else and they are re-read.
+  const token = tokenAddress === address ? contractIdOf(opening, address, idSlots) : await readContractId(rpc, tokenAddress, block);
   const curve = launch ? await readContractId(rpc, launch.curve.toLowerCase(), block) : null;
-  const meta = token.code.empty ? null : await readMetaSafely(rpc, tokenAddress, block);
+  const meta = token.code.empty ? null : tokenAddress === address ? (metaOf(opening, metaFields) ?? (await readMetaSafely(rpc, tokenAddress, block))) : await readMetaSafely(rpc, tokenAddress, block);
 
   // A V1-style token carries the address of the factory that made it. Ask
   // that factory too, but only count it when the chain table knows it.
@@ -116,6 +161,64 @@ export async function readIdCheck(rpc: RpcClient, input: string, block: number, 
   return { input: address, resolvedAs, registered: launch !== null || v1 !== null, launchpad: launch ? "v2" : v1 ? "v1" : null, launch, v1, token, meta, curve, claimedFactory };
 }
 
+/** Code and both EIP-1967 proxy slots: three questions, one round trip. */
+function contractIdSlots(batch: ReadBatch, address: string): [number, number, number] {
+  return [batch.getCode(address), batch.getStorageAt(address, EIP1967_IMPLEMENTATION_SLOT), batch.getStorageAt(address, EIP1967_BEACON_SLOT)];
+}
+
+function contractIdOf(batch: ReadBatch, address: string, [codeSlot, implSlot, beaconSlot]: [number, number, number]): ContractId {
+  const code = scanBytecode(batch.hex(codeSlot) ?? "0x");
+  if (code.empty) return { address, code, runtime: "0x", proxyImplementation: null, proxyBeacon: null };
+  const implementation = batch.hex(implSlot);
+  const beacon = batch.hex(beaconSlot);
+  return {
+    address,
+    code,
+    runtime: batch.hex(codeSlot) ?? "0x",
+    proxyImplementation: implementation && storageWordIsSet(implementation) ? storageWordAddress(implementation) : null,
+    proxyBeacon: beacon && storageWordIsSet(beacon) ? storageWordAddress(beacon) : null,
+  };
+}
+
+function metaSlots(batch: ReadBatch, address: string): [number, number, number, number] {
+  return [
+    batch.call(address, encodeCall(ERC20_FUNCTIONS.name, [])),
+    batch.call(address, encodeCall(ERC20_FUNCTIONS.symbol, [])),
+    batch.call(address, encodeCall(ERC20_FUNCTIONS.decimals, [])),
+    batch.call(address, encodeCall(ERC20_FUNCTIONS.totalSupply, [])),
+  ];
+}
+
+/** The four ERC-20 views, or null when any of them did not come back readable. */
+function metaOf(batch: ReadBatch, [nameSlot, symbolSlot, decimalsSlot, supplySlot]: [number, number, number, number]): TokenMeta | null {
+  try {
+    const raw = (slot: number): Hex => {
+      const value = batch.hex(slot);
+      if (value === null) throw new Error("unread");
+      return value;
+    };
+    const [name] = decodeOutputs(ERC20_FUNCTIONS.name, raw(nameSlot)) as [string];
+    const [symbol] = decodeOutputs(ERC20_FUNCTIONS.symbol, raw(symbolSlot)) as [string];
+    const [decimals] = decodeOutputs(ERC20_FUNCTIONS.decimals, raw(decimalsSlot)) as [bigint];
+    const [totalSupply] = decodeOutputs(ERC20_FUNCTIONS.totalSupply, raw(supplySlot)) as [bigint];
+    return { name, symbol, decimals: Number(decimals), totalSupply };
+  } catch {
+    return null;
+  }
+}
+
+
+/** An address-returning view, decoded, with the zero address read as "no answer". */
+function decodeAddress(fn: FunctionAbi, raw: Hex | RpcError | null): string | null {
+  if (raw === null || raw instanceof RpcError) return null;
+  try {
+    const [value] = decodeOutputs(fn, raw) as [string];
+    return value && value !== ZERO_ADDRESS ? value.toLowerCase() : null;
+  } catch {
+    return null;
+  }
+}
+
 async function launchFactoryOf(rpc: RpcClient, token: string, block: number): Promise<string | null> {
   try {
     const [raw] = await rpc.callBatch([{ to: token, data: encodeCall(LAUNCH_FACTORY_VIEW, []) }], block);
@@ -127,16 +230,10 @@ async function launchFactoryOf(rpc: RpcClient, token: string, block: number): Pr
 }
 
 export async function readContractId(rpc: RpcClient, address: string, block: number): Promise<ContractId> {
-  const code = scanBytecode(await rpc.getCode(address, block));
-  if (code.empty) return { address, code, proxyImplementation: null, proxyBeacon: null };
-  const implementation = await rpc.getStorageAt(address, EIP1967_IMPLEMENTATION_SLOT, block);
-  const beacon = await rpc.getStorageAt(address, EIP1967_BEACON_SLOT, block);
-  return {
-    address,
-    code,
-    proxyImplementation: storageWordIsSet(implementation) ? storageWordAddress(implementation) : null,
-    proxyBeacon: storageWordIsSet(beacon) ? storageWordAddress(beacon) : null,
-  };
+  const batch = new ReadBatch(rpc, block);
+  const slots = contractIdSlots(batch, address);
+  await batch.run();
+  return contractIdOf(batch, address, slots);
 }
 
 async function tokenOfCurve(rpc: RpcClient, curve: string, block: number): Promise<string | null> {
