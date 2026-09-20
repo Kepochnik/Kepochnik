@@ -6719,6 +6719,7 @@
     if (parts.length === 1 && ADDR.test(parts[0])) return { view: "door", parts };
     if (parts.length === 1 && /^0x[0-9a-fA-F]{64}$/.test(parts[0])) return { view: "tx", parts };
     if (parts.length === 1 && /^0x/.test(parts[0]) && mode === "demo" && /^0xdemo/i.test(parts[0])) return { view: "tx", parts };
+    if (raw.trim() && mode === "live" && /^\$?[a-z0-9 ._-]{2,32}$/i.test(raw.trim())) return { view: "door", parts: [raw.trim()] };
     return null;
   }
   function proxyBase() {
@@ -6830,9 +6831,50 @@
   var doorRun = 0;
   var SLOW_SECTIONS = { skipLiquidity: true, skipDev: true, skipRoom: true, skipCrew: true, skipLookalikes: true };
   var OPENING_SECTIONS = { ...SLOW_SECTIONS, skipMarket: true, skipExplorer: true, skipProbes: true };
+  async function runSearch(query) {
+    const bs = blockscoutFor();
+    if (!bs) {
+      return bad(
+        `"${query}" is not an address, and ${chain().name} has no explorer BOUNCER can search. Paste the contract address: 0x followed by 40 hex characters.`
+      );
+    }
+    busy(`looking for "${query}" on ${chain().name}\u2026`);
+    let hits;
+    try {
+      hits = (await bs.searchTokens(query)).slice(0, 12);
+    } catch (error) {
+      return bad(`Could not search ${chain().name} for "${esc2(query)}": ${error instanceof Error ? error.message : String(error)}. Paste the contract address instead.`);
+    }
+    status.textContent = "";
+    if (!hits.length) {
+      out.innerHTML = `<div class="error"><strong>Nothing on ${esc2(chain().name)} called "${esc2(query)}".</strong>
+      <p>The explorer's index has no token by that name here. It may be on another chain \u2014 try the chain picker \u2014 or too new to be indexed, in which case only its contract address will find it.</p></div>`;
+      return;
+    }
+    const rows = hits.map(
+      (h) => `<li><button class="hit" type="button" data-go="${esc2(h.address)}">
+        <span class="hit-sym">${esc2(h.symbol || "\u2014")}</span>
+        <span class="hit-name">${esc2(h.name || "no name")}</span>
+        <span class="hit-addr mono">${esc2(h.address)}</span>
+      </button></li>`
+    ).join("");
+    out.innerHTML = `<section class="found">
+    <h2>${hits.length} token${hits.length === 1 ? "" : "s"} on ${esc2(chain().name)} called something like "${esc2(query)}"</h2>
+    <p class="qblurb">BOUNCER will not pick for you. A ticker is not unique and anyone can deploy one \u2014 which is the whole reason this tool exists. Check the address against the one the team posted, then open it.</p>
+    <ul class="hits">${rows}</ul>
+  </section>`;
+    for (const button of out.querySelectorAll("[data-go]")) {
+      button.addEventListener("click", () => {
+        location.hash = `#/t/${button.dataset.go}?chain=${chain().key}`;
+      });
+    }
+  }
   async function runDoor(address) {
     if (chain().family === "solana" && mode === "live") return await runSolanaDoor(address);
-    if (!ADDR.test(address)) return bad("Paste a 20-byte hex address: the token or its bonding curve, 0x followed by 40 hex characters.");
+    if (!ADDR.test(address)) {
+      if (mode === "live" && /^[a-z0-9$ ._-]{2,32}$/i.test(address)) return await runSearch(address.replace(/^\$/, ""));
+      return bad("Paste a 20-byte hex address \u2014 0x followed by 40 hex characters \u2014 or a token's name to search for it.");
+    }
     if (mode === "demo" && !isDemoAddress(address)) {
       setMode("live");
       showToast(`Real address: switched to live on ${chain().name}`);

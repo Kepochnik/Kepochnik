@@ -120,6 +120,11 @@ function detect(raw: string): { view: View; parts: string[] } | null {
   if (parts.length === 1 && ADDR.test(parts[0])) return { view: "door", parts };
   if (parts.length === 1 && /^0x[0-9a-fA-F]{64}$/.test(parts[0])) return { view: "tx", parts };
   if (parts.length === 1 && /^0x/.test(parts[0]) && mode === "demo" && /^0xdemo/i.test(parts[0])) return { view: "tx", parts };
+  // A name, not an address. The door route handles it: on a live chain it
+  // searches the explorer, and everywhere else it says what it needs. This
+  // used to fall through to null, and null is how "cashcat" became "that is
+  // not what this tab needs".
+  if (raw.trim() && mode === "live" && /^\$?[a-z0-9 ._-]{2,32}$/i.test(raw.trim())) return { view: "door", parts: [raw.trim()] };
   return null;
 }
 
@@ -322,9 +327,68 @@ const SLOW_SECTIONS = { skipLiquidity: true, skipDev: true, skipRoom: true, skip
  */
 const OPENING_SECTIONS = { ...SLOW_SECTIONS, skipMarket: true, skipExplorer: true, skipProbes: true } as const;
 
+/**
+ * Somebody typed a name, not an address.
+ *
+ * Reported from the live site: "я вбил cashcat" — and the box answered
+ * "paste a 20-byte hex address", which is a dead end dressed as an
+ * instruction. Nobody is handed a contract address by the person shilling
+ * a token; they are handed a ticker. Turning that ticker into candidates
+ * is the explorer's job and it already has the endpoint.
+ *
+ * Every hit is offered, never auto-opened, and the addresses are shown.
+ * Tickers are not unique — that is the whole reason the lookalike check
+ * exists — so picking one for the reader would be guessing on the one
+ * question this tool exists to answer.
+ */
+async function runSearch(query: string): Promise<void> {
+  const bs = blockscoutFor();
+  if (!bs) {
+    return bad(
+      `"${query}" is not an address, and ${chain().name} has no explorer BOUNCER can search. Paste the contract address: 0x followed by 40 hex characters.`,
+    );
+  }
+  busy(`looking for "${query}" on ${chain().name}…`);
+  let hits: { address: string; name: string; symbol: string }[];
+  try {
+    hits = (await bs.searchTokens(query)).slice(0, 12);
+  } catch (error) {
+    return bad(`Could not search ${chain().name} for "${esc(query)}": ${error instanceof Error ? error.message : String(error)}. Paste the contract address instead.`);
+  }
+  status.textContent = "";
+  if (!hits.length) {
+    out.innerHTML = `<div class="error"><strong>Nothing on ${esc(chain().name)} called "${esc(query)}".</strong>
+      <p>The explorer's index has no token by that name here. It may be on another chain — try the chain picker — or too new to be indexed, in which case only its contract address will find it.</p></div>`;
+    return;
+  }
+  const rows = hits
+    .map(
+      (h) => `<li><button class="hit" type="button" data-go="${esc(h.address)}">
+        <span class="hit-sym">${esc(h.symbol || "—")}</span>
+        <span class="hit-name">${esc(h.name || "no name")}</span>
+        <span class="hit-addr mono">${esc(h.address)}</span>
+      </button></li>`,
+    )
+    .join("");
+  out.innerHTML = `<section class="found">
+    <h2>${hits.length} token${hits.length === 1 ? "" : "s"} on ${esc(chain().name)} called something like "${esc(query)}"</h2>
+    <p class="qblurb">BOUNCER will not pick for you. A ticker is not unique and anyone can deploy one — which is the whole reason this tool exists. Check the address against the one the team posted, then open it.</p>
+    <ul class="hits">${rows}</ul>
+  </section>`;
+  for (const button of out.querySelectorAll<HTMLButtonElement>("[data-go]")) {
+    button.addEventListener("click", () => {
+      location.hash = `#/t/${button.dataset.go}?chain=${chain().key}`;
+    });
+  }
+}
+
 async function runDoor(address: string): Promise<void> {
   if (chain().family === "solana" && mode === "live") return await runSolanaDoor(address);
-  if (!ADDR.test(address)) return bad("Paste a 20-byte hex address: the token or its bonding curve, 0x followed by 40 hex characters.");
+  if (!ADDR.test(address)) {
+    // A ticker, most likely. Say so and go looking rather than refusing.
+    if (mode === "live" && /^[a-z0-9$ ._-]{2,32}$/i.test(address)) return await runSearch(address.replace(/^\$/, ""));
+    return bad("Paste a 20-byte hex address — 0x followed by 40 hex characters — or a token's name to search for it.");
+  }
   if (mode === "demo" && !isDemoAddress(address)) {
     // A real address pasted into the demo: the demo chain would call it an impostor. Go live instead.
     setMode("live");

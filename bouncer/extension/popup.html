@@ -143,6 +143,16 @@ body.answered .chips{display:none}
 .more a:hover{color:var(--brass-2);border-color:var(--brass)}
 .source{display:flex;align-items:center;gap:10px;flex-wrap:wrap;justify-content:center;margin-top:16px;color:var(--muted);font-size:13px}
 .source b{color:var(--text);font-weight:600}
+/* On a phone this was three stacked lines of chrome — a pill, a sentence
+   and a link, each claiming its own row — before anything a reader came
+   for. One line, smaller, centred. */
+@media (max-width:560px){
+  .source{gap:6px;margin-top:11px;font-size:12px;line-height:1.35}
+  .source .pill{font-size:9px;padding:3px 7px}
+  .hero{padding-block:22px 4px}
+  .hero h1{margin-bottom:8px}
+  .door{margin-top:18px}
+}
 .pill{font:600 10px var(--mono);letter-spacing:.12em;text-transform:uppercase;padding:5px 10px;border-radius:999px;background:var(--watch-bg);color:var(--watch);border:1px solid var(--watch-edge)}
 .pill.live{background:var(--ok-bg);color:var(--ok);border-color:var(--ok-edge)}
 .settings{margin:14px auto 0;max-width:760px;display:none;grid-template-columns:auto 1fr;gap:10px 14px;align-items:center;color:var(--muted);font-size:13px;background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:16px}
@@ -231,6 +241,21 @@ body.answered .chips{display:none}
 .vlead,.vsub,.qblurb,.ans,.unread li,.tile .s,.kv dd,.rules li{overflow-wrap:anywhere}
 
 /* ---- the five questions ------------------------------------ */
+/* Somebody typed a ticker. Candidates, never a choice made for them: a
+   ticker is not unique and picking one would be guessing on the exact
+   question this tool exists to answer. */
+.found{background:var(--surface);border:1px solid var(--line);border-radius:var(--r-lg);padding:18px 20px;margin-top:22px}
+.found h2{margin:0;font:600 17px/1.3 var(--sans);letter-spacing:-.01em}
+.hits{list-style:none;margin:12px 0 0;padding:0;display:grid;gap:8px}
+.hit{width:100%;display:grid;grid-template-columns:auto 1fr auto;align-items:baseline;gap:14px;text-align:left;
+  background:var(--surface-2);border:1px solid var(--line);border-radius:var(--r);padding:11px 14px;cursor:pointer;color:inherit;min-width:0}
+.hit:hover{border-color:var(--brass-2);background:rgba(212,160,23,.07)}
+.hit:focus-visible{outline:2px solid var(--brass-2);outline-offset:2px}
+.hit-sym{font:800 16px var(--display);letter-spacing:.03em}
+.hit-name{color:var(--muted);font-size:13.5px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.hit-addr{color:var(--dim);font-size:11.5px;overflow-wrap:anywhere}
+@media (max-width:680px){.hit{grid-template-columns:1fr;gap:3px}.hit-name{white-space:normal}}
+
 /* The line between the answer and the evidence. Everything above it is
    what a reader came for; everything below is where it was read from. */
 .stack-head{display:grid;gap:3px;margin:22px 0 -4px;font:600 15px/1.3 var(--sans);letter-spacing:-.01em}
@@ -471,13 +496,13 @@ footer>span{flex:1 1 100%}
 <main class="wrap">
   <section class="hero">
     <h1>CHECK IT AT THE DOOR</h1>
-    <p>Paste any token. BOUNCER reads the chain at one block and answers five questions: is it the token you meant, can they take it from you, can you sell it, what would you get, and who is already inside.</p>
+    <p>Paste a token — or type its ticker. BOUNCER reads the chain itself, at one block, and answers the five questions you would ask before buying: <b>is this the token you meant</b>, <b>can they take it from you</b>, <b>can you sell it right now</b>, <b>what would you actually get</b>, and <b>who is already inside</b>. No key, no wallet, nothing signed.</p>
   </section>
 
   <section class="door" aria-labelledby="door-label">
     <h2 class="sr" id="door-label">Token address</h2>
     <form id="form">
-      <input id="q" name="q" placeholder="0x… or a Solana mint — a token, its curve, a wallet or a transaction" autocomplete="off" spellcheck="false" inputmode="text" aria-labelledby="door-label">
+      <input id="q" name="q" placeholder="Paste a contract address — or type a ticker and BOUNCER will look for it" autocomplete="off" spellcheck="false" inputmode="text" aria-labelledby="door-label">
       <button class="btn" id="go" type="submit">Check it</button>
     </form>
     <div class="chips" id="chips"></div>
