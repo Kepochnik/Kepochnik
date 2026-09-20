@@ -68,7 +68,7 @@ async function pass(label, extra, spacingMs = 0, shared = null) {
       fetchImpl: slow(demoFetch(), tally, "rpc"),
       minSpacingMs: spacingMs,
     });
-  const blockscout = new BlockscoutClient({ baseUrl: DEMO_BLOCKSCOUT, fetchImpl: slow(demoBlockscoutFetch(), tally, "explorer") });
+  const blockscout = shared?.blockscout ?? new BlockscoutClient({ baseUrl: DEMO_BLOCKSCOUT, fetchImpl: slow(demoBlockscoutFetch(), tally, "explorer") });
   const started = Date.now();
   if (!shared) tally.started = started;
   const before = tally.requests;
@@ -138,15 +138,17 @@ if (process.env.SPACING) await pass(`fast pass, ${process.env.SPACING} ms spacin
     minSpacingMs: 0,
     memo: true,
   });
+  // And one explorer client, memoizing, for the same reason.
+  const blockscout = new BlockscoutClient({ baseUrl: DEMO_BLOCKSCOUT, fetchImpl: slow(demoBlockscoutFetch(), tally, "explorer"), memo: true });
   const at = await rpc.head();
-  const shared = { rpc, tally, at };
+  const shared = { rpc, tally, at, blockscout };
   console.log("\nall three, one client, one block — what a reader actually waits through:");
   const a = await pass("  something on screen", OPENING_SECTIONS, 0, shared);
   const b = await pass("  a verdict", SLOW_SECTIONS, 0, shared);
   const c = await pass("  the whole slip", { skipDev: true }, 0, shared);
   const total = (Date.now() - tally.started) / DELAY;
   console.log(`  cumulative depth: ${a.toFixed(1)} to the first render, ${(a + b).toFixed(1)} to the verdict, ${total.toFixed(1)} to the end`);
-  console.log(`  ${tally.requests} requests in all · ${rpc.memoHits} reads answered from memory instead of asked again`);
+  console.log(`  ${tally.requests} requests in all · ${rpc.memoHits} chain reads and ${blockscout.memoHits} explorer reads answered from memory instead of asked again`);
   if (total > CEILING.staged) {
     console.error(`depth: the staged read is ${total.toFixed(1)} round trips deep, over its ceiling of ${CEILING.staged}.`);
     process.exit(1);

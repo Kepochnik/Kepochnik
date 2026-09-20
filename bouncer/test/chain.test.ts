@@ -133,3 +133,94 @@ test("a client without the memo asks every time, which is the default", async ()
   await rpc.getCode("0xabc", 16);
   assert.equal(sent, 2, "memory that outlives one read would answer the next paste off the last one's chain");
 });
+
+test("the log walk fans out once a span is proven, and still never invents a gap", async () => {
+  // A window is a queue only until the endpoint has answered one span. After
+  // that, every remaining span is the same question already answered, and
+  // asking them one at a time is what made the full pass nineteen seconds
+  // against a chain answering in under two hundred milliseconds.
+  const rounds: number[] = [];
+  let inFlight = 0;
+  let peak = 0;
+  const fetchImpl = (async (_url: string | URL | Request, init?: RequestInit) => {
+    const req = JSON.parse(String(init?.body)) as { id: number; params: [{ fromBlock: string; toBlock: string }] };
+    inFlight++;
+    peak = Math.max(peak, inFlight);
+    await new Promise((r) => setTimeout(r, 5));
+    inFlight--;
+    rounds.push(Number(BigInt(req.params[0].fromBlock)));
+    return new Response(JSON.stringify({ jsonrpc: "2.0", id: req.id, result: [] }));
+  }) as typeof fetch;
+  const rpc = new RpcClient({ urls: ["demo://x"], expectedChainId: ROBINHOOD_CHAIN_ID, fetchImpl });
+  const tape = await readTapeAdaptive(rpc, { fromBlock: 0, toBlock: 9_999, events: [FACTORY_EVENTS.TokenLaunched] }, { startChunk: 1_000, minChunk: 1_000, maxChunk: 1_000, lanes: 6 });
+  assert.equal(tape.complete, true);
+  assert.equal(rounds.length, 10, "every block of the window is still read exactly once");
+  assert.ok(peak > 1, `spans must overlap once one is proven; peak in flight was ${peak}`);
+});
+
+test("a span that fails in the middle of a fan-out is a gap, not a skip", async () => {
+  // The contract this file is built on: what was not read is reported as not
+  // read. A parallel round makes that easy to get wrong — chunk 1 and chunk 3
+  // can come back while chunk 2 fails, and keeping 3 would silently drop the
+  // blocks in between.
+  const served: [number, number][] = [];
+  const fetchImpl = (async (_url: string | URL | Request, init?: RequestInit) => {
+    const req = JSON.parse(String(init?.body)) as { id: number; params: [{ fromBlock: string; toBlock: string }] };
+    const from = Number(BigInt(req.params[0].fromBlock));
+    const to = Number(BigInt(req.params[0].toBlock));
+    // Everything from block 3000 on is refused at any width.
+    if (from >= 3_000) return new Response(JSON.stringify({ jsonrpc: "2.0", id: req.id, error: { code: -32000, message: "block range too wide" } }));
+    served.push([from, to]);
+    return new Response(JSON.stringify({ jsonrpc: "2.0", id: req.id, result: [] }));
+  }) as typeof fetch;
+  const rpc = new RpcClient({ urls: ["demo://x"], expectedChainId: ROBINHOOD_CHAIN_ID, fetchImpl });
+  const tape = await readTapeAdaptive(rpc, { fromBlock: 0, toBlock: 9_999, events: [FACTORY_EVENTS.TokenLaunched] }, { startChunk: 1_000, minChunk: 1_000, maxChunk: 1_000, lanes: 6 });
+  assert.equal(tape.complete, false, "a window that could not be finished says so");
+  assert.equal(tape.toBlock, 2_999, "and says exactly how far it got");
+  assert.ok(served.every(([from]) => from < 3_000));
+});
+
+test("a refused log span is learned once, not rediscovered by every walk", async () => {
+  // Measured on Base: five refused requests at about 2.4 seconds each, and
+  // the walk before them had just been taught the same limit. Twelve
+  // seconds of a reader's wait spent learning a known thing twice.
+  const spans: number[] = [];
+  const fetchImpl = (async (_url: string | URL | Request, init?: RequestInit) => {
+    const req = JSON.parse(String(init?.body)) as { id: number; method: string; params: [{ fromBlock: string; toBlock: string }] };
+    const from = Number(BigInt(req.params[0].fromBlock));
+    const to = Number(BigInt(req.params[0].toBlock));
+    spans.push(to - from + 1);
+    if (to - from + 1 > 1_000) return new Response(JSON.stringify({ jsonrpc: "2.0", id: req.id, error: { code: -32000, message: "exceed maximum block range: 1000" } }));
+    return new Response(JSON.stringify({ jsonrpc: "2.0", id: req.id, result: [] }));
+  }) as typeof fetch;
+  const rpc = new RpcClient({ urls: ["demo://x"], expectedChainId: ROBINHOOD_CHAIN_ID, fetchImpl });
+
+  await readTapeAdaptive(rpc, { fromBlock: 0, toBlock: 3_999, events: [FACTORY_EVENTS.TokenLaunched] }, { startChunk: 64_000, minChunk: 500, maxChunk: 64_000 });
+  const firstWalk = spans.length;
+  assert.ok(spans.includes(4_000), "the first walk still has to discover the limit");
+  assert.ok(rpc.logSpanCeiling() !== null, "and the client remembers what it cost");
+
+  spans.length = 0;
+  await readTapeAdaptive(rpc, { fromBlock: 10_000, toBlock: 13_999, events: [FACTORY_EVENTS.TokenLaunched] }, { startChunk: 64_000, minChunk: 500, maxChunk: 64_000 });
+  assert.ok(spans.every((s) => s <= 1_000), `the second walk must not reopen a refused span; asked for ${spans.join(", ")}`);
+  assert.ok(spans.length < firstWalk, `and should cost fewer requests than the first (${spans.length} vs ${firstWalk})`);
+});
+
+test("being served a narrow span is not evidence that a wide one would be refused", async () => {
+  // The first version of the lesson above capped every later walk at the
+  // widest span that had been SERVED — but a caller that asked for a
+  // thousand blocks and got them has learned nothing about ten thousand,
+  // and treating it as a limit made every walk after it needlessly narrow.
+  const spans: number[] = [];
+  const fetchImpl = (async (_url: string | URL | Request, init?: RequestInit) => {
+    const req = JSON.parse(String(init?.body)) as { id: number; params: [{ fromBlock: string; toBlock: string }] };
+    spans.push(Number(BigInt(req.params[0].toBlock)) - Number(BigInt(req.params[0].fromBlock)) + 1);
+    return new Response(JSON.stringify({ jsonrpc: "2.0", id: req.id, result: [] }));
+  }) as typeof fetch;
+  const rpc = new RpcClient({ urls: ["demo://x"], expectedChainId: ROBINHOOD_CHAIN_ID, fetchImpl });
+  await readTapeAdaptive(rpc, { fromBlock: 0, toBlock: 99, events: [FACTORY_EVENTS.TokenLaunched] }, { startChunk: 100, minChunk: 100, maxChunk: 100 });
+  assert.equal(rpc.logSpanCeiling(), null, "nothing was refused, so nothing is capped");
+  spans.length = 0;
+  await readTapeAdaptive(rpc, { fromBlock: 0, toBlock: 49_999, events: [FACTORY_EVENTS.TokenLaunched] }, { startChunk: 50_000, minChunk: 1_000, maxChunk: 50_000 });
+  assert.deepEqual(spans, [50_000], "the wide walk is still allowed to open wide");
+});

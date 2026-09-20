@@ -9,6 +9,16 @@
 export interface BlockscoutOptions {
   baseUrl: string;
   fetchImpl?: typeof fetch;
+  /**
+   * Remember each path's answer for the life of this client.
+   *
+   * The page reads a token three times so something true is on screen
+   * early, and without this the explorer — the slowest thing in the read —
+   * is asked the same questions on every pass. Give each read its own
+   * client: one that outlived the read would answer the next paste with
+   * the last one's numbers.
+   */
+  memo?: boolean;
   timeoutMs?: number;
 }
 
@@ -76,11 +86,23 @@ export class BlockscoutClient {
   private readonly baseUrl: string;
   private readonly fetchImpl: typeof fetch;
   private readonly timeoutMs: number;
+  /**
+   * Answers already given, for the life of this client. See `memo` below.
+   * Failures are remembered too: a path that just timed out will time out
+   * again, and paying for that twice is the worst version of this.
+   */
+  private readonly memo: Map<string, { ok: true; value: unknown } | { ok: false; error: unknown }> | null;
 
   constructor(options: BlockscoutOptions) {
     this.baseUrl = options.baseUrl.replace(/\/$/, "");
     this.fetchImpl = options.fetchImpl ?? ((input: RequestInfo | URL, init?: RequestInit) => fetch(input, init));
-    this.timeoutMs = options.timeoutMs ?? 15_000;
+    // Six seconds, not fifteen. Measured on Base: /tokens/{…}/holders for
+    // USDC hung and the client sat on it for the full fifteen — a timeout,
+    // not a slow answer, and fifteen seconds of a reader's wait spent
+    // learning nothing. The explorer is optional to every answer this tool
+    // gives; the slip already says when it did not come back.
+    this.timeoutMs = options.timeoutMs ?? 6_000;
+    this.memo = options.memo ? new Map() : null;
   }
 
   /** Browsers drop the user-agent header silently; Node and workers send it, which keeps bot challenges away. */
@@ -106,6 +128,9 @@ export class BlockscoutClient {
    */
   oldestSeconds = 0;
 
+  /** How many reads the memo answered without asking the explorer. */
+  memoHits = 0;
+
   stats(): { path: string; calls: number; ms: number; failures: number }[] {
     return [...this.counters.entries()].map(([path, v]) => ({ path, ...v })).sort((a, b) => b.ms - a.ms);
   }
@@ -122,6 +147,12 @@ export class BlockscoutClient {
   }
 
   async get<T>(path: string): Promise<T> {
+    const remembered = this.memo?.get(path);
+    if (remembered) {
+      this.memoHits++;
+      if (remembered.ok) return remembered.value as T;
+      throw remembered.error;
+    }
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.timeoutMs);
     const startedAt = Date.now();
@@ -140,12 +171,14 @@ export class BlockscoutClient {
       // numbers are for — and saying nothing about it would not be.
       const age = Number(response.headers?.get?.("x-bouncer-age") ?? 0);
       if (Number.isFinite(age) && age > this.oldestSeconds) this.oldestSeconds = age;
+      this.memo?.set(path, { ok: true, value: body });
       return body;
     } catch (error) {
       // Recorded after the body, not before the request: a call that failed
       // parsing is a failure, and counting it as a success was exactly the
       // bug that made the EVM profiler lie about retries earlier today.
       this.record(path, Date.now() - startedAt, true);
+      this.memo?.set(path, { ok: false, error });
       throw error;
     } finally {
       clearTimeout(timer);

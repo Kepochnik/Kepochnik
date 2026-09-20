@@ -320,14 +320,18 @@
     const filterTopics = [topic0.length === 1 ? topic0[0] : topic0, ...request.topics ?? []];
     const minChunk = chunking.minChunk ?? 1e3;
     const maxChunk = chunking.maxChunk ?? 2e5;
-    let chunk = Math.min(maxChunk, Math.max(minChunk, chunking.startChunk ?? 5e4));
+    const ceiling = rpc.logSpanCeiling?.() ?? null;
+    let chunk = Math.min(maxChunk, ceiling ?? Infinity, Math.max(minChunk, chunking.startChunk ?? 5e4));
+    chunk = Math.max(minChunk, chunk);
     const maxRequests = chunking.maxRequests ?? Infinity;
     const deadline = chunking.budgetMs === void 0 ? Infinity : Date.now() + chunking.budgetMs;
     const logs = [];
     let chunks = 0;
     let requests = 0;
+    const lanes = Math.max(1, chunking.lanes ?? 6);
     let from = request.fromBlock;
     let complete = true;
+    let proven = false;
     while (from <= request.toBlock) {
       if (Date.now() >= deadline) {
         complete = false;
@@ -337,22 +341,41 @@
         complete = false;
         break;
       }
-      const to = Math.min(from + chunk - 1, request.toBlock);
-      try {
-        requests++;
-        const raw = await rpc.getLogs({ address: request.address, topics: filterTopics, fromBlock: from, toBlock: to });
-        chunks++;
-        for (const log of raw) logs.push(decodeRaw(byTopic, log));
-        from = to + 1;
-        chunk = Math.min(maxChunk, chunk * 2);
-      } catch (error) {
-        if (chunk <= minChunk) {
-          if (!chunks) throw error;
-          complete = false;
-          break;
-        }
-        chunk = Math.max(minChunk, Math.floor(chunk / 8));
+      const remaining = request.toBlock - from + 1;
+      const width = proven ? Math.min(lanes, Math.ceil(remaining / chunk), Math.max(1, maxRequests - requests)) : 1;
+      const spans = [];
+      for (let i = 0; i < width; i++) {
+        const start = from + i * chunk;
+        if (start > request.toBlock) break;
+        spans.push({ fromBlock: start, toBlock: Math.min(start + chunk - 1, request.toBlock) });
       }
+      requests += spans.length;
+      const answers = await Promise.all(
+        spans.map(
+          (span) => rpc.getLogs({ address: request.address, topics: filterTopics, fromBlock: span.fromBlock, toBlock: span.toBlock }).then((raw) => ({ ok: true, raw })).catch((error) => ({ ok: false, error }))
+        )
+      );
+      let advanced = 0;
+      for (const answer of answers) {
+        if (!answer.ok) break;
+        chunks++;
+        for (const log of answer.raw) logs.push(decodeRaw(byTopic, log));
+        advanced++;
+      }
+      if (advanced) {
+        from = spans[advanced - 1].toBlock + 1;
+        proven = true;
+        chunk = Math.min(maxChunk, chunk * 2);
+        if (advanced === answers.length) continue;
+      }
+      const failure = answers[advanced];
+      if (chunk <= minChunk) {
+        if (!chunks) throw failure.ok ? new Error("log walk made no progress") : failure.error;
+        complete = false;
+        break;
+      }
+      chunk = Math.max(minChunk, Math.floor(chunk / 8));
+      proven = false;
     }
     logs.sort((a, b) => a.blockNumber - b.blockNumber || a.logIndex - b.logIndex);
     return { logs, fromBlock: request.fromBlock, toBlock: complete ? request.toBlock : Math.max(request.fromBlock, from - 1), chunks, complete };
@@ -390,10 +413,17 @@
     baseUrl;
     fetchImpl;
     timeoutMs;
+    /**
+     * Answers already given, for the life of this client. See `memo` below.
+     * Failures are remembered too: a path that just timed out will time out
+     * again, and paying for that twice is the worst version of this.
+     */
+    memo;
     constructor(options) {
       this.baseUrl = options.baseUrl.replace(/\/$/, "");
       this.fetchImpl = options.fetchImpl ?? ((input, init) => fetch(input, init));
-      this.timeoutMs = options.timeoutMs ?? 15e3;
+      this.timeoutMs = options.timeoutMs ?? 6e3;
+      this.memo = options.memo ? /* @__PURE__ */ new Map() : null;
     }
     /** Browsers drop the user-agent header silently; Node and workers send it, which keeps bot challenges away. */
     static USER_AGENT = "Mozilla/5.0 (compatible; bouncer/0.3; +https://github.com/Kepochnik/bouncer)";
@@ -415,6 +445,8 @@
      * reading as a live one.
      */
     oldestSeconds = 0;
+    /** How many reads the memo answered without asking the explorer. */
+    memoHits = 0;
     stats() {
       return [...this.counters.entries()].map(([path, v]) => ({ path, ...v })).sort((a, b) => b.ms - a.ms);
     }
@@ -427,6 +459,12 @@
       this.counters.set(key, entry);
     }
     async get(path) {
+      const remembered = this.memo?.get(path);
+      if (remembered) {
+        this.memoHits++;
+        if (remembered.ok) return remembered.value;
+        throw remembered.error;
+      }
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), this.timeoutMs);
       const startedAt = Date.now();
@@ -439,9 +477,11 @@
         this.record(path, Date.now() - startedAt, false);
         const age = Number(response.headers?.get?.("x-bouncer-age") ?? 0);
         if (Number.isFinite(age) && age > this.oldestSeconds) this.oldestSeconds = age;
+        this.memo?.set(path, { ok: true, value: body });
         return body;
       } catch (error) {
         this.record(path, Date.now() - startedAt, true);
+        this.memo?.set(path, { ok: false, error });
         throw error;
       } finally {
         clearTimeout(timer);
@@ -1278,6 +1318,18 @@
     /** One entry per request that reached the wire; see slowest(). Bounded so a log walk cannot grow it without limit. */
     requestLog = [];
     nextId = 1;
+    /**
+     * The widest eth_getLogs span this client has had served, and the
+     * narrowest it has had refused.
+     *
+     * Nobody publishes the block range an endpoint allows, so every log walk
+     * has been rediscovering it from scratch — and rediscovery is expensive:
+     * measured on Base, five refused requests at about 2.4 seconds each,
+     * twelve seconds spent learning something the walk before it already
+     * knew. Learned once per client, which is once per read.
+     */
+    logSpanServed = 0;
+    logSpanRefused = Infinity;
     /** See RpcOptions.memo. Null when off, which is the default. */
     memo;
     verifiedChain = false;
@@ -1368,7 +1420,28 @@
         fromBlock: toHex(filter.fromBlock),
         toBlock: toHex(filter.toBlock)
       };
-      return await this.send("eth_getLogs", [params]);
+      const span = filter.toBlock - filter.fromBlock + 1;
+      try {
+        const logs = await this.send("eth_getLogs", [params]);
+        if (span > this.logSpanServed) this.logSpanServed = span;
+        return logs;
+      } catch (error) {
+        if (isRangeRefusal(error) && span < this.logSpanRefused) this.logSpanRefused = span;
+        throw error;
+      }
+    }
+    /**
+     * The widest span the next log walk should open with, or null when this
+     * client has no reason to cap it.
+     *
+     * Only a refusal caps anything. Being served a thousand blocks says
+     * nothing about whether twenty thousand would be served — the caller
+     * simply did not ask for more — and treating it as a limit would make
+     * every later walk narrower than it needs to be. A refusal is the only
+     * direction that carries information, and it carries it in one direction.
+     */
+    logSpanCeiling() {
+      return Number.isFinite(this.logSpanRefused) ? Math.max(1, Math.floor(this.logSpanRefused / 8)) : null;
     }
     /**
      * Public endpoints cap the block span of one eth_getLogs request. This
@@ -1548,6 +1621,10 @@
     const params = JSON.stringify(request.params);
     for (const tag of MOVING_TAGS) if (params.includes(tag)) return null;
     return `${request.method}|${params}`;
+  }
+  function isRangeRefusal(error) {
+    const message = (error instanceof Error ? error.message : String(error)).toLowerCase();
+    return message.includes("block range") || message.includes("range is too") || message.includes("too many blocks") || message.includes("query returned more than") || message.includes("exceed maximum block range") || message.includes("limit exceeded") || message.includes("response size exceeded") || message.includes("too large");
   }
   function toHeader(raw, tag) {
     const block = raw;
@@ -4830,11 +4907,13 @@
     const managed = considered.filter((p) => manager && p.owner === manager);
     if (managed.length) {
       let receipts = [];
-      try {
-        receipts = await rpc.sendBatchSettled(managed.map((p) => ({ method: "eth_getTransactionReceipt", params: [p.tx] })));
-      } catch {
-        receipts = [];
+      const RECEIPT_SLICE = 20;
+      const slices = [];
+      for (let i = 0; i < managed.length; i += RECEIPT_SLICE) {
+        slices.push(managed.slice(i, i + RECEIPT_SLICE).map((p) => ({ method: "eth_getTransactionReceipt", params: [p.tx] })));
       }
+      const answered = await Promise.all(slices.map((slice) => rpc.sendBatchSettled(slice).catch(() => slice.map(() => new Error("receipt batch refused")))));
+      for (const slice of answered) receipts.push(...slice);
       const idCalls = [];
       const idFor = [];
       receipts.forEach((receipt, i) => {
@@ -6456,12 +6535,12 @@
     const urls = url ? [url] : proxy ? [`${proxy}/rpc/${c.key}`, ...c.rpc] : c.rpc;
     return new RpcClient({ urls, expectedChainId: c.chainId, minSpacingMs: 120, memo });
   }
-  function blockscoutFor() {
-    if (mode === "demo") return new BlockscoutClient({ baseUrl: DEMO_BLOCKSCOUT, fetchImpl: demoBlockscoutFetch() });
+  function blockscoutFor(memo = false) {
+    if (mode === "demo") return new BlockscoutClient({ baseUrl: DEMO_BLOCKSCOUT, fetchImpl: demoBlockscoutFetch(), memo });
     const c = chain();
     if (!c.blockscout) return null;
     const proxy = proxyBase();
-    return new BlockscoutClient({ baseUrl: proxy ? `${proxy}/api/${c.key}` : c.blockscout });
+    return new BlockscoutClient({ baseUrl: proxy ? `${proxy}/api/${c.key}` : c.blockscout, memo });
   }
   function factoryFor() {
     const c = chain();
@@ -6565,7 +6644,7 @@
     }
     const run = ++doorRun;
     busy("reading the chain at the door\u2026");
-    const options = mode === "demo" ? { chain: CHAINS.robinhood, factory: factoryFor(), blockscout: blockscoutFor(), devHours: 8, chunkSize: 1e5, launchSearchBlocks: 4e5 } : { chain: chain(), factory: factoryFor(), blockscout: blockscoutFor(), devHours: 24 };
+    const options = mode === "demo" ? { chain: CHAINS.robinhood, factory: factoryFor(), blockscout: blockscoutFor(true), devHours: 8, chunkSize: 1e5, launchSearchBlocks: 4e5 } : { chain: chain(), factory: factoryFor(), blockscout: blockscoutFor(true), devHours: 24 };
     const rpc = rpcFor(true);
     let at;
     let drawn = null;

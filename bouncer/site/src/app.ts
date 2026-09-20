@@ -145,12 +145,19 @@ function rpcFor(memo = false): RpcClient {
   return new RpcClient({ urls, expectedChainId: c.chainId, minSpacingMs: 120, memo });
 }
 
-function blockscoutFor(): BlockscoutClient | null {
-  if (mode === "demo") return new BlockscoutClient({ baseUrl: DEMO_BLOCKSCOUT, fetchImpl: demoBlockscoutFetch() });
+/**
+ * One explorer client per read, with `memo` on for the same reason the RPC
+ * client has it: the page reads a token three times, and the explorer is
+ * the slowest thing in the read. Without it the second and third passes
+ * ask the same four questions again — including, on Base, one that sat on
+ * a timeout for the full six seconds and learned nothing.
+ */
+function blockscoutFor(memo = false): BlockscoutClient | null {
+  if (mode === "demo") return new BlockscoutClient({ baseUrl: DEMO_BLOCKSCOUT, fetchImpl: demoBlockscoutFetch(), memo });
   const c = chain();
   if (!c.blockscout) return null;
   const proxy = proxyBase();
-  return new BlockscoutClient({ baseUrl: proxy ? `${proxy}/api/${c.key}` : c.blockscout });
+  return new BlockscoutClient({ baseUrl: proxy ? `${proxy}/api/${c.key}` : c.blockscout, memo });
 }
 
 function factoryFor(): string | undefined {
@@ -327,8 +334,8 @@ async function runDoor(address: string): Promise<void> {
   const run = ++doorRun;
   busy("reading the chain at the door…");
   const options = mode === "demo"
-    ? { chain: CHAINS.robinhood, factory: factoryFor(), blockscout: blockscoutFor(), devHours: 8, chunkSize: 100_000, launchSearchBlocks: 400_000 }
-    : { chain: chain(), factory: factoryFor(), blockscout: blockscoutFor(), devHours: 24 };
+    ? { chain: CHAINS.robinhood, factory: factoryFor(), blockscout: blockscoutFor(true), devHours: 8, chunkSize: 100_000, launchSearchBlocks: 400_000 }
+    : { chain: chain(), factory: factoryFor(), blockscout: blockscoutFor(true), devHours: 24 };
 
   // Three renders off one paste, each drawn the moment its own reads land.
   //

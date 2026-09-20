@@ -352,12 +352,20 @@ export async function readV3Lock(
     // cautious reading. Letting it throw discarded the entire liquidity
     // section instead, which is how sixty seconds of log reading became
     // "MISSING" on Base for a second time.
+    // In slices, and the slices go out together.
+    //
+    // Sixty receipts in one request is over what a public endpoint will
+    // take: measured on Base, that exact batch was refused after 2.5
+    // seconds, and a refusal here costs the whole NFT-owner resolution.
+    // Twenty apiece, three requests, one round trip.
     let receipts: (unknown | Error)[] = [];
-    try {
-      receipts = await rpc.sendBatchSettled(managed.map((p) => ({ method: "eth_getTransactionReceipt", params: [p.tx] })));
-    } catch {
-      receipts = [];
+    const RECEIPT_SLICE = 20;
+    const slices: { method: string; params: unknown[] }[][] = [];
+    for (let i = 0; i < managed.length; i += RECEIPT_SLICE) {
+      slices.push(managed.slice(i, i + RECEIPT_SLICE).map((p) => ({ method: "eth_getTransactionReceipt", params: [p.tx] })));
     }
+    const answered = await Promise.all(slices.map((slice) => rpc.sendBatchSettled(slice).catch(() => slice.map(() => new Error("receipt batch refused")))));
+    for (const slice of answered) receipts.push(...slice);
     const idCalls: { to: string; data: Hex }[] = [];
     const idFor: { key: string }[] = [];
     receipts.forEach((receipt, i) => {

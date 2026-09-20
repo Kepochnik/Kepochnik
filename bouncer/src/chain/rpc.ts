@@ -111,6 +111,19 @@ export class RpcClient {
   /** One entry per request that reached the wire; see slowest(). Bounded so a log walk cannot grow it without limit. */
   private readonly requestLog: { label: string; size: number; ms: number }[] = [];
   private nextId = 1;
+  /**
+   * The widest eth_getLogs span this client has had served, and the
+   * narrowest it has had refused.
+   *
+   * Nobody publishes the block range an endpoint allows, so every log walk
+   * has been rediscovering it from scratch — and rediscovery is expensive:
+   * measured on Base, five refused requests at about 2.4 seconds each,
+   * twelve seconds spent learning something the walk before it already
+   * knew. Learned once per client, which is once per read.
+   */
+  logSpanServed = 0;
+  logSpanRefused = Infinity;
+
   /** See RpcOptions.memo. Null when off, which is the default. */
   private readonly memo: Map<string, { ok: true; value: unknown } | { ok: false; error: RpcError }> | null;
   private verifiedChain = false;
@@ -214,7 +227,34 @@ export class RpcClient {
       fromBlock: toHex(filter.fromBlock),
       toBlock: toHex(filter.toBlock),
     };
-    return (await this.send("eth_getLogs", [params])) as RawLog[];
+    const span = filter.toBlock - filter.fromBlock + 1;
+    try {
+      const logs = (await this.send("eth_getLogs", [params])) as RawLog[];
+      if (span > this.logSpanServed) this.logSpanServed = span;
+      return logs;
+    } catch (error) {
+      // Only a range refusal teaches anything about the span. A rate limit
+      // or a dead endpoint says nothing about how wide a window may be, and
+      // recording it as a limit would narrow every later walk for no reason.
+      if (isRangeRefusal(error) && span < this.logSpanRefused) this.logSpanRefused = span;
+      throw error;
+    }
+  }
+
+  /**
+   * The widest span the next log walk should open with, or null when this
+   * client has no reason to cap it.
+   *
+   * Only a refusal caps anything. Being served a thousand blocks says
+   * nothing about whether twenty thousand would be served — the caller
+   * simply did not ask for more — and treating it as a limit would make
+   * every later walk narrower than it needs to be. A refusal is the only
+   * direction that carries information, and it carries it in one direction.
+   */
+  logSpanCeiling(): number | null {
+    // Declared optional on the reading side (see readTapeAdaptive); always
+    // present here, on a real client.
+    return Number.isFinite(this.logSpanRefused) ? Math.max(1, Math.floor(this.logSpanRefused / 8)) : null;
   }
 
   /**
@@ -429,6 +469,27 @@ function memoKey(request: RpcRequest): string | null {
   const params = JSON.stringify(request.params);
   for (const tag of MOVING_TAGS) if (params.includes(tag)) return null;
   return `${request.method}|${params}`;
+}
+
+/**
+ * Does this failure mean "that window is too wide"?
+ *
+ * Endpoints say it in their own words and with their own codes, so this is
+ * a list of the wordings seen in the wild rather than anything standard. A
+ * miss only costs the client a lesson it could have learned.
+ */
+function isRangeRefusal(error: unknown): boolean {
+  const message = (error instanceof Error ? error.message : String(error)).toLowerCase();
+  return (
+    message.includes("block range") ||
+    message.includes("range is too") ||
+    message.includes("too many blocks") ||
+    message.includes("query returned more than") ||
+    message.includes("exceed maximum block range") ||
+    message.includes("limit exceeded") ||
+    message.includes("response size exceeded") ||
+    message.includes("too large")
+  );
 }
 
 function toHeader(raw: unknown, tag: string): BlockHeader {
