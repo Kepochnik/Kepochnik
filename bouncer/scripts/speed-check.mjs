@@ -184,8 +184,12 @@ for (let i = 0; i < RUNS; i++) {
   // is the only thing that knows. Guessing from here is what got this wrong
   // twice.
   if (one.complete > BUDGET.complete) {
-    for (const w of [...(one.wire ?? [])].sort((a, b) => b.ms - a.ms).slice(0, 5)) {
-      console.log(`        ${String(w.ms).padStart(5)} ms  at ${String(w.at).padStart(5)} ms  ${w.ok ? " " : "!"} ${w.url}`);
+    // Anything still in the air comes first, however long the settled ones
+    // took: a request that never answered outranks every one that did.
+    const wire = [...(one.wire ?? [])].sort((a, b) => Number(a.done) - Number(b.done) || b.ms - a.ms);
+    for (const w of wire.slice(0, 6)) {
+      const took = w.done ? `${String(w.ms).padStart(5)} ms` : "  still in the air";
+      console.log(`        ${took}  at ${String(w.at).padStart(5)} ms  ${!w.done ? "?" : w.ok ? " " : "!"} ${w.url}`);
     }
   }
 }

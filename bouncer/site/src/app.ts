@@ -1384,7 +1384,7 @@ function download(blob: Blob, filename: string): void {
 declare global {
   interface Window {
     __bouncerRenders?: { stage: Stage; at: number; word: string }[];
-    __bouncerWire?: { url: string; at: number; ms: number; ok: boolean }[];
+    __bouncerWire?: { url: string; at: number; ms: number; ok: boolean; done: boolean }[];
   }
 }
 
@@ -1407,15 +1407,27 @@ declare global {
   const inner = globalThis.fetch.bind(globalThis);
   globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
     const log = (window.__bouncerWire ??= []);
-    const at = Math.round(performance.now());
     const url = String(input instanceof Request ? input.url : input);
     const started = performance.now();
+    // Recorded when it LEAVES, not when it comes back.
+    //
+    // The first version only logged on settle, which hid the one request a
+    // reader most needs explained: the one that never answered. A read that
+    // took six seconds showed five entries of a hundred and seventy
+    // milliseconds each and nothing else, because whatever was holding it up
+    // was still in the air when the log was read. `done: false` is the
+    // entry that matters.
+    const entry = { url, at: Math.round(started), ms: 0, ok: false, done: false };
+    if (log.length < 400) log.push(entry);
     try {
       const response = await inner(input, init);
-      if (log.length < 400) log.push({ url, at, ms: Math.round(performance.now() - started), ok: response.ok });
+      entry.ms = Math.round(performance.now() - started);
+      entry.ok = response.ok;
+      entry.done = true;
       return response;
     } catch (error) {
-      if (log.length < 400) log.push({ url, at, ms: Math.round(performance.now() - started), ok: false });
+      entry.ms = Math.round(performance.now() - started);
+      entry.done = true;
       throw error;
     }
   };

@@ -7601,15 +7601,19 @@
     const inner = globalThis.fetch.bind(globalThis);
     globalThis.fetch = async (input, init) => {
       const log = window.__bouncerWire ??= [];
-      const at = Math.round(performance.now());
       const url = String(input instanceof Request ? input.url : input);
       const started = performance.now();
+      const entry = { url, at: Math.round(started), ms: 0, ok: false, done: false };
+      if (log.length < 400) log.push(entry);
       try {
         const response = await inner(input, init);
-        if (log.length < 400) log.push({ url, at, ms: Math.round(performance.now() - started), ok: response.ok });
+        entry.ms = Math.round(performance.now() - started);
+        entry.ok = response.ok;
+        entry.done = true;
         return response;
       } catch (error) {
-        if (log.length < 400) log.push({ url, at, ms: Math.round(performance.now() - started), ok: false });
+        entry.ms = Math.round(performance.now() - started);
+        entry.done = true;
         throw error;
       }
     };
