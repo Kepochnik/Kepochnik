@@ -1360,6 +1360,7 @@
     fetchImpl;
     minSpacingMs;
     rateLimitRetries;
+    requestBudgetMs;
     activeIndex = 0;
     /**
      * Calls, milliseconds and failures per method. The Solana side got this
@@ -1391,11 +1392,12 @@
       if (options.urls.length === 0) throw new Error("at least one RPC url is required");
       this.urls = options.urls;
       this.expectedChainId = options.expectedChainId;
-      this.timeoutMs = options.timeoutMs ?? 15e3;
+      this.timeoutMs = options.timeoutMs ?? 6e3;
       this.fetchImpl = options.fetchImpl ?? ((input, init) => fetch(input, init));
       this.minSpacingMs = options.minSpacingMs ?? (options.fetchImpl ? 0 : 120);
       this.rateLimitRetries = options.rateLimitRetries ?? 3;
       this.memo = options.memo ? /* @__PURE__ */ new Map() : null;
+      this.requestBudgetMs = options.requestBudgetMs ?? 9e3;
     }
     /** How many reads the memo answered without asking anybody. */
     memoHits = 0;
@@ -1627,8 +1629,15 @@
       }));
       let lastError;
       const startedAt = Date.now();
-      const attempts = this.urls.length * (this.rateLimitRetries + 1);
-      for (let attempt = 0; attempt < attempts; attempt++) {
+      const deadline = startedAt + this.requestBudgetMs;
+      let transportFailures = 0;
+      let rateLimited = 0;
+      for (; ; ) {
+        if (transportFailures >= this.urls.length || rateLimited > this.rateLimitRetries) break;
+        if (Date.now() >= deadline) {
+          lastError = lastError ?? new RpcError(`no endpoint answered within ${this.requestBudgetMs} ms`);
+          break;
+        }
         const url = this.urls[this.activeIndex];
         try {
           await this.pace();
@@ -1665,10 +1674,12 @@
           lastError = error;
           if (error instanceof RpcError && error.isRateLimit) {
             if (this.urls.length > 1) this.activeIndex = (this.activeIndex + 1) % this.urls.length;
-            await new Promise((resolve) => setTimeout(resolve, 300 * 2 ** Math.min(attempt, 4)));
+            await new Promise((resolve) => setTimeout(resolve, Math.min(300 * 2 ** rateLimited, Math.max(0, deadline - Date.now()))));
+            rateLimited++;
             continue;
           }
           if (error instanceof RpcError && error.isRevert) throw error;
+          transportFailures++;
           this.activeIndex = (this.activeIndex + 1) % this.urls.length;
           this.verifiedChain = false;
         }

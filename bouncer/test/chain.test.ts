@@ -224,3 +224,47 @@ test("being served a narrow span is not evidence that a wide one would be refuse
   await readTapeAdaptive(rpc, { fromBlock: 0, toBlock: 49_999, events: [FACTORY_EVENTS.TokenLaunched] }, { startChunk: 50_000, minChunk: 1_000, maxChunk: 50_000 });
   assert.deepEqual(spans, [50_000], "the wide walk is still allowed to open wide");
 });
+
+test("one dead endpoint costs one timeout, not a walk round the list four times", async () => {
+  // Where a 14.4-second door came from on a site whose median is four.
+  // The retry budget was urls × (rateLimitRetries + 1) — eight attempts
+  // over two endpoints — and each attempt could hold the line for the full
+  // fifteen-second timeout. Two minutes for one logical read.
+  //
+  // A transport failure and a rate limit are different things. An endpoint
+  // that did not answer is worth trying its neighbour once; walking the
+  // list again learns nothing and costs the timeout each pass.
+  let attempts = 0;
+  const rpc = new RpcClient({
+    urls: ["https://a.invalid", "https://b.invalid"],
+    expectedChainId: ROBINHOOD_CHAIN_ID,
+    minSpacingMs: 0,
+    fetchImpl: (async () => {
+      attempts++;
+      throw new TypeError("socket hang up");
+    }) as unknown as typeof fetch,
+  });
+  await assert.rejects(() => rpc.getCode("0xabc", 16), /socket hang up/);
+  assert.equal(attempts, 2, `each endpoint is asked once and no more; got ${attempts}`);
+});
+
+test("a read gives up on the clock, whatever the endpoint list is doing", async () => {
+  // The only bound that holds when one attempt can cost seconds. Without
+  // it a long list of slow endpoints multiplies out, and the number nobody
+  // is watching is the product.
+  const rpc = new RpcClient({
+    urls: ["https://slow1.invalid", "https://slow2.invalid", "https://slow3.invalid", "https://slow4.invalid"],
+    expectedChainId: ROBINHOOD_CHAIN_ID,
+    minSpacingMs: 0,
+    timeoutMs: 250,
+    requestBudgetMs: 400,
+    fetchImpl: (async (_url: string | URL | Request, init?: RequestInit) =>
+      new Promise((_resolve, reject) => {
+        init?.signal?.addEventListener("abort", () => reject(new Error("aborted")));
+      })) as unknown as typeof fetch,
+  });
+  const started = Date.now();
+  await assert.rejects(() => rpc.getCode("0xabc", 16));
+  const spent = Date.now() - started;
+  assert.ok(spent < 1_200, `the budget is 400 ms across four endpoints; the read took ${spent} ms`);
+});

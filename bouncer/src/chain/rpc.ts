@@ -15,6 +15,12 @@ export interface RpcOptions {
   /** Retries on 429 / -32005 style rate limits, with backoff. */
   rateLimitRetries?: number;
   /**
+   * The most wall-clock one logical read may spend across every retry and
+   * every endpoint. Past it the read gives up and reports the last real
+   * failure, rather than working through a list while a reader waits.
+   */
+  requestBudgetMs?: number;
+  /**
    * Remember answers to reads pinned to a block, for the life of this client.
    *
    * The page reads the same token three times — the chain only, then with
@@ -100,6 +106,7 @@ export class RpcClient {
   private readonly fetchImpl: typeof fetch;
   private readonly minSpacingMs: number;
   private readonly rateLimitRetries: number;
+  private readonly requestBudgetMs: number;
   private activeIndex = 0;
   /**
    * Calls, milliseconds and failures per method. The Solana side got this
@@ -133,11 +140,20 @@ export class RpcClient {
     if (options.urls.length === 0) throw new Error("at least one RPC url is required");
     this.urls = options.urls;
     this.expectedChainId = options.expectedChainId;
-    this.timeoutMs = options.timeoutMs ?? 15_000;
+    // Six seconds, not fifteen.
+    //
+    // Measured, per request, on two chains: every healthy call comes back
+    // in under 160 ms. Fifteen seconds is ninety times that — it is not a
+    // timeout, it is a promise never to give up. And it was multiplied:
+    // eight attempts across two endpoints put the worst case for ONE
+    // logical read at two minutes, which is where a 14.4-second door came
+    // from on a site whose median is four.
+    this.timeoutMs = options.timeoutMs ?? 6_000;
     this.fetchImpl = options.fetchImpl ?? ((input: RequestInfo | URL, init?: RequestInit) => fetch(input, init));
     this.minSpacingMs = options.minSpacingMs ?? (options.fetchImpl ? 0 : 120);
     this.rateLimitRetries = options.rateLimitRetries ?? 3;
     this.memo = options.memo ? new Map() : null;
+    this.requestBudgetMs = options.requestBudgetMs ?? 9_000;
   }
 
   /** How many reads the memo answered without asking anybody. */
@@ -408,8 +424,23 @@ export class RpcClient {
 
     let lastError: unknown;
     const startedAt = Date.now();
-    const attempts = this.urls.length * (this.rateLimitRetries + 1);
-    for (let attempt = 0; attempt < attempts; attempt++) {
+    const deadline = startedAt + this.requestBudgetMs;
+    // Two budgets, because the two failures mean different things. An
+    // endpoint that did not answer is worth trying its neighbour ONCE —
+    // walking the list four times over says nothing new and costs the
+    // timeout each pass. A rate limit is the endpoint talking, and riding
+    // it out briefly is what the backoff is for.
+    //
+    // Both sit under a wall-clock budget, which is the only bound that
+    // holds when a single attempt can cost seconds.
+    let transportFailures = 0;
+    let rateLimited = 0;
+    for (;;) {
+      if (transportFailures >= this.urls.length || rateLimited > this.rateLimitRetries) break;
+      if (Date.now() >= deadline) {
+        lastError = lastError ?? new RpcError(`no endpoint answered within ${this.requestBudgetMs} ms`);
+        break;
+      }
       const url = this.urls[this.activeIndex];
       try {
         await this.pace();
@@ -454,13 +485,15 @@ export class RpcClient {
           // Back off, and move on: an endpoint that is rate-limiting this caller
           // will still be rate-limiting it in a second, while a sibling is idle.
           if (this.urls.length > 1) this.activeIndex = (this.activeIndex + 1) % this.urls.length;
-          await new Promise((resolve) => setTimeout(resolve, 300 * 2 ** Math.min(attempt, 4)));
+          await new Promise((resolve) => setTimeout(resolve, Math.min(300 * 2 ** rateLimited, Math.max(0, deadline - Date.now()))));
+          rateLimited++;
           continue;
         }
         // A revert is the node's answer, not a failure to reach it: deterministic,
         // so retrying it on another endpoint only spends round trips to get the
         // same reply, and rotating the endpoint would blame the network for it.
         if (error instanceof RpcError && error.isRevert) throw error;
+        transportFailures++;
         this.activeIndex = (this.activeIndex + 1) % this.urls.length;
         this.verifiedChain = false;
       }
