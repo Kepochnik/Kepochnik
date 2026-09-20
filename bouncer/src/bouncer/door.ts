@@ -94,6 +94,9 @@ export interface DoorOptions {
   skipProbes?: boolean;
   /** How far back to look for the mints that opened the pool's positions. */
   liquidityBlocks?: number;
+  /** Wall-clock budget for the mint history, and for the liquidity section as a whole. */
+  liquidityBudgetMs?: number;
+  liquidityDeadlineMs?: number;
   /** Token amount the exit door prices; default 1% of supply. */
   position?: bigint;
   /**
@@ -201,6 +204,8 @@ export async function readDoor(rpc: RpcClient, input: string, options: DoorOptio
         // is who holds the liquidity now; --liquidity-blocks widens it for
         // anyone who wants the longer history and will wait for it.
         liquidityFromBlock: head.number - (options.liquidityBlocks ?? Math.min(200_000, Math.round(86_400 * chain.blocksPerSecond))),
+        liquidityBudgetMs: options.liquidityBudgetMs,
+        liquidityDeadlineMs: options.liquidityDeadlineMs,
         v4PoolManager,
       });
     });

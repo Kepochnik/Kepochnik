@@ -5214,11 +5214,11 @@
       const deepest = readable[0] ?? pools?.[0] ?? null;
       if (deepest && options.liquidity !== false) {
         try {
-          const LIQUIDITY_BUDGET_MS = 3e4;
+          const LIQUIDITY_BUDGET_MS = options.liquidityDeadlineMs ?? 3500;
           liquidity = await Promise.race([
             readPoolLock(rpc, deepest, options.lockers, options.dex.v3PositionManager, block, {
               fromBlock: Math.max(0, options.liquidityFromBlock ?? block - 5e5),
-              budgetMs: options.liquidityBudgetMs ?? 2e4
+              budgetMs: options.liquidityBudgetMs ?? 2500
             }),
             new Promise(
               (resolve) => setTimeout(
@@ -5249,7 +5249,7 @@
               if (known) return known;
               return (await bs2.addressInfo(address2)).name;
             }, 10);
-            liquidity = await Promise.race([named, new Promise((resolve) => setTimeout(() => resolve(liquidity), 4e3))]);
+            liquidity = await Promise.race([named, new Promise((resolve) => setTimeout(() => resolve(liquidity), 1500))]);
           }
           const total = (pools ?? []).reduce((a, p) => a + (depth(p) > 0n ? depth(p) : 0n), 0n);
           const mine = depth(deepest) > 0n ? depth(deepest) : 0n;
@@ -5682,6 +5682,8 @@
           // is who holds the liquidity now; --liquidity-blocks widens it for
           // anyone who wants the longer history and will wait for it.
           liquidityFromBlock: head.number - (options.liquidityBlocks ?? Math.min(2e5, Math.round(86400 * chain2.blocksPerSecond))),
+          liquidityBudgetMs: options.liquidityBudgetMs,
+          liquidityDeadlineMs: options.liquidityDeadlineMs,
           v4PoolManager
         });
       });

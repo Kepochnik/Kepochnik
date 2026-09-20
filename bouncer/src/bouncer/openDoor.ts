@@ -211,6 +211,12 @@ export interface OpenDoorOptions {
   liquidityFromBlock?: number;
   /** Wall-clock budget for the liquidity mint history, in milliseconds. A request count is not a bound when one request can cost half a minute. */
   liquidityBudgetMs?: number;
+  /**
+   * Wall-clock deadline for the whole liquidity section, mint history and
+   * NFT owners together. Past it the section is reported unread rather than
+   * waited out: a slip nobody can wait for is not a slip.
+   */
+  liquidityDeadlineMs?: number;
   /** A resolved Uniswap V4 singleton; V4 pools are skipped when absent. */
   v4PoolManager?: string;
   /**
@@ -448,11 +454,19 @@ export async function readOpenDoor(rpc: RpcClient, token: ContractId, meta: Toke
         // So the section as a whole is raced too, and a section that runs out
         // of time is reported unread rather than waited out. A slip nobody
         // can wait for is not a slip.
-        const LIQUIDITY_BUDGET_MS = 30_000;
+        //
+        // Thirty seconds was the number when the goal was "finishes at all".
+        // The goal now is a complete slip in five, and a section allowed to
+        // take thirty cannot be part of one. What makes that affordable is
+        // not the budget — it is that the log walk fans out once a span is
+        // proven and the client no longer rediscovers a refused span on
+        // every read, so the work that used to need thirty seconds now fits
+        // in three. The budget is the backstop, not the plan.
+        const LIQUIDITY_BUDGET_MS = options.liquidityDeadlineMs ?? 3_500;
         liquidity = await Promise.race([
           readPoolLock(rpc, deepest, options.lockers, options.dex.v3PositionManager, block, {
             fromBlock: Math.max(0, options.liquidityFromBlock ?? block - 500_000),
-            budgetMs: options.liquidityBudgetMs ?? 20_000,
+            budgetMs: options.liquidityBudgetMs ?? 2_500,
           }),
           new Promise<PoolLock>((resolve) =>
             setTimeout(
@@ -500,7 +514,14 @@ export async function readOpenDoor(rpc: RpcClient, token: ContractId, meta: Toke
             if (known) return known;
             return (await bs.addressInfo(address)).name;
           }, 10);
-          liquidity = await Promise.race([named, new Promise<PoolLock>((resolve) => setTimeout(() => resolve(liquidity as PoolLock), 4_000))]);
+          // A second and a half, not four. Putting names on the wallets
+          // holding the liquidity is the nicest-to-have thing in the whole
+          // slip — every one of them is already on screen as an address —
+          // and four seconds of a five-second budget is not what it is
+          // worth. The explorer's own labels, which arrived with the holder
+          // list and cost nothing, are used first and are usually the ones
+          // that matter: a locker or a router is a verified contract.
+          liquidity = await Promise.race([named, new Promise<PoolLock>((resolve) => setTimeout(() => resolve(liquidity as PoolLock), 1_500))]);
         }
         // How much of the market this pool actually is. Depth, not count: a
         // reader needs to know whether "all of it can be withdrawn" is about

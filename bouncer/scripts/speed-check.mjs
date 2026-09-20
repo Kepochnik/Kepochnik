@@ -27,6 +27,25 @@ import { createRequire } from "node:module";
 
 const [, , site = "https://kepochnik.github.io/bouncer/", chain = "base", token = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"] = process.argv;
 
+/**
+ * The promise, in milliseconds, held against the live site.
+ *
+ * Not aspirations: a target that nothing checks is a target that drifts
+ * back. These fail the run. Five seconds for a complete slip is the number
+ * asked for, and the two below it are what that requires — if the verdict
+ * takes four, the slow half has one, which it will not make.
+ *
+ * A read that cannot be done in five seconds is not forbidden; what is
+ * forbidden is taking nineteen and calling it complete. The sections that
+ * run out of time say so on the slip, which is what the "unread" strip has
+ * always been for.
+ */
+const BUDGET = {
+  painted: Number(process.env.BUDGET_PAINTED ?? 2_000),
+  verdict: Number(process.env.BUDGET_VERDICT ?? 3_000),
+  complete: Number(process.env.BUDGET_COMPLETE ?? 5_000),
+};
+
 function findChromium() {
   for (const p of [
     process.env.CHROME_PATH,
@@ -109,3 +128,16 @@ console.log(
 if (full - firstAnswer < 500) {
   console.log(`::warning title=speed on ${chain}::the slow half arrived with the fast one — on this token the split bought nothing and costs a duplicate read`);
 }
+
+let over = false;
+for (const [what, got, budget] of [
+  ["something on screen", firstPaint ?? firstAnswer, BUDGET.painted],
+  ["a verdict", firstAnswer, BUDGET.verdict],
+  ["a complete slip", full, BUDGET.complete],
+]) {
+  if (got > budget) {
+    console.log(`::error title=speed on ${chain}::${what} took ${(got / 1000).toFixed(1)} s, over its budget of ${(budget / 1000).toFixed(1)} s`);
+    over = true;
+  }
+}
+if (over) process.exit(1);
