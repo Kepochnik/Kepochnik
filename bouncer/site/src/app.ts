@@ -8,7 +8,7 @@
  * Add ?chain=arc-testnet to any live route.
  */
 import { BlockscoutClient } from "../../src/chain/blockscout.js";
-import { TOPIC_BLURB, TOPIC_ORDER, TOPIC_QUESTION, topicOf } from "../../src/bouncer/topics.js";
+import { TOPIC_TAG,TOPIC_BLURB, TOPIC_ORDER, TOPIC_QUESTION, topicOf } from "../../src/bouncer/topics.js";
 import { missingVenues, tradeVenues } from "../../src/bouncer/trade.js";
 import { CHAINS, chainByKey, type ChainConfig } from "../../src/chain/chains.js";
 import { PHASE_LABEL } from "../../src/chain/pons.js";
@@ -306,6 +306,19 @@ function done(text: string): void {
   status.textContent = `${mode === "demo" ? "DEMO · " : `${chain().name} · `}${text}`;
 }
 
+/**
+ * Finished, with nothing to add.
+ *
+ * The status line and the slip's own footer printed the same chain, the
+ * same block and the same timestamp, one above the other, forty pixels
+ * apart. The views that have no slip still need the line; the two that do
+ * end here instead.
+ */
+function ready(): void {
+  go.disabled = false;
+  status.textContent = "";
+}
+
 // ---------------------------------------------------------------- views
 
 /** Addresses the demo chain knows; anything else is a real address and needs a real chain. */
@@ -578,7 +591,7 @@ async function runDoor(address: string): Promise<void> {
     if (drawn === null) renderSlip(slip, { stage });
     else keepPlace(() => renderSlip(slip, { stage }));
     drawn = stage;
-    if (stage === "done") done(`block ${slip.at.block} · ${isoUtc(slip.at.timestamp)} · ${slip.notes.length} thing${slip.notes.length === 1 ? "" : "s"} to know`);
+    if (stage === "done") ready();
     else status.textContent = `${mode === "demo" ? "DEMO · " : `${chain().name} · `}block ${slip.at.block} · ${STILL_READING[stage]}…`;
     return true;
   };
@@ -821,7 +834,7 @@ function summarySentence(slip: DoorSlip): string {
     const parts = ["Real Pons V1 launch: fixed supply, trading in a Uniswap V3 pool since block one, liquidity locked"];
     if (v.restrictionBlocksLeft > 0 && v.config) parts.push(`launch caps are on for ${v.restrictionBlocksLeft} more blocks (max ${formatBps(v.config.maxWalletBps)} per wallet)`);
     parts.push(v.status.graduated ? "graduated" : `${formatUnits(v.status.pairedPrincipal, v.quote.decimals)} of ${formatUnits(v.status.threshold, v.quote.decimals)} ${v.quote.symbol} towards graduation`);
-    return parts.map((x) => x.charAt(0).toUpperCase() + x.slice(1)).join(". ") + ".";
+    return sentence(parts);
   }
   if (!slip.id.registered) return openDoorSentence(slip);
   const parts: string[] = [`Real ${slip.chain.launchpad ?? "launchpad"} launch`];
@@ -833,7 +846,10 @@ function summarySentence(slip: DoorSlip): string {
   if (slip.crew?.crews.length) parts.push(`${slip.crew.crews[0].wallets.length} early buyers share a funder`);
   if (slip.dev) parts.push(slip.dev.counts.launched <= 1 ? "first launch from this dev" : `this dev launched ${slip.dev.counts.launched} tokens, ${slip.dev.counts.graduated} graduated`);
   if (slip.rules?.phase === 2 || slip.rules?.phase === 3) parts.push("graduated, pool locked");
-  return parts.map((x) => x.charAt(0).toUpperCase() + x.slice(1)).join(". ") + ".";
+  // Through the clause limit, like every other lead. This one built its own
+  // string and so ignored it, which is why the top of the page went on
+  // printing five sentences after the limit was set to stop exactly that.
+  return sentence(parts);
 }
 
 /**
@@ -958,23 +974,60 @@ function verdictBlock(opts: {
  * strip below them, because a gap folded in among findings reads as a clean
  * result, and that is the one mistake this whole project is built to avoid.
  */
+/**
+ * Dims the explanations a sentence carries in brackets.
+ *
+ * "The code carries mint (create new tokens out of thin air, diluting
+ * every holder); pause (freeze every transfer); blacklist (block chosen
+ * wallets from selling)" is three lines, and two of them are a glossary.
+ * That glossary is the point of this project — somebody who has never read
+ * a token contract should not have to know what "mint" means — so deleting
+ * it would be deleting the reason the page exists.
+ *
+ * Hierarchy instead of deletion: the claim reads at full weight, the
+ * glossary sits behind it. A reader who knows the words skims past them; a
+ * reader who does not still has them, in place, no click required.
+ *
+ * Only prose in brackets is dimmed. An address or a figure in brackets is
+ * evidence, not explanation, and dimming it would bury the thing somebody
+ * came to check.
+ */
+function glossed(text: string): string {
+  return esc(text).replace(/\(([^()]*\s[^()]*)\)/g, (whole, inner: string) =>
+    /0x|\d\s*%|block\s*\d/i.test(inner) ? whole : `<span class="gloss">(${inner})</span>`,
+  );
+}
+
 function answerCards(notes: DoorNote[]): string {
-  const cards = TOPIC_ORDER.filter((t) => t !== "unread")
-    .map((topic) => {
-      const mine = notes.filter((n) => topicOf(n.code) === topic);
-      if (!mine.length) return "";
-      const worst = mine.some((n) => n.level === "stop") ? "stop" : mine.some((n) => n.level === "watch") ? "watch" : "info";
-      const rows = mine
-        .map((n) => `<li class="ans lv-${n.level}"><span class="dot" aria-hidden="true"></span><span>${esc(n.text)}</span></li>`)
-        .join("");
-      return `<article class="qcard lv-${worst}">
-        <h2>${esc(TOPIC_QUESTION[topic])}</h2>
-        <p class="qblurb">${esc(TOPIC_BLURB[topic])}</p>
-        <ul class="answers">${rows}</ul>
-      </article>`;
-    })
-    .join("");
-  return cards ? `<div class="qgrid">${cards}</div>` : "";
+  // Worst first, and the topic is a tag on the row rather than a heading
+  // over a card. Five cards meant five headings, five paragraphs explaining
+  // what each heading meant, and a STOP that looked exactly as important as
+  // a note about the ticker. One ledger, sorted, says which line to read
+  // first by putting it first.
+  const RANKED: Record<Level, number> = { stop: 0, watch: 1, info: 2 };
+  const mine = notes
+    .filter((n) => topicOf(n.code) !== "unread")
+    .map((n, i) => ({ n, i, topic: topicOf(n.code) }))
+    .sort((a, b) => RANKED[a.n.level] - RANKED[b.n.level] || TOPIC_ORDER.indexOf(a.topic) - TOPIC_ORDER.indexOf(b.topic) || a.i - b.i);
+  if (!mine.length) return "";
+
+  const row = (x: (typeof mine)[number]) => `<li class="find lv-${x.n.level}">
+    <span class="find-dot" aria-hidden="true"></span>
+    <span class="find-topic">${esc(TOPIC_TAG[x.topic] ?? x.topic)}</span>
+    <span class="find-text">${glossed(x.n.text)}</span>
+  </li>`;
+
+  const loud = mine.filter((x) => x.n.level !== "info");
+  const quiet = mine.filter((x) => x.n.level === "info");
+  // The quiet ones are true and worth having; they are not worth the top of
+  // the page. Folded, with a count, so the eye lands on what can cost money.
+  const rest = quiet.length
+    ? `<details class="find-rest"><summary>${quiet.length} more worth knowing, none of them dangerous</summary><ul class="finds">${quiet.map(row).join("")}</ul></details>`
+    : "";
+  return `<section class="findings">
+    <ul class="finds">${loud.map(row).join("")}</ul>
+    ${rest}
+  </section>`;
 }
 
 /** What did not answer. Its own strip, always, never folded in with the findings. */
@@ -987,11 +1040,22 @@ function unreadStrip(notes: DoorNote[], skipped: { section: string; reason: stri
   if (!mine.length) return "";
   void skipped;
   const rows = mine.map((n) => `<li>${esc(n.text)}</li>`).join("");
-  return `<section class="unread">
-    <h2>${esc(TOPIC_QUESTION.unread)}</h2>
-    <p class="qblurb">${esc(TOPIC_BLURB.unread)}</p>
-    <ul>${rows}</ul>
-  </section>`;
+  // Still its own block, still always announced, and still never folded in
+  // among the findings — a gap listed as a finding reads as a clean result,
+  // which is the one mistake this project is built to avoid.
+  //
+  // But it was the loudest thing on the page after the verdict: a striped
+  // box with a heading, a paragraph and four long sentences, sitting above
+  // findings that can cost somebody money. The claim it has to make is "N
+  // things could not be read", and that claim is in the summary, on screen,
+  // always. The four sentences are one click away.
+  return `<details class="unread">
+    <summary><span class="unread-n">${mine.length}</span> ${mine.length === 1 ? "question BOUNCER could not answer" : "questions BOUNCER could not answer"}<span class="chev" aria-hidden="true"></span></summary>
+    <div class="unread-body">
+      <p class="what">${esc(TOPIC_BLURB.unread)}</p>
+      <ul>${rows}</ul>
+    </div>
+  </details>`;
 }
 
 /**
@@ -1061,8 +1125,17 @@ function buyStrip(chainKey: string, address: string, sellable = true, verdict: "
  * local inside renderSlip, which meant the Solana slip referred to a name that
  * did not exist there and threw for every visitor.
  */
+/**
+ * One collapsed section of evidence.
+ *
+ * The explanation used to sit in the summary, so eleven closed sections
+ * printed eleven sentences describing what each section would contain —
+ * scaffolding about the page, not facts about the token, on screen forever
+ * and re-read never. It moved inside: a reader who opens the section is
+ * the one who wanted to know what it covers.
+ */
 function section(id: string, title: string, what: string, body: string, open: boolean): string {
-  return `<details class="sec" id="${id}"${open ? " open" : ""}><summary><h2>${title}</h2><span class="what">${what}</span><span class="chev">▶</span></summary><div class="body">${body}</div></details>`;
+  return `<details class="sec" id="${id}"${open ? " open" : ""}><summary><h2>${title}</h2><span class="chev" aria-hidden="true"></span></summary><div class="body"><p class="what">${what}</p>${body}</div></details>`;
 }
 
 async function runSolanaDoor(address: string): Promise<void> {
@@ -1095,7 +1168,7 @@ async function runSolanaDoor(address: string): Promise<void> {
     if (run !== doorRun) return;
     if (opened) keepPlace(() => renderSplSlip(slip));
     else renderSplSlip(slip);
-    done(`slot ${slip.at.slot}${slip.at.timestamp ? ` · ${isoUtc(slip.at.timestamp)}` : ""} · ${slip.notes.length} thing${slip.notes.length === 1 ? "" : "s"} to know`);
+    ready();
   } catch (error) {
     if (run !== doorRun) return;
     if (opened) {
@@ -1275,10 +1348,18 @@ function openDoorSentence(slip: DoorSlip): string {
  * then said the same things again in the same words. A summary that is as
  * long as the thing it summarises is not a summary, it is a first draft.
  *
- * Three clauses. The cards carry the rest, and they carry it grouped by
- * the question it answers, which is a better place for it.
+ * Two, now that the findings are a sorted ledger forty pixels below it.
+ * Three meant the top of the page printed three sentences and then the
+ * ledger printed the same three again, in the same words, in the same
+ * order.
+ *
+ * Not one, because the first clause is always identity — "real Pons V2
+ * launch", "not a launch, checked as an ordinary token" — and identity
+ * alone tells a reader nothing about what to do next. Two is the name of
+ * the thing plus the single most important fact about it; the ledger,
+ * which is right there and sorted worst-first, carries all of it.
  */
-const LEAD_CLAUSES = 3;
+const LEAD_CLAUSES = 2;
 
 function sentence(parts: string[]): string {
   const kept = parts.slice(0, LEAD_CLAUSES);
@@ -1565,7 +1646,7 @@ function renderSlip(slip: DoorSlip, opts: { stage?: Stage } = {}): void {
     ${answerCards(slip.notes)}
     ${unreadStrip(slip.notes, slip.skipped)}
     ${buyStrip(mode === "demo" ? "" : slip.chain.key, slip.subject, Boolean(slip.id.meta) && slip.open?.transferFunction !== false, verdictOf(slip.notes).kind)}
-    <h2 class="stack-head">The evidence<span>every number above, and where it was read from</span></h2>
+    <h2 class="stack-head">The evidence</h2>
     <div class="stack">
       ${section("s-id", "Is it real?", "Did the launchpad's factory deploy this token, and can its code change later?", idBody, false)}
       ${o ? section("s-control", "Who controls it", "Which switches the code has (mint, pause, blacklist, fees), who holds the keys, and whether holders can move tokens right now.", controlBody(slip), false) : ""}

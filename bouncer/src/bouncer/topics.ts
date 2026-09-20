@@ -30,6 +30,24 @@ export const TOPIC_QUESTION: Record<Topic, string> = {
   unread: "What BOUNCER could not read",
 };
 
+/**
+ * One or two words for the tag on a finding's row.
+ *
+ * The questions above are headings for a page that no longer has five
+ * headings: a finding now sits in one sorted list, worst first, and carries
+ * its topic as a tag rather than living under a title and a paragraph
+ * explaining what the title means. The grouping was worth keeping; sixteen
+ * sentences of scaffolding around it was not.
+ */
+export const TOPIC_TAG: Record<Topic, string> = {
+  id: "identity",
+  keep: "control",
+  sell: "selling",
+  exit: "cashing out",
+  room: "holders",
+  unread: "unread",
+};
+
 /** One line under the heading, for a reader who has never done this before. */
 export const TOPIC_BLURB: Record<Topic, string> = {
   id: "Whether the address is the contract behind the ticker, or something wearing its name.",

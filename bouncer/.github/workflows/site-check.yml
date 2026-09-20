@@ -36,7 +36,10 @@ jobs:
           code=$(curl -sS -o /tmp/live.html -w '%{http_code}' "$URL")
           echo "HTTP $code · $(wc -c < /tmp/live.html) bytes"
           [ "$code" = "200" ] || { echo "::error::the site did not answer 200"; exit 1; }
-          for needle in "CHECK IT AT THE DOOR" "qgrid" "What BOUNCER could not read" "lv-stop"; do
+          # Markers of the CURRENT build, so a deploy that quietly serves an
+          # older one is caught. They move when the page does — a needle
+          # kept for old times' sake stops proving anything.
+          for needle in "CHECK IT AT THE DOOR" "findings" "could not answer" "lv-stop"; do
             grep -q "$needle" /tmp/live.html || { echo "::error::the served page is missing: $needle — this looks like an older build"; exit 1; }
           done
           echo "the served page carries the current markup"

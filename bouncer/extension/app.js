@@ -633,13 +633,13 @@
 
   // src/bouncer/topics.ts
   var TOPIC_ORDER = ["id", "keep", "sell", "exit", "room", "unread"];
-  var TOPIC_QUESTION = {
-    id: "Is this the token you meant?",
-    keep: "Can they take it from you?",
-    sell: "Can you sell it right now?",
-    exit: "What would you actually get out?",
-    room: "Who is already inside?",
-    unread: "What BOUNCER could not read"
+  var TOPIC_TAG = {
+    id: "identity",
+    keep: "control",
+    sell: "selling",
+    exit: "cashing out",
+    room: "holders",
+    unread: "unread"
   };
   var TOPIC_BLURB = {
     id: "Whether the address is the contract behind the ticker, or something wearing its name.",
@@ -3530,18 +3530,18 @@
       );
       const [quote, token] = decodeOutputs(CURVE_FUNCTIONS.getReserves, reservesRaw);
       const [feeBps] = decodeOutputs(CURVE_FUNCTIONS.feeBps, feeRaw);
-      const [ready] = decodeOutputs(CURVE_FUNCTIONS.readyToGraduate, readyRaw);
+      const [ready2] = decodeOutputs(CURVE_FUNCTIONS.readyToGraduate, readyRaw);
       const reserves2 = { token, quote };
       const quotes2 = quoteExit(options.position, reserves2, feeBps, launch.creatorTaxBps);
       return {
-        venue: ready ? "closed" : "curve",
+        venue: ready2 ? "closed" : "curve",
         position: options.position,
         reserves: reserves2,
         feeBps,
         creatorTaxBps: launch.creatorTaxBps,
         spot: token === 0n ? 0n : quote * 10n ** 18n / token,
         quotes: quotes2,
-        note: ready ? "The curve is full and waiting for graduate(); sells revert until the pool exists. Anyone can call graduate()." : "Priced with the curve's own sell arithmetic on reserves at this block: constant product, then protocol fee and creator tax on the quote leg."
+        note: ready2 ? "The curve is full and waiting for graduate(); sells revert until the pool exists. Anyone can call graduate()." : "Priced with the curve's own sell arithmetic on reserves at this block: constant product, then protocol fee and creator tax on the quote leg."
       };
     }
     if (launch.phase === 1 /* Swept */) {
@@ -6937,6 +6937,10 @@
     go.disabled = false;
     status.textContent = `${mode === "demo" ? "DEMO \xB7 " : `${chain().name} \xB7 `}${text}`;
   }
+  function ready() {
+    go.disabled = false;
+    status.textContent = "";
+  }
   function isDemoAddress(address) {
     const a = address.toLowerCase();
     return Object.values(DEMO.tokens).some((t) => t.token === a || t.curve === a || t.deployer === a) || a === DEMO_IMPOSTOR.token || a === DEMO_PLAIN.token || a === DEMO_V1.token || a === DEMO_V1.deployer || a === "0x000000000000000000000000000000000000dead";
@@ -7083,7 +7087,7 @@
       if (drawn === null) renderSlip(slip, { stage });
       else keepPlace(() => renderSlip(slip, { stage }));
       drawn = stage;
-      if (stage === "done") done(`block ${slip.at.block} \xB7 ${isoUtc(slip.at.timestamp)} \xB7 ${slip.notes.length} thing${slip.notes.length === 1 ? "" : "s"} to know`);
+      if (stage === "done") ready();
       else status.textContent = `${mode === "demo" ? "DEMO \xB7 " : `${chain().name} \xB7 `}block ${slip.at.block} \xB7 ${STILL_READING[stage]}\u2026`;
       return true;
     };
@@ -7285,7 +7289,7 @@
       const parts2 = ["Real Pons V1 launch: fixed supply, trading in a Uniswap V3 pool since block one, liquidity locked"];
       if (v.restrictionBlocksLeft > 0 && v.config) parts2.push(`launch caps are on for ${v.restrictionBlocksLeft} more blocks (max ${formatBps(v.config.maxWalletBps)} per wallet)`);
       parts2.push(v.status.graduated ? "graduated" : `${formatUnits(v.status.pairedPrincipal, v.quote.decimals)} of ${formatUnits(v.status.threshold, v.quote.decimals)} ${v.quote.symbol} towards graduation`);
-      return parts2.map((x) => x.charAt(0).toUpperCase() + x.slice(1)).join(". ") + ".";
+      return sentence(parts2);
     }
     if (!slip.id.registered) return openDoorSentence(slip);
     const parts = [`Real ${slip.chain.launchpad ?? "launchpad"} launch`];
@@ -7297,7 +7301,7 @@
     if (slip.crew?.crews.length) parts.push(`${slip.crew.crews[0].wallets.length} early buyers share a funder`);
     if (slip.dev) parts.push(slip.dev.counts.launched <= 1 ? "first launch from this dev" : `this dev launched ${slip.dev.counts.launched} tokens, ${slip.dev.counts.graduated} graduated`);
     if (slip.rules?.phase === 2 || slip.rules?.phase === 3) parts.push("graduated, pool locked");
-    return parts.map((x) => x.charAt(0).toUpperCase() + x.slice(1)).join(". ") + ".";
+    return sentence(parts);
   }
   function verdictOf(notes, stage = "done") {
     if (stage === "opening") return { word: "READING", kind: "reading", line: "What the code can do and who holds the keys is below. The rest is still being read; there is no verdict until it is in." };
@@ -7342,30 +7346,41 @@
     </div>
   </section>`;
   }
+  function glossed(text) {
+    return esc2(text).replace(
+      /\(([^()]*\s[^()]*)\)/g,
+      (whole, inner) => /0x|\d\s*%|block\s*\d/i.test(inner) ? whole : `<span class="gloss">(${inner})</span>`
+    );
+  }
   function answerCards(notes) {
-    const cards = TOPIC_ORDER.filter((t) => t !== "unread").map((topic) => {
-      const mine = notes.filter((n) => topicOf(n.code) === topic);
-      if (!mine.length) return "";
-      const worst = mine.some((n) => n.level === "stop") ? "stop" : mine.some((n) => n.level === "watch") ? "watch" : "info";
-      const rows = mine.map((n) => `<li class="ans lv-${n.level}"><span class="dot" aria-hidden="true"></span><span>${esc2(n.text)}</span></li>`).join("");
-      return `<article class="qcard lv-${worst}">
-        <h2>${esc2(TOPIC_QUESTION[topic])}</h2>
-        <p class="qblurb">${esc2(TOPIC_BLURB[topic])}</p>
-        <ul class="answers">${rows}</ul>
-      </article>`;
-    }).join("");
-    return cards ? `<div class="qgrid">${cards}</div>` : "";
+    const RANKED = { stop: 0, watch: 1, info: 2 };
+    const mine = notes.filter((n) => topicOf(n.code) !== "unread").map((n, i) => ({ n, i, topic: topicOf(n.code) })).sort((a, b) => RANKED[a.n.level] - RANKED[b.n.level] || TOPIC_ORDER.indexOf(a.topic) - TOPIC_ORDER.indexOf(b.topic) || a.i - b.i);
+    if (!mine.length) return "";
+    const row = (x) => `<li class="find lv-${x.n.level}">
+    <span class="find-dot" aria-hidden="true"></span>
+    <span class="find-topic">${esc2(TOPIC_TAG[x.topic] ?? x.topic)}</span>
+    <span class="find-text">${glossed(x.n.text)}</span>
+  </li>`;
+    const loud = mine.filter((x) => x.n.level !== "info");
+    const quiet = mine.filter((x) => x.n.level === "info");
+    const rest = quiet.length ? `<details class="find-rest"><summary>${quiet.length} more worth knowing, none of them dangerous</summary><ul class="finds">${quiet.map(row).join("")}</ul></details>` : "";
+    return `<section class="findings">
+    <ul class="finds">${loud.map(row).join("")}</ul>
+    ${rest}
+  </section>`;
   }
   function unreadStrip(notes, skipped) {
     const mine = notes.filter((n) => topicOf(n.code) === "unread");
     if (!mine.length) return "";
     void skipped;
     const rows = mine.map((n) => `<li>${esc2(n.text)}</li>`).join("");
-    return `<section class="unread">
-    <h2>${esc2(TOPIC_QUESTION.unread)}</h2>
-    <p class="qblurb">${esc2(TOPIC_BLURB.unread)}</p>
-    <ul>${rows}</ul>
-  </section>`;
+    return `<details class="unread">
+    <summary><span class="unread-n">${mine.length}</span> ${mine.length === 1 ? "question BOUNCER could not answer" : "questions BOUNCER could not answer"}<span class="chev" aria-hidden="true"></span></summary>
+    <div class="unread-body">
+      <p class="what">${esc2(TOPIC_BLURB.unread)}</p>
+      <ul>${rows}</ul>
+    </div>
+  </details>`;
   }
   function buyStrip(chainKey, address, sellable = true, verdict = "clear") {
     if (!sellable) {
@@ -7395,7 +7410,7 @@
   </section>`;
   }
   function section(id, title, what, body, open) {
-    return `<details class="sec" id="${id}"${open ? " open" : ""}><summary><h2>${title}</h2><span class="what">${what}</span><span class="chev">\u25B6</span></summary><div class="body">${body}</div></details>`;
+    return `<details class="sec" id="${id}"${open ? " open" : ""}><summary><h2>${title}</h2><span class="chev" aria-hidden="true"></span></summary><div class="body"><p class="what">${what}</p>${body}</div></details>`;
   }
   async function runSolanaDoor(address) {
     if (!isSolanaAddress(address)) return bad("Paste a Solana mint address: 32 bytes written in base58, which looks like EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v.");
@@ -7416,7 +7431,7 @@
       if (run !== doorRun) return;
       if (opened) keepPlace(() => renderSplSlip(slip));
       else renderSplSlip(slip);
-      done(`slot ${slip.at.slot}${slip.at.timestamp ? ` \xB7 ${isoUtc(slip.at.timestamp)}` : ""} \xB7 ${slip.notes.length} thing${slip.notes.length === 1 ? "" : "s"} to know`);
+      ready();
     } catch (error) {
       if (run !== doorRun) return;
       if (opened) {
@@ -7577,7 +7592,7 @@
     }
     return sentence(parts);
   }
-  var LEAD_CLAUSES = 3;
+  var LEAD_CLAUSES = 2;
   function sentence(parts) {
     const kept = parts.slice(0, LEAD_CLAUSES);
     return kept.map((x) => x.charAt(0).toUpperCase() + x.slice(1)).join(". ") + ".";
@@ -7755,7 +7770,7 @@
     ${answerCards(slip.notes)}
     ${unreadStrip(slip.notes, slip.skipped)}
     ${buyStrip(mode === "demo" ? "" : slip.chain.key, slip.subject, Boolean(slip.id.meta) && slip.open?.transferFunction !== false, verdictOf(slip.notes).kind)}
-    <h2 class="stack-head">The evidence<span>every number above, and where it was read from</span></h2>
+    <h2 class="stack-head">The evidence</h2>
     <div class="stack">
       ${section("s-id", "Is it real?", "Did the launchpad's factory deploy this token, and can its code change later?", idBody, false)}
       ${o ? section("s-control", "Who controls it", "Which switches the code has (mint, pause, blacklist, fees), who holds the keys, and whether holders can move tokens right now.", controlBody(slip), false) : ""}
