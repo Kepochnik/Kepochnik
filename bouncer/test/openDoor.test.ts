@@ -215,3 +215,47 @@ test("an EIP-7702 wallet pasted into the box is named a wallet, not checked as a
   assert.ok(slip.notes.some((n) => n.code === "delegated-wallet"));
   assert.ok(!slip.notes.some((n) => n.code === "powers" || n.code === "no-powers"));
 });
+
+// ---------------------------------------------------------------------------
+// The staged render only works if the early passes never say something the
+// later ones take back. A STOP that turns into a WATCH teaches a reader to
+// ignore the next STOP, which is worse than the second of waiting it saved.
+// ---------------------------------------------------------------------------
+
+const PAUSED = selector("paused()");
+const OPENING = { skipMarket: true, skipExplorer: true, skipProbes: true, skipLiquidity: true, skipDev: true, skipRoom: true, skipCrew: true, skipLookalikes: true } as const;
+
+test("the opening pass never publishes a STOP the full pass retracts", async () => {
+  // A token whose paused() says true while transfers actually go through:
+  // the exact shape where the two passes disagree. The full read can see the
+  // contradiction because it simulates a transfer; the opening read cannot,
+  // and must not pretend otherwise.
+  const paused = () => demoRpcWith((method, params) => (method === "eth_call" && callData(params).startsWith(PAUSED) ? { result: `0x${"0".repeat(63)}1` } : null));
+
+  const first = await readDoor(paused(), DEMO_PLAIN.token, { ...opts(), ...OPENING });
+  const full = await readDoor(paused(), DEMO_PLAIN.token, opts());
+
+  assert.ok(first.open!.probesPending, "the opening pass did not simulate a transfer");
+  assert.ok(!full.open!.probesPending, "the full pass did");
+  assert.equal(first.notes.find((n) => n.code === "paused")?.level, "watch", "an unsimulated pause is not a STOP");
+  assert.match(first.notes.find((n) => n.code === "paused")!.text, /still being simulated/);
+
+  const retracted = first.notes.filter((n) => n.level === "stop").filter((n) => !full.notes.some((f) => f.code === n.code && f.level === "stop"));
+  assert.deepEqual(retracted, [], `the opening pass published ${retracted.length} STOP(s) the full pass does not agree with`);
+});
+
+test("the opening pass reads nothing it has not asked for as zero", async () => {
+  const slip = await readDoor(demoRpc(), DEMO_PLAIN.token, { ...opts(), ...OPENING });
+  const o = slip.open!;
+  // Each of the three is null or a sentence, never an empty list that reads
+  // as "checked, found nothing".
+  assert.equal(o.pools, null, "pools must be unread, not an empty market");
+  assert.equal(o.holders, null, "holders must be unread, not nobody");
+  assert.equal(o.deployer, null);
+  assert.equal(o.probes.length, 0);
+  assert.ok(o.probesSkipped, "a skipped simulation has to say so");
+  // And what IS read is the point of the pass: the code and the keys.
+  assert.ok(o.powers.length > 0, "the powers come off the bytecode, which is read");
+  assert.equal(o.owner?.address, DEMO_PLAIN.owner);
+  assert.equal(o.paused, false);
+});

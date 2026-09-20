@@ -5205,6 +5205,7 @@
       tradingOpen,
       probes,
       probesSkipped,
+      probesPending: options.skipProbes === true,
       verified,
       deployer,
       ownerBalance,
@@ -5297,7 +5298,7 @@
       try {
         [address] = decodeOutputs(fn, answer);
       } catch {
-        continue;
+        return { owner: null, unread: true };
       }
       const renounced = address === ZERO_ADDRESS || BURN_ADDRESSES2.has(address);
       return { owner: { address, renounced, isContract: false }, unread: false };
@@ -5792,14 +5793,15 @@
     const kinds = powerKinds(o).filter((k) => k !== "exempt" && k !== "sweep");
     const owner = o.owner;
     const movesWork = o.probes.length > 0 && o.probes.every((p) => p.status === "ok");
+    const contradicted = movesWork ? "yes" : o.probesPending ? "unknown" : "no";
     if (o.paused === true) {
       notes.push(
-        movesWork ? { level: "watch", code: "paused", text: "paused() returns true, yet every simulated transfer went through. Either the pause does not gate transfers in this contract or it exempts the wallets that were tried; read the source before trusting either reading." } : { level: "stop", code: "paused", text: "Transfers are paused right now: paused() returns true, so nobody can move this token until whoever holds that switch unpauses it." }
+        contradicted === "yes" ? { level: "watch", code: "paused", text: "paused() returns true, yet every simulated transfer went through. Either the pause does not gate transfers in this contract or it exempts the wallets that were tried; read the source before trusting either reading." } : contradicted === "unknown" ? { level: "watch", code: "paused", text: "paused() returns true. Whether that actually stops a transfer is still being simulated; in most contracts it does." } : { level: "stop", code: "paused", text: "Transfers are paused right now: paused() returns true, so nobody can move this token until whoever holds that switch unpauses it." }
       );
     }
     if (o.tradingOpen && !o.tradingOpen.open) {
       notes.push(
-        movesWork ? { level: "watch", code: "trading-closed", text: `${o.tradingOpen.view} returns false, yet every simulated transfer went through: the switch exists but is not stopping the wallets that were tried.` } : { level: "stop", code: "trading-closed", text: `Trading is switched off: ${o.tradingOpen.view} returns false, so only wallets that are exempted can trade until it is switched on.` }
+        contradicted === "yes" ? { level: "watch", code: "trading-closed", text: `${o.tradingOpen.view} returns false, yet every simulated transfer went through: the switch exists but is not stopping the wallets that were tried.` } : contradicted === "unknown" ? { level: "watch", code: "trading-closed", text: `${o.tradingOpen.view} returns false. Whether that actually stops a trade is still being simulated; in most contracts it does.` } : { level: "stop", code: "trading-closed", text: `Trading is switched off: ${o.tradingOpen.view} returns false, so only wallets that are exempted can trade until it is switched on.` }
       );
     }
     if (kinds.length) {

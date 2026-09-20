@@ -139,6 +139,13 @@ export interface OpenDoor {
   probes: TransferProbe[];
   /** Why no transfer was simulated, when none was. */
   probesSkipped: string | null;
+  /**
+   * True when the simulation was not asked for rather than not possible: the
+   * first render leaves it out to get on screen sooner. Every note that reads
+   * the probes has to tell the two apart, because "no simulation contradicts
+   * this" is a real fact and "we have not looked yet" is not.
+   */
+  probesPending: boolean;
   verified: boolean | null;
   deployer: { address: string; creationTx: string | null; createdAtBlock: number | null; createdAt: number | null; balance: bigint; bps: number | null } | null;
   ownerBalance: { balance: bigint; bps: number | null } | null;
@@ -614,6 +621,7 @@ export async function readOpenDoor(rpc: RpcClient, token: ContractId, meta: Toke
     tradingOpen,
     probes,
     probesSkipped,
+    probesPending: options.skipProbes === true,
     verified,
     deployer,
     ownerBalance,
@@ -749,7 +757,11 @@ function readOwnerFrom(ownerAnswer: Hex | RpcError | null, getOwnerAnswer: Hex |
     try {
       [address] = decodeOutputs(fn, answer) as [string];
     } catch {
-      continue;
+      // The chain answered, with something this cannot read. That is not
+      // "there is no owner" — reporting it as one would turn an unreadable
+      // contract into a safe-looking one, which is the whole failure mode
+      // this file is built around.
+      return { owner: null, unread: true };
     }
     const renounced = address === ZERO_ADDRESS || BURN_ADDRESSES.has(address);
     return { owner: { address, renounced, isContract: false }, unread: false };

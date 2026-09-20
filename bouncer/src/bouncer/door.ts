@@ -532,18 +532,28 @@ function openDoorFactNotes(slip: DoorSlip, o: OpenDoor): DoorNote[] {
   const kinds = powerKinds(o).filter((k) => k !== "exempt" && k !== "sweep");
   const owner = o.owner;
   const movesWork = o.probes.length > 0 && o.probes.every((p) => p.status === "ok");
+  // Three states, not two. A switch that says "closed" while every simulated
+  // transfer goes through is a different finding from one nothing has
+  // contradicted yet — and on the first render nothing has been simulated at
+  // all, so saying "nobody can move this token" there would be a claim the
+  // page is about to take back.
+  const contradicted = movesWork ? "yes" : o.probesPending ? "unknown" : "no";
   if (o.paused === true) {
     notes.push(
-      movesWork
+      contradicted === "yes"
         ? { level: "watch", code: "paused", text: "paused() returns true, yet every simulated transfer went through. Either the pause does not gate transfers in this contract or it exempts the wallets that were tried; read the source before trusting either reading." }
-        : { level: "stop", code: "paused", text: "Transfers are paused right now: paused() returns true, so nobody can move this token until whoever holds that switch unpauses it." },
+        : contradicted === "unknown"
+          ? { level: "watch", code: "paused", text: "paused() returns true. Whether that actually stops a transfer is still being simulated; in most contracts it does." }
+          : { level: "stop", code: "paused", text: "Transfers are paused right now: paused() returns true, so nobody can move this token until whoever holds that switch unpauses it." },
     );
   }
   if (o.tradingOpen && !o.tradingOpen.open) {
     notes.push(
-      movesWork
+      contradicted === "yes"
         ? { level: "watch", code: "trading-closed", text: `${o.tradingOpen.view} returns false, yet every simulated transfer went through: the switch exists but is not stopping the wallets that were tried.` }
-        : { level: "stop", code: "trading-closed", text: `Trading is switched off: ${o.tradingOpen.view} returns false, so only wallets that are exempted can trade until it is switched on.` },
+        : contradicted === "unknown"
+          ? { level: "watch", code: "trading-closed", text: `${o.tradingOpen.view} returns false. Whether that actually stops a trade is still being simulated; in most contracts it does.` }
+          : { level: "stop", code: "trading-closed", text: `Trading is switched off: ${o.tradingOpen.view} returns false, so only wallets that are exempted can trade until it is switched on.` },
     );
   }
   if (kinds.length) {
