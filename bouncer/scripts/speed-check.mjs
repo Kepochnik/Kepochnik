@@ -115,6 +115,8 @@ const COLD_GAP_MS = Number(process.env.SPEED_GAP_MS ?? 12_000);
 const browser = await chromium.launch({ executablePath });
 
 /** One measurement: paste the address, watch for the three moments. */
+let sawPending = false;
+
 async function measure() {
   const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
   try {
@@ -134,11 +136,17 @@ async function measure() {
           painted: Boolean(word),
           // A verdict proper. READING is the page saying it does not have one yet.
           verdict: Boolean(word) && word !== "READING",
-          pending: !!document.querySelector(".pendingchip"),
+          pending: !!document.querySelector("[data-pending]"),
           failed: !!document.querySelector(".error"),
         };
       });
       if (state.failed) return { unreadable: true };
+      // The marker is how "complete" is told apart from "a verdict is up":
+      // if it never appears at all, this run measured the wrong thing, and
+      // a measurement that cannot tell must say so rather than report a
+      // better number. Not the same as a slip that finishes before the
+      // first poll — that one is caught below, after the loop.
+      if (state.pending) sawPending = true;
       if (state.painted && firstPaint === null) firstPaint = Date.now() - started;
       if (state.verdict && firstAnswer === null) firstAnswer = Date.now() - started;
       if (state.verdict && !state.pending && firstAnswer !== null) {
@@ -194,6 +202,22 @@ for (let i = 0; i < RUNS; i++) {
   }
 }
 await browser.close();
+
+// Across every run, the marker has to have been seen at least once.
+//
+// "Complete" is defined as its absence, so a page that never sets it looks
+// finished the instant a verdict appears — the headline number would drop
+// by seconds with nothing having got faster, and the check would report
+// the improvement with a straight face. This is not a strict "it must be
+// slow" assertion: three cold reads of a real token on a real chain cannot
+// all finish inside one 100 ms poll. If they somehow did, the number is
+// not trustworthy either, and saying so is the honest answer.
+if (!sawPending) {
+  console.error(
+    `::error title=speed on ${chain}::the page never marked a read as unfinished, so "complete" could not be told apart from "a verdict appeared". Either the marker moved (site/src/app.ts sets data-pending on .verdict) or these timings mean nothing.`,
+  );
+  process.exit(1);
+}
 
 const median = (xs) => [...xs].sort((a, b) => a - b)[Math.floor(xs.length / 2)];
 const spread = (xs) => `${(Math.min(...xs) / 1000).toFixed(1)}–${(Math.max(...xs) / 1000).toFixed(1)} s`;

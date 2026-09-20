@@ -189,10 +189,14 @@ body.answered .chips{display:none}
 .verdict.v-stop{border-color:var(--stop-edge);background:linear-gradient(180deg,var(--stop-bg),var(--surface) 62%)}
 .verdict.v-watch{border-color:var(--watch-edge);background:linear-gradient(180deg,var(--watch-bg),var(--surface) 62%)}
 .verdict.v-clear{border-color:var(--ok-edge);background:linear-gradient(180deg,var(--ok-bg),var(--surface) 62%)}
-.vhead{display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:14px 22px 0;min-width:0}
-.vwho{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;min-width:0}
+/* Identity and verdict are one idea, so they sit on one band: the word on
+   a coloured rail, and beside it who this is and what it means. They used
+   to be two stacked rows, which read as two announcements and cost fifty
+   pixels to say so. */
+.vtop{display:grid;grid-template-columns:auto 1fr;gap:22px;align-items:start;padding:18px 22px}
+.vwho{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;min-width:0;margin-bottom:7px}
 .vsym{font:900 clamp(22px,3vw,30px)/1 var(--display);letter-spacing:.03em;word-break:break-word}
-.vname{color:var(--muted);font-size:15px}
+.vname{color:var(--muted);font-size:14px}
 .vstamp{font:700 10px/1 var(--mono);letter-spacing:.16em;border:1px solid var(--brass);color:var(--brass);border-radius:999px;padding:6px 11px;white-space:nowrap}
 .vstamp.no{border-color:var(--stop-edge);color:var(--stop);background:var(--stop-bg)}
 .vstamp.mid{border-color:var(--watch-edge);color:var(--watch);background:var(--watch-bg)}
@@ -202,17 +206,22 @@ body.answered .chips{display:none}
    stretched the verdict, the tiles, the cards and the page with them: 238
    pixels of horizontal scroll on a phone, from one chip. overflow:hidden
    does nothing about it on its own. */
-.vaddr{margin-left:auto;min-width:0;background:var(--surface-2);border:1px solid var(--line);border-radius:999px;color:var(--dim);font:12px var(--mono);padding:7px 12px;cursor:pointer;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* The address moved down here. It is reference, not headline: a reader
+   checks it against what they were sent, and that is provenance — the
+   same job as the chain and the block it now sits beside. */
+.vaddr{min-width:0;background:none;border:0;color:var(--dim);font:12px var(--mono);padding:0;cursor:pointer;
+  max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:left}
 .vaddr:hover{color:var(--text);border-color:var(--line-2)}
 .vaddr:focus-visible{outline:2px solid var(--brass-2)}
-.vbody{display:grid;grid-template-columns:auto 1fr;gap:20px;align-items:baseline;padding:12px 22px 16px}
+
 .vword{
   /* It used to run to 104px and carry a 60px glow, which made the loudest
      thing on the page the word that says least: "WATCH" is a label, and
      the sentence beside it and the red rows below are what a reader
      actually needs. Still the largest type in the answer, no longer three
      times the size of the finding that could cost them money. */
-  font:900 clamp(38px,5.2vw,60px)/0.9 var(--display);letter-spacing:.015em;
+  font:900 clamp(34px,4.4vw,52px)/0.9 var(--display);letter-spacing:.015em;
+  padding-left:14px;border-left:4px solid currentColor;
 }
 .verdict.v-stop .vword{color:var(--stop)}
 .verdict.v-watch .vword{color:var(--watch)}
@@ -230,20 +239,39 @@ body.answered .chips{display:none}
 @keyframes breathe{from{opacity:.45}to{opacity:1}}
 .vsay{min-width:0}
 .vlead{margin:0;font-size:clamp(15px,1.6vw,17px);line-height:1.5;max-width:62ch}
-.vsub{margin:7px 0 0;color:var(--muted);font-size:13.5px}
-.vfoot{display:flex;align-items:center;gap:14px;flex-wrap:wrap;border-top:1px solid var(--line);padding:10px 22px;background:rgba(0,0,0,.25);min-width:0}
+.vsub{margin:6px 0 0;color:var(--dim);font-size:13px}
+.vfoot{display:flex;align-items:center;gap:6px 14px;flex-wrap:wrap;border-top:1px solid var(--line);padding:9px 22px;min-width:0}
+.vfoot::before{content:"";width:0}
+.vpend{margin-left:10px;color:var(--brass-2);font:11px var(--mono);letter-spacing:.08em;text-transform:uppercase}
 .vat{min-width:0;overflow-wrap:anywhere}
-.tallies{display:flex;gap:14px;flex-wrap:wrap}
-.tally{display:inline-flex;align-items:center;gap:7px;font:600 12px var(--mono);color:var(--muted);text-transform:lowercase}
-.tally i{width:8px;height:8px;border-radius:2px;display:inline-block}
-.tally.lv-stop i{background:var(--stop)}.tally.lv-watch i{background:var(--watch)}.tally.lv-info i{background:var(--info)}
-/* The fast half is on screen and the slow half is still reading. Says so,
-   because a tally that is about to change is not a tally. */
-.tally.pendingchip{color:var(--brass)}
-.tally.pendingchip i{background:var(--brass);border-radius:50%;animation:pulse 1s infinite alternate}
+/* The level tallies are gone from the verdict footer — see the note in
+   verdictBlock. Their rules went with them. */
 .vat{color:var(--dim);font:12px var(--mono)}
-.vacts{margin-left:auto;display:flex;gap:8px;flex-wrap:wrap}
-@media (max-width:760px){.vbody{grid-template-columns:1fr;gap:14px}.vaddr{margin-left:0;order:9;width:100%}.vfoot{gap:10px}.vacts{margin-left:0;width:100%}}
+.vacts{margin-left:auto;display:flex;gap:6px;flex-wrap:wrap}
+/* One button people press and three they might. They were four identical
+   buttons, which asks a reader to choose between things that are not
+   choices of equal weight. */
+.vacts .ghost{padding:6px 11px;font-size:11px}
+/* Copy card is the one somebody came to press — it is the share the whole
+   card renderer exists for. It was styled identically to the three beside
+   it, which makes a reader choose between four things that are not equal. */
+.vacts .ghost.primary{padding:6px 14px;background:var(--brass);border-color:var(--brass);color:#140f06}
+.vacts .ghost.primary:hover{background:var(--brass-2);border-color:var(--brass-2);color:#140f06}
+/* The address gets its own line rather than wrapping by accident: it is
+   42 mono characters and it is never abbreviated here, because a shortened
+   subject address is the exact thing this tool tells people not to trust. */
+.vfoot{row-gap:8px}
+.vfoot .vaddr{flex:1 0 100%}
+@media (min-width:1100px){.vfoot .vaddr{flex:0 1 auto}}
+@media (max-width:760px){
+  .vtop{grid-template-columns:1fr;gap:12px;padding:16px 18px}
+  .vword{padding-left:11px;border-left-width:3px}
+  .vfoot{padding:9px 18px;gap:8px}
+  /* An even 2x2 rather than three across and one orphan underneath, which
+     is what equal flex widths produce when the labels are unequal. */
+  .vacts{margin-left:0;width:100%;display:grid;grid-template-columns:1fr 1fr;gap:6px}
+  .vacts .ghost{text-align:center}
+}
 
 /* Slip prose carries addresses, URLs and hashes: single tokens far longer
    than a phone is wide. Without a break opportunity they do not wrap, and

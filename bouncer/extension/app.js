@@ -6756,7 +6756,6 @@
   }
 
   // site/src/app.ts
-  var LEVEL_WORD = { stop: "Stop", watch: "Careful", info: "Note" };
   var REPO = "github.com/Kepochnik/bouncer";
   var MARK = "$BOUNCER";
   var ADDR = /^0x[0-9a-fA-F]{40}$/;
@@ -7320,28 +7319,25 @@
   function verdictBlock(opts) {
     const stage = opts.stage ?? "done";
     const v = verdictOf(opts.notes, stage);
-    const counts = ["stop", "watch", "info"].map((level) => ({ level, n: opts.notes.filter((x) => x.level === level).length })).filter((x) => x.n > 0).map((x) => `<span class="tally lv-${x.level}"><i></i>${x.n} ${LEVEL_WORD[x.level].toLowerCase()}</span>`).join("");
     const stampClass = opts.stamp === "ON THE LIST" ? "yes" : opts.stamp === "NOT A LAUNCH" ? "mid" : "no";
-    return `<section class="verdict v-${v.kind}">
-    <div class="vhead">
-      <div class="vwho">
-        <span class="vsym">${opts.sym}</span>
-        <span class="vname">${opts.name}</span>
-        <span class="vstamp ${stampClass}">${opts.stamp}</span>
-      </div>
-      <button class="vaddr" type="button" data-copy="${esc2(opts.address)}" title="Copy the address">${esc2(opts.address)}</button>
-    </div>
-    <div class="vbody">
+    const pending = stage === "done" ? "" : `<span class="vpend">${esc2(opts.stillReading ?? STILL_READING[stage])}</span>`;
+    return `<section class="verdict v-${v.kind}"${stage === "done" ? "" : ' data-pending="1"'}>
+    <div class="vtop">
       <div class="vword" aria-label="Verdict">${v.word}</div>
       <div class="vsay">
+        <div class="vwho">
+          <span class="vsym">${opts.sym}</span>
+          <span class="vname">${opts.name}</span>
+          <span class="vstamp ${stampClass}">${opts.stamp}</span>
+        </div>
         <p class="vlead">${esc2(opts.lead)}</p>
-        <p class="vsub">${esc2(v.line)}</p>
+        <p class="vsub">${esc2(v.line)}${pending}</p>
       </div>
     </div>
     ${opts.tiles ?? ""}
     <div class="vfoot">
-      <div class="tallies">${counts || '<span class="tally lv-info"><i></i>nothing to flag</span>'}${stage === "done" ? "" : `<span class="tally pendingchip"><i></i>${esc2(opts.stillReading ?? STILL_READING[stage])}</span>`}</div>
-      <div class="vat">${opts.at}</div>
+      <button class="vaddr" type="button" data-copy="${esc2(opts.address)}" title="Copy the address">${esc2(opts.address)}</button>
+      <span class="vat">${opts.at}</span>
       <div class="vacts">${opts.actions}</div>
     </div>
   </section>`;

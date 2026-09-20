@@ -79,7 +79,7 @@ await page.goto(`${url}${route}`, { waitUntil: "load" });
 // was fine and the instrument was not.
 for (let waited = 0; waited < 20_000; waited += 250) {
   await page.waitForTimeout(250);
-  const done = await page.evaluate(() => !document.querySelector(".verdict .pendingchip") && Boolean(document.querySelector(".verdict")));
+  const done = await page.evaluate(() => Boolean(document.querySelector(".verdict")) && !document.querySelector(".verdict[data-pending]"));
   if (done) break;
 }
 

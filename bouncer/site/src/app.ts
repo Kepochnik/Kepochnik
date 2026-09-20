@@ -934,32 +934,39 @@ function verdictBlock(opts: {
 }): string {
   const stage = opts.stage ?? "done";
   const v = verdictOf(opts.notes, stage);
-  const counts = (["stop", "watch", "info"] as const)
-    .map((level) => ({ level, n: opts.notes.filter((x) => x.level === level).length }))
-    .filter((x) => x.n > 0)
-    .map((x) => `<span class="tally lv-${x.level}"><i></i>${x.n} ${LEVEL_WORD[x.level as Level].toLowerCase()}</span>`)
-    .join("");
   const stampClass = opts.stamp === "ON THE LIST" ? "yes" : opts.stamp === "NOT A LAUNCH" ? "mid" : "no";
-  return `<section class="verdict v-${v.kind}">
-    <div class="vhead">
-      <div class="vwho">
-        <span class="vsym">${opts.sym}</span>
-        <span class="vname">${opts.name}</span>
-        <span class="vstamp ${stampClass}">${opts.stamp}</span>
-      </div>
-      <button class="vaddr" type="button" data-copy="${esc(opts.address)}" title="Copy the address">${esc(opts.address)}</button>
-    </div>
-    <div class="vbody">
+  // The level counts are gone from here.
+  //
+  // They read "5 careful · 9 note" — fourteen — above a ledger showing two
+  // rows and eight folded, and a separate strip holding the other four. A
+  // number a reader cannot arrive at by counting what is in front of them
+  // is not a summary, it is a contradiction they have to resolve. The
+  // ledger is sorted by severity and says its own totals; the one thing
+  // this footer still has to say is that the totals are not final yet.
+  const pending = stage === "done" ? "" : `<span class="vpend">${esc(opts.stillReading ?? STILL_READING[stage])}</span>`;
+  // `data-pending` is the machine-readable half of that, and it is a
+  // contract: speed-check decides a slip is COMPLETE by the absence of this
+  // marker. Restyling the visible chip away without it would have made
+  // "complete" fire the moment a verdict appeared, so the headline number
+  // would have improved by two seconds while nothing got faster. The
+  // scripts assert the marker exists rather than trusting its absence.
+  return `<section class="verdict v-${v.kind}"${stage === "done" ? "" : ' data-pending="1"'}>
+    <div class="vtop">
       <div class="vword" aria-label="Verdict">${v.word}</div>
       <div class="vsay">
+        <div class="vwho">
+          <span class="vsym">${opts.sym}</span>
+          <span class="vname">${opts.name}</span>
+          <span class="vstamp ${stampClass}">${opts.stamp}</span>
+        </div>
         <p class="vlead">${esc(opts.lead)}</p>
-        <p class="vsub">${esc(v.line)}</p>
+        <p class="vsub">${esc(v.line)}${pending}</p>
       </div>
     </div>
     ${opts.tiles ?? ""}
     <div class="vfoot">
-      <div class="tallies">${counts || '<span class="tally lv-info"><i></i>nothing to flag</span>'}${stage === "done" ? "" : `<span class="tally pendingchip"><i></i>${esc(opts.stillReading ?? STILL_READING[stage])}</span>`}</div>
-      <div class="vat">${opts.at}</div>
+      <button class="vaddr" type="button" data-copy="${esc(opts.address)}" title="Copy the address">${esc(opts.address)}</button>
+      <span class="vat">${opts.at}</span>
       <div class="vacts">${opts.actions}</div>
     </div>
   </section>`;
