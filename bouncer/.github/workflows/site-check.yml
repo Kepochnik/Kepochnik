@@ -75,12 +75,19 @@ jobs:
       - name: How long until there is an answer on screen
         env:
           PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/.pw
+          URL: ${{ inputs.url || 'https://kepochnik.github.io/bouncer/' }}
         # Two numbers, not one: time to a verdict, and time to a complete
         # slip. The page renders the fast half first, and that claim is
         # worth nothing unless it is measured against the real site.
         run: |
-          node scripts/speed-check.mjs "${{ inputs.url || 'https://kepochnik.github.io/bouncer/' }}" base 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913
-          node scripts/speed-check.mjs "${{ inputs.url || 'https://kepochnik.github.io/bouncer/' }}" robinhood 0x39dbed3a2bd333467115de45665cc57f813c4571
+          # Both chains, whatever either one does. Run under `bash -e` one
+          # after the other, a slow Base meant Robinhood was never measured
+          # at all — so half the evidence went missing on exactly the runs
+          # where it was most worth having.
+          rc=0
+          node scripts/speed-check.mjs "$URL" base 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913 || rc=1
+          node scripts/speed-check.mjs "$URL" robinhood 0x39dbed3a2bd333467115de45665cc57f813c4571 || rc=1
+          exit $rc
       - uses: actions/upload-artifact@v4
         if: always()
         with:
