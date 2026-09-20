@@ -843,7 +843,12 @@ function answerCards(notes: DoorNote[]): string {
 /** What did not answer. Its own strip, always, never folded in with the findings. */
 function unreadStrip(notes: DoorNote[], skipped: { section: string; reason: string }[]): string {
   const mine = notes.filter((n) => topicOf(n.code) === "unread");
-  if (!mine.length && !skipped.length) return "";
+  // No rows, no strip. The guard used to let `skipped` open the box on its
+  // own, and every skipped section already becomes a note — so the only way
+  // that branch could fire was with a heading saying something went unread
+  // above a list saying nothing did.
+  if (!mine.length) return "";
+  void skipped;
   const rows = mine.map((n) => `<li>${esc(n.text)}</li>`).join("");
   return `<section class="unread">
     <h2>${esc(TOPIC_QUESTION.unread)}</h2>
@@ -873,7 +878,7 @@ function unreadStrip(notes: DoorNote[], skipped: { section: string; reason: stri
  * to buy a thing this page could not identify is the one recommendation it
  * has no business making.
  */
-function buyStrip(chainKey: string, address: string, sellable = true): string {
+function buyStrip(chainKey: string, address: string, sellable = true, verdict: "stop" | "watch" | "clear" | "reading" = "clear"): string {
   if (!sellable) {
     return `<section class="buy">
       <div class="buy-head"><h2>Buy it</h2></div>
@@ -896,9 +901,19 @@ function buyStrip(chainKey: string, address: string, sellable = true): string {
   const gap = missing.length
     ? `<p class="buy-gap">${esc(missing.join(" and "))} ${missing.length === 1 ? "is" : "are"} not linked on this chain: BOUNCER has no confirmed address for ${missing.length === 1 ? "it" : "them"} here, and a guessed link is a dead one.</p>`
     : "";
-  return `<section class="buy">
-    <div class="buy-head"><h2>Buy it</h2></div>
-    <p class="qblurb">BOUNCER cannot trade and holds no key. These open the token on someone else's venue. Read the slip above first; nothing here changes what it says.</p>
+  // The strip takes the verdict's word for it. A neutral "buy it" heading
+  // under a red STOP reads as the page arguing with itself, and a reader who
+  // scrolled straight here should meet the finding, not the links.
+  const head = verdict === "stop" ? "Buy it anyway?" : "Buy it";
+  const lead =
+    verdict === "stop"
+      ? "The slip above says STOP: something here can cost you money outright. The links are not hidden — this page does not decide for anybody — but read the red lines first, because nothing on the other side of them will."
+      : verdict === "watch"
+        ? "The slip above has things worth reading first. These open the token on someone else's venue; BOUNCER cannot trade and holds no key."
+        : "BOUNCER cannot trade and holds no key. These open the token on someone else's venue. Read the slip above first; nothing here changes what it says.";
+  return `<section class="buy${verdict === "stop" ? " buy-stop" : ""}">
+    <div class="buy-head"><h2>${head}</h2></div>
+    <p class="qblurb">${lead}</p>
     <div class="buy-links">${links}</div>
     ${gap}
   </section>`;
@@ -1016,7 +1031,7 @@ function renderSplSlip(slip: SplSlip, opts: { stage?: Stage } = {}): void {
     })}
     ${answerCards(slip.notes as DoorNote[])}
     ${unreadStrip(slip.notes as DoorNote[], slip.skipped)}
-    ${buyStrip(slip.chain.key, slip.subject, Boolean(slip.mint))}
+    ${buyStrip(slip.chain.key, slip.subject, Boolean(slip.mint), verdictOf(slip.notes as DoorNote[]).kind)}
     <div class="stack">
       ${section("s-id", "Is it real?", "What this address actually is, who can print more of it, and who can freeze what you hold.", idBody, false)}
       ${extBody ? section("s-ext", "Token-2022 extensions", "The rules the token program itself enforces on every transfer.", extBody, false) : ""}
@@ -1366,7 +1381,7 @@ function renderSlip(slip: DoorSlip, opts: { stage?: Stage } = {}): void {
     <div class="card-wrap" id="card"></div>
     ${answerCards(slip.notes)}
     ${unreadStrip(slip.notes, slip.skipped)}
-    ${buyStrip(mode === "demo" ? "" : slip.chain.key, slip.subject, Boolean(slip.id.meta) && slip.open?.transferFunction !== false)}
+    ${buyStrip(mode === "demo" ? "" : slip.chain.key, slip.subject, Boolean(slip.id.meta) && slip.open?.transferFunction !== false, verdictOf(slip.notes).kind)}
     <h2 class="stack-head">The evidence<span>every number above, and where it was read from</span></h2>
     <div class="stack">
       ${section("s-id", "Is it real?", "Did the launchpad's factory deploy this token, and can its code change later?", idBody, false)}

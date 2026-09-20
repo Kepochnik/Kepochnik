@@ -7170,7 +7170,8 @@
   }
   function unreadStrip(notes, skipped) {
     const mine = notes.filter((n) => topicOf(n.code) === "unread");
-    if (!mine.length && !skipped.length) return "";
+    if (!mine.length) return "";
+    void skipped;
     const rows = mine.map((n) => `<li>${esc2(n.text)}</li>`).join("");
     return `<section class="unread">
     <h2>${esc2(TOPIC_QUESTION.unread)}</h2>
@@ -7178,7 +7179,7 @@
     <ul>${rows}</ul>
   </section>`;
   }
-  function buyStrip(chainKey, address, sellable = true) {
+  function buyStrip(chainKey, address, sellable = true, verdict = "clear") {
     if (!sellable) {
       return `<section class="buy">
       <div class="buy-head"><h2>Buy it</h2></div>
@@ -7196,9 +7197,11 @@
     ).join("");
     const missing = missingVenues(chainKey);
     const gap = missing.length ? `<p class="buy-gap">${esc2(missing.join(" and "))} ${missing.length === 1 ? "is" : "are"} not linked on this chain: BOUNCER has no confirmed address for ${missing.length === 1 ? "it" : "them"} here, and a guessed link is a dead one.</p>` : "";
-    return `<section class="buy">
-    <div class="buy-head"><h2>Buy it</h2></div>
-    <p class="qblurb">BOUNCER cannot trade and holds no key. These open the token on someone else's venue. Read the slip above first; nothing here changes what it says.</p>
+    const head = verdict === "stop" ? "Buy it anyway?" : "Buy it";
+    const lead = verdict === "stop" ? "The slip above says STOP: something here can cost you money outright. The links are not hidden \u2014 this page does not decide for anybody \u2014 but read the red lines first, because nothing on the other side of them will." : verdict === "watch" ? "The slip above has things worth reading first. These open the token on someone else's venue; BOUNCER cannot trade and holds no key." : "BOUNCER cannot trade and holds no key. These open the token on someone else's venue. Read the slip above first; nothing here changes what it says.";
+    return `<section class="buy${verdict === "stop" ? " buy-stop" : ""}">
+    <div class="buy-head"><h2>${head}</h2></div>
+    <p class="qblurb">${lead}</p>
     <div class="buy-links">${links}</div>
     ${gap}
   </section>`;
@@ -7283,7 +7286,7 @@
     })}
     ${answerCards(slip.notes)}
     ${unreadStrip(slip.notes, slip.skipped)}
-    ${buyStrip(slip.chain.key, slip.subject, Boolean(slip.mint))}
+    ${buyStrip(slip.chain.key, slip.subject, Boolean(slip.mint), verdictOf(slip.notes).kind)}
     <div class="stack">
       ${section("s-id", "Is it real?", "What this address actually is, who can print more of it, and who can freeze what you hold.", idBody, false)}
       ${extBody ? section("s-ext", "Token-2022 extensions", "The rules the token program itself enforces on every transfer.", extBody, false) : ""}
@@ -7542,7 +7545,7 @@
     <div class="card-wrap" id="card"></div>
     ${answerCards(slip.notes)}
     ${unreadStrip(slip.notes, slip.skipped)}
-    ${buyStrip(mode === "demo" ? "" : slip.chain.key, slip.subject, Boolean(slip.id.meta) && slip.open?.transferFunction !== false)}
+    ${buyStrip(mode === "demo" ? "" : slip.chain.key, slip.subject, Boolean(slip.id.meta) && slip.open?.transferFunction !== false, verdictOf(slip.notes).kind)}
     <h2 class="stack-head">The evidence<span>every number above, and where it was read from</span></h2>
     <div class="stack">
       ${section("s-id", "Is it real?", "Did the launchpad's factory deploy this token, and can its code change later?", idBody, false)}

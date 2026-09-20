@@ -241,6 +241,11 @@ body.answered .chips{display:none}
 .vlead,.vsub,.qblurb,.ans,.unread li,.tile .s,.kv dd,.rules li{overflow-wrap:anywhere}
 
 /* ---- the five questions ------------------------------------ */
+/* Under a STOP the strip wears it, rather than sitting there in the house
+   style as though the red lines above were somebody else's problem. */
+.buy.buy-stop{border-color:var(--stop-edge);background:linear-gradient(180deg,var(--stop-bg),var(--surface) 70%)}
+.buy.buy-stop .buy-head h2{color:var(--stop)}
+
 /* Somebody typed a ticker. Candidates, never a choice made for them: a
    ticker is not unique and picking one would be guessing on the exact
    question this tool exists to answer. */
