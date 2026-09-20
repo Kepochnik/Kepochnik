@@ -4983,7 +4983,7 @@
     const supply = meta?.totalSupply ?? null;
     const bps3 = (v) => supply !== null && supply > 0n ? Number(v * 10000n / supply) : null;
     const settle = (p) => p.then((value) => ({ value }), (error) => ({ error }));
-    const bsEarly = options.blockscout;
+    const bsEarly = options.skipExplorer ? null : options.blockscout;
     const holderList = bsEarly ? bsEarly.tokenHolders(address, 50).catch(() => null) : Promise.resolve(null);
     const addressInfoP = bsEarly ? settle(bsEarly.addressInfo(address)) : null;
     const tokenInfoP = bsEarly ? bsEarly.tokenInfo(address).catch(() => ({ holders: null, transfers: null, type: null, priceUsd: null, volume24hUsd: null, marketCapUsd: null })) : null;
@@ -5017,7 +5017,7 @@
       })()
     ) : null;
     const ownerBalanceP = owner && !owner.renounced ? readBalance(rpc, address, owner.address, block).then((balance) => ({ balance, bps: bps3(balance) })).catch(() => null) : Promise.resolve(null);
-    const candidatesP = !has(TRANSFER_SIGNATURE) ? Promise.resolve({ value: [] }) : settle(
+    const candidatesP = options.skipProbes || !has(TRANSFER_SIGNATURE) ? Promise.resolve({ value: [] }) : settle(
       (async () => {
         const listed = await holderList ?? [];
         const settledInfo = addressInfoP ? await addressInfoP : null;
@@ -5028,7 +5028,7 @@
     let pools = null;
     let market = null;
     let liquidity = null;
-    if (options.dex) {
+    if (options.dex && !options.skipMarket) {
       try {
         pools = await readPools(rpc, address, options.dex, block, meta?.decimals ?? 18, {
           v4PoolManager: options.v4PoolManager,
@@ -5107,7 +5107,7 @@
       const text = error instanceof Error ? error.message : String(error);
       explorerError = explorerError ? `${explorerError}; ${text}` : text;
     };
-    const bs = options.blockscout;
+    const bs = options.skipExplorer ? null : options.blockscout;
     if (bs) {
       let info = null;
       const read = deployerRead ? await deployerRead : null;
@@ -5170,7 +5170,9 @@
     const ownerBalance = await ownerBalanceP;
     const probes = [];
     let probesSkipped = null;
-    if (!has(TRANSFER_SIGNATURE)) {
+    if (options.skipProbes) {
+      probesSkipped = "the sale simulation is still running";
+    } else if (!has(TRANSFER_SIGNATURE)) {
       probesSkipped = surfaceFrom === "implementation-unreadable" ? "the code that actually runs could not be read, so no transfer was simulated" : "this contract has no transfer(address,uint256) function, so it is not an ERC-20 and no transfer was simulated";
     } else {
       const settledCandidates = await candidatesP;
@@ -5506,6 +5508,9 @@
         slip.open = await readOpenDoor(rpc, id.token, id.meta, head.number, {
           blockscout: options.blockscout ?? null,
           dex: chain2.dex,
+          skipMarket: options.skipMarket,
+          skipExplorer: options.skipExplorer,
+          skipProbes: options.skipProbes,
           lockers,
           liquidity: options.skipLiquidity !== true,
           // A day, not a week. This is read before a trade, and the measured
@@ -6456,6 +6461,7 @@
   }
   var doorRun = 0;
   var SLOW_SECTIONS = { skipLiquidity: true, skipDev: true, skipRoom: true, skipCrew: true, skipLookalikes: true };
+  var OPENING_SECTIONS = { ...SLOW_SECTIONS, skipMarket: true, skipExplorer: true, skipProbes: true };
   async function runDoor(address) {
     if (chain().family === "solana" && mode === "live") return await runSolanaDoor(address);
     if (!ADDR.test(address)) return bad("Paste a 20-byte hex address: the token or its bonding curve, 0x followed by 40 hex characters.");
@@ -6468,21 +6474,32 @@
     const run = ++doorRun;
     busy("reading the chain at the door\u2026");
     const options = mode === "demo" ? { chain: CHAINS.robinhood, factory: factoryFor(), blockscout: blockscoutFor(), devHours: 8, chunkSize: 1e5, launchSearchBlocks: 4e5 } : { chain: chain(), factory: factoryFor(), blockscout: blockscoutFor(), devHours: 24 };
-    let quick = false;
+    let drawn = null;
+    const draw = (slip, stage) => {
+      if (run !== doorRun) return false;
+      if (drawn === null) renderSlip(slip, { stage });
+      else keepPlace(() => renderSlip(slip, { stage }));
+      drawn = stage;
+      status.textContent = `${mode === "demo" ? "DEMO \xB7 " : `${chain().name} \xB7 `}block ${slip.at.block} \xB7 ${STILL_READING[stage]}\u2026`;
+      return true;
+    };
     try {
-      const fast = await readDoor(rpcFor(), address, { ...options, ...SLOW_SECTIONS });
-      if (run !== doorRun) return;
-      renderSlip(fast, { pending: true });
-      quick = true;
-      status.textContent = `${mode === "demo" ? "DEMO \xB7 " : `${chain().name} \xB7 `}block ${fast.at.block} \xB7 reading the slower parts\u2026`;
+      const opening = await readDoor(rpcFor(), address, { ...options, ...OPENING_SECTIONS });
+      if (!draw(opening, "opening")) return;
     } catch {
     }
     try {
+      const fast = await readDoor(rpcFor(), address, { ...options, ...SLOW_SECTIONS });
+      if (!draw(fast, "fast")) return;
+    } catch {
+    }
+    const quick = drawn !== null;
+    try {
       const slip = await readDoor(rpcFor(), address, options);
       if (run !== doorRun) return;
-      done(`block ${slip.at.block} \xB7 ${isoUtc(slip.at.timestamp)} \xB7 ${slip.notes.length} thing${slip.notes.length === 1 ? "" : "s"} to know`);
       if (quick) keepPlace(() => renderSlip(slip));
       else renderSlip(slip);
+      done(`block ${slip.at.block} \xB7 ${isoUtc(slip.at.timestamp)} \xB7 ${slip.notes.length} thing${slip.notes.length === 1 ? "" : "s"} to know`);
     } catch (error) {
       if (run !== doorRun) return;
       if (quick) {
@@ -6672,15 +6689,22 @@
     if (slip.rules?.phase === 2 || slip.rules?.phase === 3) parts.push("graduated, pool locked");
     return parts.map((x) => x.charAt(0).toUpperCase() + x.slice(1)).join(". ") + ".";
   }
-  function verdictOf(notes) {
+  function verdictOf(notes, stage = "done") {
+    if (stage === "opening") return { word: "READING", kind: "reading", line: "The code and the keys are below. Where it trades, who holds it and whether a sale goes through are still being read." };
     const stop = notes.filter((n) => n.level === "stop").length;
     const watch = notes.filter((n) => n.level === "watch").length;
     if (stop) return { word: "STOP", kind: "stop", line: `${stop} thing${stop === 1 ? "" : "s"} here can cost you money outright.` };
     if (watch) return { word: "WATCH", kind: "watch", line: `Nothing outright dangerous, ${watch} thing${watch === 1 ? "" : "s"} worth reading before you buy.` };
     return { word: "CLEAR", kind: "clear", line: "Nothing in what was read stands out. That is not a promise about the price." };
   }
+  var STILL_READING = {
+    opening: "still reading where it trades, who holds it, and whether a sale goes through",
+    fast: "still reading who holds the liquidity and the dev history",
+    done: ""
+  };
   function verdictBlock(opts) {
-    const v = verdictOf(opts.notes);
+    const stage = opts.stage ?? "done";
+    const v = verdictOf(opts.notes, stage);
     const counts = ["stop", "watch", "info"].map((level) => ({ level, n: opts.notes.filter((x) => x.level === level).length })).filter((x) => x.n > 0).map((x) => `<span class="tally lv-${x.level}"><i></i>${x.n} ${LEVEL_WORD[x.level].toLowerCase()}</span>`).join("");
     const stampClass = opts.stamp === "ON THE LIST" ? "yes" : opts.stamp === "NOT A LAUNCH" ? "mid" : "no";
     return `<section class="verdict v-${v.kind}">
@@ -6700,7 +6724,7 @@
       </div>
     </div>
     <div class="vfoot">
-      <div class="tallies">${counts || '<span class="tally lv-info"><i></i>nothing to flag</span>'}${opts.pending ? '<span class="tally pendingchip"><i></i>still reading the liquidity and the dev history</span>' : ""}</div>
+      <div class="tallies">${counts || '<span class="tally lv-info"><i></i>nothing to flag</span>'}${stage === "done" ? "" : `<span class="tally pendingchip"><i></i>${STILL_READING[stage]}</span>`}</div>
       <div class="vat">${opts.at}</div>
       <div class="vacts">${opts.actions}</div>
     </div>
@@ -7008,7 +7032,7 @@
       at: `${mode === "demo" ? "DEMO \xB7 " : ""}${esc2(slip.chain.name)} \xB7 block ${slip.at.block} \xB7 ${isoUtc(slip.at.timestamp)}`,
       notes: slip.notes,
       lead: summarySentence(slip),
-      pending: opts.pending === true,
+      stage: opts.stage ?? "done",
       actions: `<button class="ghost" id="act-card" type="button">Image</button><button class="ghost" id="act-json" type="button">JSON</button><button class="ghost" id="act-link" type="button">Link</button>`
     })}
     <div class="card-wrap" id="card"></div>

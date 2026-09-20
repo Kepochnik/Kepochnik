@@ -192,6 +192,18 @@ export interface OpenDoorOptions {
   liquidityBudgetMs?: number;
   /** A resolved Uniswap V4 singleton; V4 pools are skipped when absent. */
   v4PoolManager?: string;
+  /**
+   * The three sections a first render can do without, so the page can put
+   * something true on screen before the slowest server has answered.
+   *
+   * Each one leaves its field null or its reason set — never a zero, never
+   * an empty list that reads as "checked and found nothing". `pools: null`
+   * already means "not read" and `probesSkipped` already carries a sentence;
+   * these flags fill them in rather than inventing a new kind of silence.
+   */
+  skipMarket?: boolean;
+  skipExplorer?: boolean;
+  skipProbes?: boolean;
 }
 
 const BURN_ADDRESSES = new Set([ZERO_ADDRESS, "0x000000000000000000000000000000000000dead", "0x0000000000000000000000000000000000000001"]);
@@ -288,7 +300,7 @@ export async function readOpenDoor(rpc: RpcClient, token: ContractId, meta: Toke
   // not know, which is an ordinary case and not an error. Settling keeps the
   // failure until the await, where the existing catch already handles it.
   const settle = <T>(p: Promise<T>): Promise<{ value: T } | { error: unknown }> => p.then((value) => ({ value }), (error) => ({ error }));
-  const bsEarly = options.blockscout;
+  const bsEarly = options.skipExplorer ? null : options.blockscout;
   const holderList = bsEarly ? bsEarly.tokenHolders(address, 50).catch(() => null) : Promise.resolve(null);
   const addressInfoP = bsEarly ? settle(bsEarly.addressInfo(address)) : null;
   const tokenInfoP = bsEarly ? bsEarly.tokenInfo(address).catch(() => ({ holders: null, transfers: null, type: null, priceUsd: null, volume24hUsd: null, marketCapUsd: null })) : null;
@@ -354,7 +366,7 @@ export async function readOpenDoor(rpc: RpcClient, token: ContractId, meta: Toke
   // after everything else had finished. Only the target of the sale needs
   // the pools, and that is decided below.
   type Candidate = { address: string; source: TransferProbe["source"] };
-  const candidatesP: Promise<{ value: Candidate[] } | { error: unknown }> = !has(TRANSFER_SIGNATURE)
+  const candidatesP: Promise<{ value: Candidate[] } | { error: unknown }> = options.skipProbes || !has(TRANSFER_SIGNATURE)
     ? Promise.resolve({ value: [] as Candidate[] })
     : settle(
         (async () => {
@@ -373,7 +385,7 @@ export async function readOpenDoor(rpc: RpcClient, token: ContractId, meta: Toke
   let pools: MarketPool[] | null = null;
   let market: Market | null = null;
   let liquidity: PoolLock | null = null;
-  if (options.dex) {
+  if (options.dex && !options.skipMarket) {
     try {
       pools = await readPools(rpc, address, options.dex, block, meta?.decimals ?? 18, {
         v4PoolManager: options.v4PoolManager,
@@ -493,7 +505,7 @@ export async function readOpenDoor(rpc: RpcClient, token: ContractId, meta: Toke
     const text = error instanceof Error ? error.message : String(error);
     explorerError = explorerError ? `${explorerError}; ${text}` : text;
   };
-  const bs = options.blockscout;
+  const bs = options.skipExplorer ? null : options.blockscout;
   if (bs) {
     let info: { isScam: boolean; isVerified: boolean; creator: string | null; creationTx: string | null } | null = null;
     // Started above, long since running. See "the two reads that hang off
@@ -563,7 +575,9 @@ export async function readOpenDoor(rpc: RpcClient, token: ContractId, meta: Toke
   // ---- can a holder move it, and can they move it into the pool
   const probes: TransferProbe[] = [];
   let probesSkipped: string | null = null;
-  if (!has(TRANSFER_SIGNATURE)) {
+  if (options.skipProbes) {
+    probesSkipped = "the sale simulation is still running";
+  } else if (!has(TRANSFER_SIGNATURE)) {
     probesSkipped =
       surfaceFrom === "implementation-unreadable"
         ? "the code that actually runs could not be read, so no transfer was simulated"

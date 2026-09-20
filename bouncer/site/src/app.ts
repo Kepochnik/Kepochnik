@@ -293,6 +293,18 @@ let doorRun = 0;
  */
 const SLOW_SECTIONS = { skipLiquidity: true, skipDev: true, skipRoom: true, skipCrew: true, skipLookalikes: true } as const;
 
+/**
+ * And the render before that one: the chain on its own.
+ *
+ * The explorer is a different server and the slowest thing in the check —
+ * measured on Robinhood Chain, one /addresses read is about four seconds,
+ * against a quarter-second for a round trip to the node. Pool discovery and
+ * the sale simulation both wait on reads of their own. None of the three is
+ * needed to say what the code can do and who holds the keys, so the first
+ * render does not wait for them.
+ */
+const OPENING_SECTIONS = { ...SLOW_SECTIONS, skipMarket: true, skipExplorer: true, skipProbes: true } as const;
+
 async function runDoor(address: string): Promise<void> {
   if (chain().family === "solana" && mode === "live") return await runSolanaDoor(address);
   if (!ADDR.test(address)) return bad("Paste a 20-byte hex address: the token or its bonding curve, 0x followed by 40 hex characters.");
@@ -309,27 +321,51 @@ async function runDoor(address: string): Promise<void> {
     ? { chain: CHAINS.robinhood, factory: factoryFor(), blockscout: blockscoutFor(), devHours: 8, chunkSize: 100_000, launchSearchBlocks: 400_000 }
     : { chain: chain(), factory: factoryFor(), blockscout: blockscoutFor(), devHours: 24 };
 
-  // Pass one: everything but the log scans. This costs the fast reads twice
-  // over the two passes, which is about two seconds against the eighteen it
-  // takes off the wait for an answer.
-  let quick = false;
+  // Three renders off one paste, each drawn the moment its own reads land.
+  //
+  // The opening one asks the chain and nothing else: four round trips for
+  // what the code can do and who holds the keys. No explorer, no pool
+  // discovery, no sale simulation — three different servers and three
+  // different kinds of read, none of which the first true sentence needs.
+  // It carries no verdict word, because a verdict off a quarter of the
+  // evidence is one that changes while you read it.
+  //
+  // Then the fast one, then the whole thing. Each costs the reads before it
+  // over again, which is cheap and parallel; what it buys is that nobody
+  // watches a blank page while the slowest server makes up its mind.
+  let drawn: Stage | null = null;
+  const draw = (slip: DoorSlip, stage: Stage) => {
+    if (run !== doorRun) return false;
+    if (drawn === null) renderSlip(slip, { stage });
+    else keepPlace(() => renderSlip(slip, { stage }));
+    drawn = stage;
+    status.textContent = `${mode === "demo" ? "DEMO · " : `${chain().name} · `}block ${slip.at.block} · ${STILL_READING[stage]}…`;
+    return true;
+  };
+
+  try {
+    const opening = await readDoor(rpcFor(), address, { ...options, ...OPENING_SECTIONS });
+    if (!draw(opening, "opening")) return;
+  } catch {
+    // Nothing to report: the passes below ask the same questions again and
+    // will say what went wrong when they cannot answer them either.
+  }
+
   try {
     const fast = await readDoor(rpcFor(), address, { ...options, ...SLOW_SECTIONS });
-    if (run !== doorRun) return;
-    renderSlip(fast, { pending: true });
-    quick = true;
-    status.textContent = `${mode === "demo" ? "DEMO · " : `${chain().name} · `}block ${fast.at.block} · reading the slower parts…`;
+    if (!draw(fast, "fast")) return;
   } catch {
     // The fast pass failing is not itself worth reporting: the full pass is
     // about to try the same reads and will say what went wrong.
   }
+  const quick = drawn !== null;
 
   try {
     const slip = await readDoor(rpcFor(), address, options);
     if (run !== doorRun) return;
-    done(`block ${slip.at.block} · ${isoUtc(slip.at.timestamp)} · ${slip.notes.length} thing${slip.notes.length === 1 ? "" : "s"} to know`);
     if (quick) keepPlace(() => renderSlip(slip));
     else renderSlip(slip);
+    done(`block ${slip.at.block} · ${isoUtc(slip.at.timestamp)} · ${slip.notes.length} thing${slip.notes.length === 1 ? "" : "s"} to know`);
   } catch (error) {
     if (run !== doorRun) return;
     // A fast answer already on screen is not thrown away because the slow
@@ -540,14 +576,44 @@ function summarySentence(slip: DoorSlip): string {
  * the site, the extension and the MCP server cannot drift apart on it.
  */
 
-/** The one word at the top. Loudest note wins; nothing loud means nothing was found, which is not the same as safe. */
-function verdictOf(notes: DoorNote[]): { word: string; kind: "stop" | "watch" | "clear"; line: string } {
+/**
+ * The one word at the top. Loudest note wins; nothing loud means nothing was
+ * found, which is not the same as safe.
+ *
+ * On the opening render there is no word yet. The page has the code and the
+ * keys by then, and that is worth putting on screen a second early — but a
+ * verdict read off half the evidence is a verdict that changes while you are
+ * reading it, and a STOP that turns into a CLEAR teaches a reader to ignore
+ * the next one. So the first render says READING and means it.
+ */
+function verdictOf(notes: DoorNote[], stage: Stage = "done"): { word: string; kind: "stop" | "watch" | "clear" | "reading"; line: string } {
+  if (stage === "opening") return { word: "READING", kind: "reading", line: "The code and the keys are below. Where it trades, who holds it and whether a sale goes through are still being read." };
   const stop = notes.filter((n) => n.level === "stop").length;
   const watch = notes.filter((n) => n.level === "watch").length;
   if (stop) return { word: "STOP", kind: "stop", line: `${stop} thing${stop === 1 ? "" : "s"} here can cost you money outright.` };
   if (watch) return { word: "WATCH", kind: "watch", line: `Nothing outright dangerous, ${watch} thing${watch === 1 ? "" : "s"} worth reading before you buy.` };
   return { word: "CLEAR", kind: "clear", line: "Nothing in what was read stands out. That is not a promise about the price." };
 }
+
+/**
+ * How far along a render is. The page draws three times off one paste:
+ *
+ *   opening  the chain only — what the code can do, who holds the keys
+ *   fast     + where it trades, who holds it, whether a sale goes through
+ *   done     + who holds the liquidity, the dev history, the room
+ *
+ * Measured in round trips (npm run depth-check): four, eight and twelve. The
+ * point of the first one is that a reader sees a true thing about the token
+ * before the slowest server involved has answered anything at all.
+ */
+type Stage = "opening" | "fast" | "done";
+
+/** What a stage has not asked for yet, in the reader's words. */
+const STILL_READING: Record<Stage, string> = {
+  opening: "still reading where it trades, who holds it, and whether a sale goes through",
+  fast: "still reading who holds the liquidity and the dev history",
+  done: "",
+};
 
 /**
  * The poster at the top of every slip: who it is, one word, one sentence, and
@@ -561,11 +627,12 @@ function verdictBlock(opts: {
   at: string;
   notes: DoorNote[];
   lead: string;
-  /** True while the slow half is still reading, so the tallies are not final. */
-  pending?: boolean;
+  /** How far along this render is; anything but "done" means the tallies will change. */
+  stage?: Stage;
   actions: string;
 }): string {
-  const v = verdictOf(opts.notes);
+  const stage = opts.stage ?? "done";
+  const v = verdictOf(opts.notes, stage);
   const counts = (["stop", "watch", "info"] as const)
     .map((level) => ({ level, n: opts.notes.filter((x) => x.level === level).length }))
     .filter((x) => x.n > 0)
@@ -589,7 +656,7 @@ function verdictBlock(opts: {
       </div>
     </div>
     <div class="vfoot">
-      <div class="tallies">${counts || '<span class="tally lv-info"><i></i>nothing to flag</span>'}${opts.pending ? '<span class="tally pendingchip"><i></i>still reading the liquidity and the dev history</span>' : ""}</div>
+      <div class="tallies">${counts || '<span class="tally lv-info"><i></i>nothing to flag</span>'}${stage === "done" ? "" : `<span class="tally pendingchip"><i></i>${STILL_READING[stage]}</span>`}</div>
       <div class="vat">${opts.at}</div>
       <div class="vacts">${opts.actions}</div>
     </div>
@@ -869,7 +936,7 @@ function keepPlace(render: () => void): void {
   if (y) window.scrollTo({ top: y, behavior: "auto" });
 }
 
-function renderSlip(slip: DoorSlip, opts: { pending?: boolean } = {}): void {
+function renderSlip(slip: DoorSlip, opts: { stage?: Stage } = {}): void {
   const meta = slip.id.meta;
   const c0 = chain();
   const explorer = c0.blockscout ? `${c0.blockscout}/address/${slip.subject}` : null;
@@ -987,7 +1054,7 @@ function renderSlip(slip: DoorSlip, opts: { pending?: boolean } = {}): void {
       at: `${mode === "demo" ? "DEMO · " : ""}${esc(slip.chain.name)} · block ${slip.at.block} · ${isoUtc(slip.at.timestamp)}`,
       notes: slip.notes,
       lead: summarySentence(slip),
-      pending: opts.pending === true,
+      stage: opts.stage ?? "done",
       actions: `<button class="ghost" id="act-card" type="button">Image</button><button class="ghost" id="act-json" type="button">JSON</button><button class="ghost" id="act-link" type="button">Link</button>`,
     })}
     <div class="card-wrap" id="card"></div>

@@ -82,6 +82,16 @@ export interface DoorOptions {
   skipLookalikes?: boolean;
   /** Skip reading who holds the pool's liquidity; it costs a log scan. */
   skipLiquidity?: boolean;
+  /**
+   * The three the page's FIRST render does without: where it trades, what
+   * the explorer knows, and the simulated sale. Each is a different server
+   * or a different kind of read, and none of them is needed to say what the
+   * code can do and who holds the keys — which is the answer a reader wants
+   * first and the one the chain gives fastest.
+   */
+  skipMarket?: boolean;
+  skipExplorer?: boolean;
+  skipProbes?: boolean;
   /** How far back to look for the mints that opened the pool's positions. */
   liquidityBlocks?: number;
   /** Token amount the exit door prices; default 1% of supply. */
@@ -168,6 +178,9 @@ export async function readDoor(rpc: RpcClient, input: string, options: DoorOptio
       slip.open = await readOpenDoor(rpc, id.token, id.meta, head.number, {
         blockscout: options.blockscout ?? null,
         dex: chain.dex,
+        skipMarket: options.skipMarket,
+        skipExplorer: options.skipExplorer,
+        skipProbes: options.skipProbes,
         lockers,
         liquidity: options.skipLiquidity !== true,
         // A day, not a week. This is read before a trade, and the measured

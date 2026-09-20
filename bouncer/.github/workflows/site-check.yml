@@ -57,6 +57,14 @@ jobs:
         # and look perfect: a dead one earns nothing and renders the same.
         # Both venues sit behind a bot check, so this asks with a browser.
         run: npm run build --silent && node scripts/trade-check.mjs
+      - name: Does the live page really draw three times
+        env:
+          PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/.pw
+        # The staged render is a claim about what happens over time in a
+        # browser, and nothing in the source proves it: the three passes
+        # could quietly collapse into one, or the first could start printing
+        # a verdict it has not earned, and every unit test would stay green.
+        run: node scripts/stage-check.mjs "${{ inputs.url || 'https://kepochnik.github.io/bouncer/' }}"
       - name: How long until there is an answer on screen
         env:
           PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/.pw

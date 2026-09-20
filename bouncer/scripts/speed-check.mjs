@@ -1,6 +1,7 @@
 /**
- * How long until there is an answer on screen, and how long until it is
- * complete? Two numbers, and they are not the same number.
+ * How long until something true is on screen, how long until there is a
+ * verdict, and how long until it is complete? Three numbers, and they are
+ * not the same number.
  *
  * Measured on Base, one door, before any of this:
  *
@@ -12,6 +13,12 @@
  * liquidity. So the page renders the fast half first and fills the rest in.
  * That claim is worth nothing unless somebody measures it against the real
  * site on a real chain, which is what this does.
+ *
+ * The first of the three is the one a reader feels. The page draws the
+ * chain-only render first — what the code can do, who holds the keys — with
+ * the word READING where the verdict goes, because a verdict off a quarter
+ * of the evidence is one that changes while you are reading it. So "a
+ * verdict appeared" and "the page stopped being blank" are measured apart.
  *
  *   node scripts/speed-check.mjs <site-url> <chain> <token>
  */
@@ -53,20 +60,28 @@ await page.waitForTimeout(500);
 const started = Date.now();
 await page.evaluate((h) => { location.hash = h; }, `#/t/${token}?chain=${chain}`);
 
+let firstPaint = null;
 let firstAnswer = null;
 let complete = null;
 const DEADLINE = 120_000;
 while (Date.now() - started < DEADLINE) {
-  const state = await page.evaluate(() => ({
-    verdict: !!document.querySelector(".vword"),
-    pending: !!document.querySelector(".pendingchip"),
-    failed: !!document.querySelector(".error"),
-  }));
+  const state = await page.evaluate(() => {
+    const word = document.querySelector(".vword")?.textContent?.trim() ?? "";
+    return {
+      // Anything on screen at all, including the opening render.
+      painted: Boolean(word),
+      // A verdict proper. READING is the page saying it does not have one yet.
+      verdict: Boolean(word) && word !== "READING",
+      pending: !!document.querySelector(".pendingchip"),
+      failed: !!document.querySelector(".error"),
+    };
+  });
   if (state.failed) {
     console.log(`::warning title=speed on ${chain}::the site could not read this chain from the runner, so nothing was timed`);
     await browser.close();
     process.exit(0);
   }
+  if (state.painted && firstPaint === null) firstPaint = Date.now() - started;
   if (state.verdict && firstAnswer === null) firstAnswer = Date.now() - started;
   // Complete means a verdict is up and the "still reading" chip is gone.
   if (state.verdict && !state.pending && firstAnswer !== null) {
@@ -85,7 +100,9 @@ const full = complete ?? DEADLINE;
 // A notice, not a log line: the numbers are the point of the run and they
 // were getting buried under the artifact upload. An annotation shows in the
 // run summary and comes back from the API without wrestling a log tail.
-console.log(`::notice title=speed on ${chain}::first answer on screen in ${(firstAnswer / 1000).toFixed(1)} s, complete in ${(full / 1000).toFixed(1)} s`);
+console.log(
+  `::notice title=speed on ${chain}::first thing on screen in ${((firstPaint ?? firstAnswer) / 1000).toFixed(1)} s, verdict in ${(firstAnswer / 1000).toFixed(1)} s, complete in ${(full / 1000).toFixed(1)} s`,
+);
 // The whole point of the two passes. If the first answer is not meaningfully
 // sooner than the complete one, the split is costing a duplicate read and
 // buying nothing, and that is worth knowing rather than assuming.

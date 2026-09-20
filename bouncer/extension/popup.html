@@ -191,6 +191,17 @@ body.answered .chips{display:none}
 .verdict.v-stop .vword{color:var(--stop)}
 .verdict.v-watch .vword{color:var(--watch)}
 .verdict.v-clear .vword{color:var(--ok)}
+/* The opening render: the code and the keys are on screen, the verdict is
+   not in yet. Deliberately the quietest of the four — a reader should be
+   able to tell at a glance that this one is not an answer. */
+.verdict.v-reading{border-color:var(--line-2);background:var(--surface)}
+.verdict.v-reading .vword{
+  color:var(--dim);text-shadow:none;
+  font-size:clamp(34px,7vw,64px);letter-spacing:.06em;
+  animation:breathe 1.4s ease-in-out infinite alternate;
+}
+@media (prefers-reduced-motion:reduce){.verdict.v-reading .vword{animation:none}}
+@keyframes breathe{from{opacity:.45}to{opacity:1}}
 .vsay{min-width:0}
 .vlead{margin:0;font-size:clamp(16px,2vw,19px);line-height:1.5;max-width:60ch}
 .vsub{margin:10px 0 0;color:var(--muted);font-size:14px}
