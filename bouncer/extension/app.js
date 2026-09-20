@@ -5186,7 +5186,6 @@
     let verified = null;
     let explorer = null;
     let explorerError = null;
-    let topHolders = [];
     const note = (error) => {
       const text = error instanceof Error ? error.message : String(error);
       explorerError = explorerError ? `${explorerError}; ${text}` : text;
@@ -5208,7 +5207,6 @@
         ]);
         if (!listed) throw new Error("the explorer did not return the token's holders");
         const list = listed;
-        topHolders = list;
         explorer = {
           isScam: info ? info.isScam : null,
           priceUsd: tokenInfo.priceUsd,

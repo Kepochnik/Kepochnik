@@ -521,7 +521,6 @@ export async function readOpenDoor(rpc: RpcClient, token: ContractId, meta: Toke
   let verified: boolean | null = null;
   let explorer: OpenDoor["explorer"] = null;
   let explorerError: string | null = null;
-  let topHolders: TokenHolder[] = [];
   const note = (error: unknown) => {
     const text = error instanceof Error ? error.message : String(error);
     explorerError = explorerError ? `${explorerError}; ${text}` : text;
@@ -547,7 +546,6 @@ export async function readOpenDoor(rpc: RpcClient, token: ContractId, meta: Toke
       // started before that section and is long since resolved.
       if (!listed) throw new Error("the explorer did not return the token's holders");
       const list = listed;
-      topHolders = list;
       explorer = {
         isScam: info ? info.isScam : null,
         priceUsd: tokenInfo.priceUsd,
