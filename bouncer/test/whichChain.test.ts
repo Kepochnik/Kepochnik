@@ -151,3 +151,39 @@ test("a slow chain is left behind, not waited for", async () => {
   assert.match(arc.reason, /did not answer within/);
   assert.ok(!search.empty.some((c) => c.key === "arc"), "too slow is not the same as nothing there");
 });
+
+test("an endpoint answering for the wrong chain is never a hit", async () => {
+  // The failure this whole feature exists to prevent, made by the feature
+  // itself: a proxy route for Base pointed at BNB would have the search
+  // report a token as living on Base when it has never been deployed there.
+  // The client only checks its chain id inside head(), and the search runs
+  // before a chain is chosen, so it cannot call head() — it has to ask.
+  const liar = (chain: ChainConfig) =>
+    new RpcClient({
+      urls: [`demo://${chain.key}`],
+      expectedChainId: chain.chainId,
+      minSpacingMs: 0,
+      fetchImpl: (async (_url: string | URL | Request, init?: RequestInit) => {
+        const body = JSON.parse(String(init?.body)) as { id: number; method: string }[];
+        return new Response(
+          JSON.stringify(
+            body.map((r) =>
+              r.method === "eth_chainId"
+                ? // Base's endpoint answers with BNB's chain id.
+                  { jsonrpc: "2.0", id: r.id, result: `0x${(chain.key === "base" ? CHAINS.bnb.chainId : chain.chainId).toString(16)}` }
+                : r.method === "eth_getCode"
+                  ? { jsonrpc: "2.0", id: r.id, result: chain.key === "base" ? `0x${"ab".repeat(80)}` : "0x" }
+                  : { jsonrpc: "2.0", id: r.id, error: { code: -32000, message: "execution reverted" } },
+            ),
+          ),
+        );
+      }) as typeof fetch,
+    });
+
+  const search = await whichChains(TOKEN, liar, EVM);
+  assert.equal(search.hits.length, 0, "bytecode from an endpoint on the wrong chain is not a token on this chain");
+  const base = search.unreachable.find((u) => u.chain.key === "base");
+  assert.ok(base, "and the reader has to be told the endpoint is misrouted, not that the chain is empty");
+  assert.match(base.reason, /reports chain \d+, not \d+/);
+  assert.ok(!search.empty.some((c) => c.key === "base"));
+});

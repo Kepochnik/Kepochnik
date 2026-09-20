@@ -108,6 +108,17 @@ export async function whichChains(
       try {
         const answers = await Promise.race([
           clientFor(chain).sendBatchSettled([
+            // First, because the rest is worthless without it.
+            //
+            // Nothing else in this batch proves WHICH chain answered. The
+            // client verifies its chain id inside head(), and this search
+            // does not call head() — it cannot, it runs before a chain is
+            // chosen. So a proxy route pointed at the wrong network, or a
+            // fallback endpoint that is not what its name says, would have
+            // this function report a token as living on a chain it has
+            // never been deployed to. That is the exact mistake the whole
+            // feature exists to prevent, made by the feature itself.
+            { method: "eth_chainId", params: [] },
             { method: "eth_getCode", params: [address, "latest"] },
             { method: "eth_call", params: [{ to: address, data: encodeCall(ERC20_FUNCTIONS.name, []) }, "latest"] },
             { method: "eth_call", params: [{ to: address, data: encodeCall(ERC20_FUNCTIONS.symbol, []) }, "latest"] },
@@ -115,7 +126,16 @@ export async function whichChains(
           late(null),
         ]);
         if (answers === null) return { chain, hit: null, reason: `did not answer within ${deadlineMs} ms` };
-        const [code, name, symbol] = answers;
+        const [id, code, name, symbol] = answers;
+        if (id instanceof RpcError || typeof id !== "string") {
+          return { chain, hit: null, reason: `the endpoint would not say which chain it is${id instanceof RpcError ? `: ${id.message}` : ""}` };
+        }
+        const reported = Number(BigInt(id));
+        if (reported !== chain.chainId) {
+          // Never a hit, and never silently empty either: somebody needs to
+          // know their endpoint for this chain is answering for another one.
+          return { chain, hit: null, reason: `the endpoint for ${chain.name} reports chain ${reported}, not ${chain.chainId} — it is pointed at the wrong network` };
+        }
         // The code slot is the one that decides. If IT failed, the chain did
         // not answer the question asked — that is unreachable, not empty.
         if (code instanceof RpcError) return { chain, hit: null, reason: code.message };

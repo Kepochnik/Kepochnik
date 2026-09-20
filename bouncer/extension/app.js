@@ -2289,6 +2289,17 @@
         try {
           const answers = await Promise.race([
             clientFor(chain2).sendBatchSettled([
+              // First, because the rest is worthless without it.
+              //
+              // Nothing else in this batch proves WHICH chain answered. The
+              // client verifies its chain id inside head(), and this search
+              // does not call head() — it cannot, it runs before a chain is
+              // chosen. So a proxy route pointed at the wrong network, or a
+              // fallback endpoint that is not what its name says, would have
+              // this function report a token as living on a chain it has
+              // never been deployed to. That is the exact mistake the whole
+              // feature exists to prevent, made by the feature itself.
+              { method: "eth_chainId", params: [] },
               { method: "eth_getCode", params: [address, "latest"] },
               { method: "eth_call", params: [{ to: address, data: encodeCall(ERC20_FUNCTIONS.name, []) }, "latest"] },
               { method: "eth_call", params: [{ to: address, data: encodeCall(ERC20_FUNCTIONS.symbol, []) }, "latest"] }
@@ -2296,7 +2307,14 @@
             late(null)
           ]);
           if (answers === null) return { chain: chain2, hit: null, reason: `did not answer within ${deadlineMs} ms` };
-          const [code, name, symbol] = answers;
+          const [id, code, name, symbol] = answers;
+          if (id instanceof RpcError || typeof id !== "string") {
+            return { chain: chain2, hit: null, reason: `the endpoint would not say which chain it is${id instanceof RpcError ? `: ${id.message}` : ""}` };
+          }
+          const reported = Number(BigInt(id));
+          if (reported !== chain2.chainId) {
+            return { chain: chain2, hit: null, reason: `the endpoint for ${chain2.name} reports chain ${reported}, not ${chain2.chainId} \u2014 it is pointed at the wrong network` };
+          }
           if (code instanceof RpcError) return { chain: chain2, hit: null, reason: code.message };
           if (typeof code !== "string") return { chain: chain2, hit: null, reason: "the endpoint answered with something that is not bytecode" };
           const codeSize = Math.max(0, (code.length - 2) / 2);
