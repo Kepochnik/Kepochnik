@@ -6734,7 +6734,13 @@
     const passes = [
       ["opening", readDoor(rpc, address, { ...options, ...OPENING_SECTIONS, at })],
       ["fast", readDoor(rpc, address, { ...options, ...SLOW_SECTIONS, at })],
-      ["done", new Promise((resolve) => setTimeout(resolve, SLOW_HALF_HEAD_START_MS)).then(() => readDoor(rpc, address, { ...options, at }))]
+      [
+        "done",
+        new Promise((resolve) => setTimeout(resolve, SLOW_HALF_HEAD_START_MS)).then(() => {
+          if (run !== doorRun) throw new Error("superseded");
+          return readDoor(rpc, address, { ...options, at });
+        })
+      ]
     ];
     for (const [, p] of passes) p.catch(() => {
     });

@@ -420,7 +420,15 @@ async function runDoor(address: string): Promise<void> {
   const passes: [Stage, Promise<DoorSlip>][] = [
     ["opening", readDoor(rpc, address, { ...options, ...OPENING_SECTIONS, at })],
     ["fast", readDoor(rpc, address, { ...options, ...SLOW_SECTIONS, at })],
-    ["done", new Promise<void>((resolve) => setTimeout(resolve, SLOW_HALF_HEAD_START_MS)).then(() => readDoor(rpc, address, { ...options, at }))],
+    [
+      "done",
+      new Promise<void>((resolve) => setTimeout(resolve, SLOW_HALF_HEAD_START_MS)).then(() => {
+        // Paste a second address inside that quarter second and the first
+        // one's slow half should never start. It would only be thrown away.
+        if (run !== doorRun) throw new Error("superseded");
+        return readDoor(rpc, address, { ...options, at });
+      }),
+    ],
   ];
   // Started, so a rejection before its await is a value and not a page crash.
   for (const [, p] of passes) p.catch(() => {});
