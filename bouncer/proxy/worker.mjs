@@ -97,8 +97,12 @@ async function cacheLookup(request, cacheImpl) {
   try {
     const hit = await cacheImpl.match(request);
     if (!hit) return null;
+    // Two ways to know, because only one of them is ours. Cloudflare sets a
+    // standard Age on a cache hit; the stored-at stamp is the fallback for a
+    // runtime that does not, and for the tests.
     const stored = Number(hit.headers.get("x-bouncer-stored-at") ?? 0);
-    const age = stored ? Math.max(0, Math.round((Date.now() - stored) / 1000)) : 0;
+    const standard = Number(hit.headers.get("age") ?? NaN);
+    const age = Number.isFinite(standard) ? Math.max(0, Math.round(standard)) : stored ? Math.max(0, Math.round((Date.now() - stored) / 1000)) : 0;
     const headers = new Headers(hit.headers);
     headers.set("x-bouncer-age", String(age));
     return new Response(await hit.text(), { status: hit.status, headers });
