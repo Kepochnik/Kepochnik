@@ -5303,7 +5303,7 @@
     const ownable = RENOUNCE_SIGNATURES.some(has);
     const ownerRead = readOwnerFrom(head.answer(ownerSlot), head.answer(getOwnerSlot));
     const owner = ownerRead.owner;
-    const ownerIsContract = owner && !owner.renounced ? rpc.getCode(owner.address, block).then((c) => c.length > 2).catch(() => false) : Promise.resolve(false);
+    const ownerIsContract = owner && !owner.renounced && !options.skipOwnerWallet ? rpc.getCode(owner.address, block).then((c) => c.length > 2).catch(() => false) : Promise.resolve(owner && !owner.renounced && options.skipOwnerWallet ? null : false);
     const paused = readBoolFrom(OWNER_FUNCTIONS.paused, head.answer(pausedSlot));
     let tradingOpen = null;
     for (let i = 0; i < TRADING_VIEWS.length; i++) {
@@ -5349,7 +5349,7 @@
         };
       })()
     ) : null;
-    const ownerBalanceP = owner && !owner.renounced ? readBalance(rpc, address, owner.address, block).then((balance) => ({ balance, bps: bps3(balance) })).catch(() => null) : Promise.resolve(null);
+    const ownerBalanceP = owner && !owner.renounced && !options.skipOwnerWallet ? readBalance(rpc, address, owner.address, block).then((balance) => ({ balance, bps: bps3(balance) })).catch(() => null) : Promise.resolve(null);
     const candidatesP = options.skipProbes || !has(TRANSFER_SIGNATURE) ? Promise.resolve({ value: [] }) : settle(
       (async () => {
         const listed = await holderList ?? [];
@@ -5540,6 +5540,7 @@
       transferFunction: has(TRANSFER_SIGNATURE),
       probesSkipped,
       probesPending: options.skipProbes === true,
+      ownerWalletPending: options.skipOwnerWallet === true,
       verified,
       deployer,
       ownerBalance,
@@ -5864,6 +5865,7 @@
           skipMarket: options.skipMarket,
           skipExplorer: options.skipExplorer,
           skipProbes: options.skipProbes,
+          skipOwnerWallet: options.skipOwnerWallet,
           lockers,
           liquidity: options.skipLiquidity !== true,
           // A day, not a week. This is read before a trade, and the measured
@@ -6849,7 +6851,7 @@
   }
   var doorRun = 0;
   var SLOW_SECTIONS = { skipLiquidity: true, skipDev: true, skipRoom: true, skipCrew: true, skipLookalikes: true };
-  var OPENING_SECTIONS = { ...SLOW_SECTIONS, skipMarket: true, skipExplorer: true, skipProbes: true };
+  var OPENING_SECTIONS = { ...SLOW_SECTIONS, skipMarket: true, skipExplorer: true, skipProbes: true, skipOwnerWallet: true };
   async function runSearch(query) {
     const bs = blockscoutFor();
     if (!bs) {

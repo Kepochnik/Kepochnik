@@ -129,7 +129,8 @@ export interface OpenDoor {
   /** Whether renounceOwnership / transferOwnership exist, i.e. the standard Ownable shape. */
   ownable: boolean;
   /** owner() as the chain returns it; null when the code has no such view OR the read failed, which `ownerUnread` tells apart. */
-  owner: { address: string; renounced: boolean; isContract: boolean } | null;
+  /** `isContract` is null when the owner's own wallet was not read; see ownerWalletPending. */
+  owner: { address: string; renounced: boolean; isContract: boolean | null } | null;
   /** True when the code has an owner view but the chain would not answer it. */
   ownerUnread: boolean;
   paused: boolean | null;
@@ -154,6 +155,8 @@ export interface OpenDoor {
    * this" is a real fact and "we have not looked yet" is not.
    */
   probesPending: boolean;
+  /** The owner's own wallet — is it a contract, how much does it hold — was left for a later pass. */
+  ownerWalletPending: boolean;
   verified: boolean | null;
   deployer: { address: string; creationTx: string | null; createdAtBlock: number | null; createdAt: number | null; balance: bigint; bps: number | null } | null;
   ownerBalance: { balance: bigint; bps: number | null } | null;
@@ -235,7 +238,7 @@ export interface OpenDoorOptions {
   /** A resolved Uniswap V4 singleton; V4 pools are skipped when absent. */
   v4PoolManager?: string;
   /**
-   * The three sections a first render can do without, so the page can put
+   * The sections a first render can do without, so the page can put
    * something true on screen before the slowest server has answered.
    *
    * Each one leaves its field null or its reason set — never a zero, never
@@ -246,6 +249,28 @@ export interface OpenDoorOptions {
   skipMarket?: boolean;
   skipExplorer?: boolean;
   skipProbes?: boolean;
+  /**
+   * The owner's own wallet: is that address a contract, and how much of the
+   * supply does it hold.
+   *
+   * Both need the owner's address first, so they are a whole round trip
+   * BELOW everything else in this read — the deepest level of the opening
+   * pass, and the only thing on it. Measured on Robinhood Chain, whose round
+   * trip is about half a second, that one level is the difference between a
+   * first paint at 2.1 s and one at 2.6 s.
+   *
+   * Nothing the opening render says depends on either. It carries no verdict
+   * by design, the owner's ADDRESS comes from the batch above, and the
+   * finding that uses the balance — the owner holds a fifth of supply — is a
+   * verdict note that belongs to the pass that has a verdict. So the opening
+   * pass leaves both for the render behind it, which lands a few hundred
+   * milliseconds later with them filled in.
+   *
+   * Left unread, `isContract` is null rather than false: "not looked at" and
+   * "looked at and it is a wallet" are different claims, and this page does
+   * not make the second one for free.
+   */
+  skipOwnerWallet?: boolean;
 }
 
 const BURN_ADDRESSES = new Set([ZERO_ADDRESS, "0x000000000000000000000000000000000000dead", "0x0000000000000000000000000000000000000001"]);
@@ -297,14 +322,14 @@ export async function readOpenDoor(rpc: RpcClient, token: ContractId, meta: Toke
   const owner = ownerRead.owner;
   // Whether the owner is a contract is one more read, and nothing above
   // needs it. It runs alongside everything below and is awaited at the end.
-  const ownerIsContract =
-    owner && !owner.renounced
+  const ownerIsContract: Promise<boolean | null> =
+    owner && !owner.renounced && !options.skipOwnerWallet
       ? rpc
           .getCode(owner.address, block)
           .then((c) => c.length > 2)
           // an unread code size does not make the owner disappear
           .catch(() => false)
-      : Promise.resolve(false);
+      : Promise.resolve(owner && !owner.renounced && options.skipOwnerWallet ? null : false);
   const paused = readBoolFrom(OWNER_FUNCTIONS.paused, head.answer(pausedSlot));
   let tradingOpen: OpenDoor["tradingOpen"] = null;
   for (let i = 0; i < TRADING_VIEWS.length; i++) {
@@ -395,7 +420,7 @@ export async function readOpenDoor(rpc: RpcClient, token: ContractId, meta: Toke
       )
     : null;
   const ownerBalanceP =
-    owner && !owner.renounced
+    owner && !owner.renounced && !options.skipOwnerWallet
       ? readBalance(rpc, address, owner.address, block)
           .then((balance) => ({ balance, bps: bps(balance) }))
           .catch(() => null)
@@ -680,6 +705,7 @@ export async function readOpenDoor(rpc: RpcClient, token: ContractId, meta: Toke
     transferFunction: has(TRANSFER_SIGNATURE),
     probesSkipped,
     probesPending: options.skipProbes === true,
+    ownerWalletPending: options.skipOwnerWallet === true,
     verified,
     deployer,
     ownerBalance,

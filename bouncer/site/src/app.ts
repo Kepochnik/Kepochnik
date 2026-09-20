@@ -325,7 +325,7 @@ const SLOW_SECTIONS = { skipLiquidity: true, skipDev: true, skipRoom: true, skip
  * needed to say what the code can do and who holds the keys, so the first
  * render does not wait for them.
  */
-const OPENING_SECTIONS = { ...SLOW_SECTIONS, skipMarket: true, skipExplorer: true, skipProbes: true } as const;
+const OPENING_SECTIONS = { ...SLOW_SECTIONS, skipMarket: true, skipExplorer: true, skipProbes: true, skipOwnerWallet: true } as const;
 
 /**
  * Somebody typed a name, not an address.

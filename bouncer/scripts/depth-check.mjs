@@ -94,7 +94,7 @@ function waves(items) {
 
 const SLOW_SECTIONS = { skipLiquidity: true, skipDev: true, skipRoom: true, skipCrew: true, skipLookalikes: true };
 /** What the page's FIRST render asks for: the chain, and only the chain. */
-const OPENING_SECTIONS = { ...SLOW_SECTIONS, skipMarket: true, skipExplorer: true, skipProbes: true };
+const OPENING_SECTIONS = { ...SLOW_SECTIONS, skipMarket: true, skipExplorer: true, skipProbes: true, skipOwnerWallet: true };
 
 async function pass(label, extra, spacingMs = 0, shared = null) {
   const tally = shared?.tally ?? { requests: 0, calls: 0, byMethod: new Map(), timeline: [], started: Date.now() };
@@ -158,7 +158,7 @@ async function pass(label, extra, spacingMs = 0, shared = null) {
 // the old estimator was inflated and noisy and had to be given room for
 // both; a whole number that does not move under load can be held to the
 // thing it measures. One re-serialised await shows up here.
-const CEILING = { opening: 5, fast: 8, full: 9, staged: 8, perLookalike: 0.25 };
+const CEILING = { opening: 4, fast: 8, full: 9, staged: 8, perLookalike: 0.25 };
 
 /** Pads the explorer's token search with decoys carrying the queried ticker. */
 function crowdedSearch(inner, extra) {

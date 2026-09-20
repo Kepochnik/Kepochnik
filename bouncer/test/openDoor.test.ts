@@ -223,7 +223,7 @@ test("an EIP-7702 wallet pasted into the box is named a wallet, not checked as a
 // ---------------------------------------------------------------------------
 
 const PAUSED = selector("paused()");
-const OPENING = { skipMarket: true, skipExplorer: true, skipProbes: true, skipLiquidity: true, skipDev: true, skipRoom: true, skipCrew: true, skipLookalikes: true } as const;
+const OPENING = { skipMarket: true, skipExplorer: true, skipProbes: true, skipOwnerWallet: true, skipLiquidity: true, skipDev: true, skipRoom: true, skipCrew: true, skipLookalikes: true } as const;
 
 test("the opening pass never publishes a STOP the full pass retracts", async () => {
   // A token whose paused() says true while transfers actually go through:
@@ -258,6 +258,26 @@ test("the opening pass reads nothing it has not asked for as zero", async () => 
   assert.ok(o.powers.length > 0, "the powers come off the bytecode, which is read");
   assert.equal(o.owner?.address, DEMO_PLAIN.owner);
   assert.equal(o.paused, false);
+});
+
+test("an owner whose wallet was not read is not reported as a person", async () => {
+  // The owner's own wallet — contract or not, how much it holds — is a whole
+  // round trip below the rest of the read, and the opening pass skips it.
+  // The trap is reporting `isContract: false` for it, which is not "unread",
+  // it is the claim that BOUNCER looked and found a human being. Null says
+  // the true thing, and the pass behind it fills it in.
+  const first = await readDoor(demoRpc(), DEMO_PLAIN.token, { ...opts(), ...OPENING });
+  const full = await readDoor(demoRpc(), DEMO_PLAIN.token, { ...opts(), skipLiquidity: true, skipDev: true, skipRoom: true, skipCrew: true, skipLookalikes: true });
+
+  assert.ok(first.open!.ownerWalletPending, "the opening pass has to say the owner's wallet went unread");
+  assert.equal(first.open!.owner?.isContract, null, "unread is null, never false");
+  assert.equal(first.open!.ownerBalance, null, "an unread balance is not a balance of zero");
+
+  assert.ok(!full.open!.ownerWalletPending, "the pass behind it does read the owner's wallet");
+  assert.equal(typeof full.open!.owner?.isContract, "boolean", "and turns the null into an answer");
+
+  // And no finding that needs the balance may be published off the unread one.
+  assert.equal(first.notes.find((n) => n.code === "owner-holds"), undefined, "a holding note off a balance nobody read");
 });
 
 test("the explorer is asked once for a path, however many readers want it", async () => {
