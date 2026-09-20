@@ -4430,21 +4430,22 @@
   async function readLookalikes(rpc, blockscout, subject, symbol, block, factory, searchBlocks, limit = 8, subjectRegistered = true) {
     const hits = await blockscout.searchTokens(symbol);
     const reader = new PonsReader(rpc, factory);
-    const candidates = [];
     const wanted = symbol.toUpperCase();
-    for (const hit of hits.filter((h) => h.symbol.toUpperCase() === wanted).slice(0, limit)) {
-      let registered = false;
-      let phase = null;
-      try {
-        const record = await reader.launchedToken(hit.address, block);
-        registered = true;
-        phase = record.phase;
-      } catch (error) {
-        if (!(error instanceof NotAPonsLaunch)) throw error;
-      }
-      const launchBlock = registered ? await findLaunchBlock(rpc, hit.address, block, searchBlocks, factory) : null;
-      candidates.push({ address: hit.address, name: hit.name, symbol: hit.symbol, registered, phase, launchBlock });
-    }
+    const candidates = await Promise.all(
+      hits.filter((h) => h.symbol.toUpperCase() === wanted).slice(0, limit).map(async (hit) => {
+        let registered = false;
+        let phase = null;
+        try {
+          const record = await reader.launchedToken(hit.address, block);
+          registered = true;
+          phase = record.phase;
+        } catch (error) {
+          if (!(error instanceof NotAPonsLaunch)) throw error;
+        }
+        const launchBlock = registered ? await findLaunchBlock(rpc, hit.address, block, searchBlocks, factory) : null;
+        return { address: hit.address, name: hit.name, symbol: hit.symbol, registered, phase, launchBlock };
+      })
+    );
     if (!candidates.some((c) => c.address === subject.toLowerCase())) {
       candidates.unshift({ address: subject.toLowerCase(), name: "", symbol, registered: subjectRegistered, phase: null, launchBlock: null });
     }
@@ -5831,6 +5832,16 @@
         slip.skipped.push({ section: section2, reason: error instanceof Error ? error.message : String(error) });
       }
     };
+    const begin = (section2, run) => {
+      const started = run().then(
+        () => null,
+        (error) => error instanceof Error ? error.message : String(error)
+      );
+      return async () => {
+        const reason = await started;
+        if (reason !== null) slip.skipped.push({ section: section2, reason });
+      };
+    };
     if (!launchpadKnown) {
       slip.skipped.push({
         section: "launch record",
@@ -5839,6 +5850,9 @@
     }
     if (!id.launch && !id.token.code.empty) {
       if (!id.registered) slip.stamp = "NOT A LAUNCH";
+      const lookalikesDone2 = !id.registered && launchpadKnown && options.blockscout && !options.skipLookalikes && id.meta?.symbol ? begin("lookalikes", async () => {
+        slip.lookalikes = await readLookalikes(rpc, options.blockscout, id.input, id.meta.symbol, head.number, factory, searchBlocks, 8, false);
+      }) : null;
       await attempt("open door", async () => {
         const [lockers, v4PoolManager] = await Promise.all([
           id.v1?.factory && id.v1.factory !== chain2.factoryV1 ? resolveLockers(rpc, chain2, factory, id.v1.factory, head.number).catch(() => chain2.lockers) : lockersP,
@@ -5863,11 +5877,7 @@
           v4PoolManager
         });
       });
-      if (!id.registered && launchpadKnown && options.blockscout && !options.skipLookalikes && id.meta?.symbol) {
-        await attempt("lookalikes", async () => {
-          slip.lookalikes = await readLookalikes(rpc, options.blockscout, id.input, id.meta.symbol, head.number, factory, searchBlocks, 8, false);
-        });
-      }
+      if (lookalikesDone2) await lookalikesDone2();
       if (!id.registered && impostorOf(slip)) slip.stamp = "NOT ON THE LIST";
     }
     if (!id.launch) {
@@ -5875,6 +5885,14 @@
       return slip;
     }
     const launch = id.launch;
+    const lookalikesDone = options.blockscout && !options.skipLookalikes && slip.id.meta ? begin("lookalikes", async () => {
+      slip.lookalikes = await readLookalikes(rpc, options.blockscout, launch.token, slip.id.meta.symbol, head.number, factory, searchBlocks);
+    }) : null;
+    const devDone = !options.skipDev ? begin("dev report card", async () => {
+      const hours = options.devHours ?? 24;
+      const fromBlock = await findBlockByTimestamp(rpc, head.timestamp - hours * 3600, head.number);
+      slip.dev = await readDevReport(rpc, launch.deployer, { fromBlock, toBlock: head.number, factory, chunking: options.chunkSize ? { startChunk: options.chunkSize, maxChunk: options.chunkSize } : void 0 });
+    }) : null;
     slip.launchBlock = await findLaunchBlock(rpc, launch.token, head.number, searchBlocks, factory, options.chunkSize);
     if (slip.launchBlock !== null) {
       await attempt("cover charge", async () => {
@@ -5899,18 +5917,8 @@
         slip.crew = await readOneCrew(options.blockscout, slip.room, slip.launchBlock, [launch.deployer, launch.creatorFeeRecipient]);
       });
     }
-    if (options.blockscout && !options.skipLookalikes && slip.id.meta) {
-      await attempt("lookalikes", async () => {
-        slip.lookalikes = await readLookalikes(rpc, options.blockscout, launch.token, slip.id.meta.symbol, head.number, factory, searchBlocks);
-      });
-    }
-    if (!options.skipDev) {
-      await attempt("dev report card", async () => {
-        const hours = options.devHours ?? 24;
-        const fromBlock = await findBlockByTimestamp(rpc, head.timestamp - hours * 3600, head.number);
-        slip.dev = await readDevReport(rpc, launch.deployer, { fromBlock, toBlock: head.number, factory, chunking: options.chunkSize ? { startChunk: options.chunkSize, maxChunk: options.chunkSize } : void 0 });
-      });
-    }
+    if (lookalikesDone) await lookalikesDone();
+    if (devDone) await devDone();
     slip.notes = doorNotes(slip);
     return slip;
   }

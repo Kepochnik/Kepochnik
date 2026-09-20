@@ -115,7 +115,23 @@ async function pass(label, extra, spacingMs = 0, shared = null) {
  * puts an await back in front of a batch is caught here and not by a reader
  * three weeks from now watching a spinner.
  */
-const CEILING = { opening: 6, fast: 10, full: 14, staged: 9 };
+const CEILING = { opening: 6, fast: 10, full: 14, staged: 9, perLookalike: 0.25 };
+
+/** Pads the explorer's token search with decoys carrying the queried ticker. */
+function crowdedSearch(inner, extra) {
+  if (extra <= 0) return inner;
+  return async (url, init) => {
+    const res = await inner(url, init);
+    if (!String(url).includes("/api/v2/search")) return res;
+    const body = await res.json();
+    const symbol = new URL(String(url)).searchParams.get("q") ?? "";
+    body.items = body.items ?? [];
+    for (let i = 0; i < extra; i++) {
+      body.items.push({ type: "token", address: `0x${(i + 1).toString(16).padStart(40, "d")}`, name: `Decoy ${i}`, symbol });
+    }
+    return new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } });
+  };
+}
 
 const opening = await pass("opening pass (first thing on screen)", OPENING_SECTIONS);
 const fast = await pass("fast pass (what the reader waits for)", SLOW_SECTIONS);
@@ -168,6 +184,38 @@ if (process.env.SPACING) await pass(`fast pass, ${process.env.SPACING} ms spacin
     process.exit(1);
   }
   console.log(`depth: the staged read is under its ceiling of ${CEILING.staged}`);
+}
+
+// A ticker nobody else uses is the easy case, and it is the only one the
+// demo chain had. "cashcat" on a real explorer comes back with a dozen
+// addresses, and weighing them one after another made the wait grow with
+// how popular the name is — the exact tokens a reader is most likely to
+// paste. Measured here so the demo cannot hide it again: the slope, not the
+// height, is the thing. Flat means the candidates are weighed together.
+{
+  console.log("\nwhen a ticker is crowded — the cost of each extra token sharing the name:");
+  const depths = [];
+  for (const sharing of [1, 8]) {
+    const tally = { requests: 0, calls: 0, byMethod: new Map(), timeline: [], started: Date.now() };
+    const rpc = new RpcClient({
+      urls: ["demo://robinhood-chain"],
+      expectedChainId: CHAINS.robinhood.chainId,
+      fetchImpl: slow(demoFetch(), tally, "rpc"),
+      minSpacingMs: 0,
+    });
+    const blockscout = new BlockscoutClient({
+      baseUrl: DEMO_BLOCKSCOUT,
+      fetchImpl: slow(crowdedSearch(demoBlockscoutFetch(), sharing - 1), tally, "explorer"),
+    });
+    depths.push(await pass(`  ${String(sharing).padStart(2)} tokens share the ticker`, { skipLiquidity: true, skipDev: true, skipRoom: true, skipCrew: true }, 0, { rpc, tally, blockscout }));
+  }
+  const slope = (depths[1] - depths[0]) / 7;
+  console.log(`  ${slope.toFixed(2)} extra round trips per extra token sharing the name`);
+  if (slope > CEILING.perLookalike) {
+    console.error(`depth: each extra token sharing a ticker costs ${slope.toFixed(2)} round trips, over its ceiling of ${CEILING.perLookalike}. The candidates are being weighed one at a time.`);
+    process.exit(1);
+  }
+  console.log(`depth: a crowded ticker is under its ceiling of ${CEILING.perLookalike} round trips per extra token`);
 }
 
 let failed = false;

@@ -33,21 +33,34 @@ export interface LookalikeReport {
 export async function readLookalikes(rpc: RpcClient, blockscout: BlockscoutClient, subject: string, symbol: string, block: number, factory: string, searchBlocks: number, limit = 8, subjectRegistered = true): Promise<LookalikeReport> {
   const hits = await blockscout.searchTokens(symbol);
   const reader = new PonsReader(rpc, factory);
-  const candidates: Lookalike[] = [];
   const wanted = symbol.toUpperCase();
-  for (const hit of hits.filter((h) => h.symbol.toUpperCase() === wanted).slice(0, limit)) {
-    let registered = false;
-    let phase: GraduationPhase | null = null;
-    try {
-      const record = await reader.launchedToken(hit.address, block);
-      registered = true;
-      phase = record.phase;
-    } catch (error) {
-      if (!(error instanceof NotAPonsLaunch)) throw error;
-    }
-    const launchBlock = registered ? await findLaunchBlock(rpc, hit.address, block, searchBlocks, factory) : null;
-    candidates.push({ address: hit.address, name: hit.name, symbol: hit.symbol, registered, phase, launchBlock });
-  }
+  // Every candidate is weighed at once.
+  //
+  // A ticker like CASHCAT comes back with a dozen addresses, and asking the
+  // factory about them one after another made the wait grow with the
+  // popularity of the name — measured on the demo chain, one extra round
+  // trip per extra token, and a registered one costs a whole log walk on
+  // top. Nothing here reads anything another candidate wrote, so the queue
+  // was never buying correctness; it was only spending the reader's time.
+  // Pinned to one block, so the answers still describe one moment.
+  const candidates: Lookalike[] = await Promise.all(
+    hits
+      .filter((h) => h.symbol.toUpperCase() === wanted)
+      .slice(0, limit)
+      .map(async (hit): Promise<Lookalike> => {
+        let registered = false;
+        let phase: GraduationPhase | null = null;
+        try {
+          const record = await reader.launchedToken(hit.address, block);
+          registered = true;
+          phase = record.phase;
+        } catch (error) {
+          if (!(error instanceof NotAPonsLaunch)) throw error;
+        }
+        const launchBlock = registered ? await findLaunchBlock(rpc, hit.address, block, searchBlocks, factory) : null;
+        return { address: hit.address, name: hit.name, symbol: hit.symbol, registered, phase, launchBlock };
+      }),
+  );
   if (!candidates.some((c) => c.address === subject.toLowerCase())) {
     // The explorer may lag the chain by a few blocks; the subject is always a candidate.
     candidates.unshift({ address: subject.toLowerCase(), name: "", symbol, registered: subjectRegistered, phase: null, launchBlock: null });

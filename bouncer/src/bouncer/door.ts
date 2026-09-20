@@ -168,6 +168,27 @@ export async function readDoor(rpc: RpcClient, input: string, options: DoorOptio
       slip.skipped.push({ section, reason: error instanceof Error ? error.message : String(error) });
     }
   };
+  /**
+   * Start a section now, record its outcome where it belongs.
+   *
+   * `attempt` runs a section at the point it is written, which reads in order
+   * and costs a round trip for every section that did not actually need the
+   * one above it. `begin` starts the work immediately and hands back a settle
+   * function; awaiting that where the `attempt` used to sit keeps the skipped
+   * list in reading order while the reads themselves overlap. The rejection is
+   * caught the moment it is started, so an early section cannot go unhandled
+   * if something between here and its settle throws first.
+   */
+  const begin = (section: string, run: () => Promise<void>) => {
+    const started = run().then(
+      () => null,
+      (error: unknown) => (error instanceof Error ? error.message : String(error)),
+    );
+    return async () => {
+      const reason = await started;
+      if (reason !== null) slip.skipped.push({ section, reason });
+    };
+  };
   if (!launchpadKnown) {
     slip.skipped.push({
       section: "launch record",
@@ -181,6 +202,15 @@ export async function readDoor(rpc: RpcClient, input: string, options: DoorOptio
     // questions apply (who controls it, can holders move it, who holds it, where
     // it trades); an ordinary token is also stamped as such.
     if (!id.registered) slip.stamp = "NOT A LAUNCH";
+    // The ticker came back with the ID check, so the search for tokens
+    // sharing it can go out now rather than after the open-door read it has
+    // nothing to do with. It is settled below, in its own place.
+    const lookalikesDone =
+      !id.registered && launchpadKnown && options.blockscout && !options.skipLookalikes && id.meta?.symbol
+        ? begin("lookalikes", async () => {
+            slip.lookalikes = await readLookalikes(rpc, options.blockscout!, id.input, id.meta!.symbol, head.number, factory, searchBlocks, 8, false);
+          })
+        : null;
     await attempt("open door", async () => {
       // Both were started before the ID check. Only a token whose own V1
       // factory differs from the configured one costs a second read.
@@ -209,11 +239,7 @@ export async function readDoor(rpc: RpcClient, input: string, options: DoorOptio
         v4PoolManager,
       });
     });
-    if (!id.registered && launchpadKnown && options.blockscout && !options.skipLookalikes && id.meta?.symbol) {
-      await attempt("lookalikes", async () => {
-        slip.lookalikes = await readLookalikes(rpc, options.blockscout!, id.input, id.meta!.symbol, head.number, factory, searchBlocks, 8, false);
-      });
-    }
+    if (lookalikesDone) await lookalikesDone();
     // The stamp is decided once, after both reads, from the one thing that
     // justifies it: a registered launch with this ticker that is older than
     // this contract. Deciding it inside a read would make the stamp depend on
@@ -226,6 +252,24 @@ export async function readDoor(rpc: RpcClient, input: string, options: DoorOptio
     return slip;
   }
   const launch = id.launch;
+
+  // Neither of these waits on anything below. Lookalikes needs the ticker and
+  // the dev card needs the head block, and both have had those since the ID
+  // check — queueing them behind the launch-block walk only made the reader
+  // wait for reads that were already answerable.
+  const lookalikesDone =
+    options.blockscout && !options.skipLookalikes && slip.id.meta
+      ? begin("lookalikes", async () => {
+          slip.lookalikes = await readLookalikes(rpc, options.blockscout!, launch.token, slip.id.meta!.symbol, head.number, factory, searchBlocks);
+        })
+      : null;
+  const devDone = !options.skipDev
+    ? begin("dev report card", async () => {
+        const hours = options.devHours ?? 24;
+        const fromBlock = await findBlockByTimestamp(rpc, head.timestamp - hours * 3600, head.number);
+        slip.dev = await readDevReport(rpc, launch.deployer, { fromBlock, toBlock: head.number, factory, chunking: options.chunkSize ? { startChunk: options.chunkSize, maxChunk: options.chunkSize } : undefined });
+      })
+    : null;
 
   slip.launchBlock = await findLaunchBlock(rpc, launch.token, head.number, searchBlocks, factory, options.chunkSize);
   if (slip.launchBlock !== null) {
@@ -251,18 +295,8 @@ export async function readDoor(rpc: RpcClient, input: string, options: DoorOptio
       slip.crew = await readOneCrew(options.blockscout!, slip.room!, slip.launchBlock!, [launch.deployer, launch.creatorFeeRecipient]);
     });
   }
-  if (options.blockscout && !options.skipLookalikes && slip.id.meta) {
-    await attempt("lookalikes", async () => {
-      slip.lookalikes = await readLookalikes(rpc, options.blockscout!, launch.token, slip.id.meta!.symbol, head.number, factory, searchBlocks);
-    });
-  }
-  if (!options.skipDev) {
-    await attempt("dev report card", async () => {
-      const hours = options.devHours ?? 24;
-      const fromBlock = await findBlockByTimestamp(rpc, head.timestamp - hours * 3600, head.number);
-      slip.dev = await readDevReport(rpc, launch.deployer, { fromBlock, toBlock: head.number, factory, chunking: options.chunkSize ? { startChunk: options.chunkSize, maxChunk: options.chunkSize } : undefined });
-    });
-  }
+  if (lookalikesDone) await lookalikesDone();
+  if (devDone) await devDone();
   slip.notes = doorNotes(slip);
   return slip;
 }
