@@ -115,13 +115,13 @@ select:focus-visible,.ext:focus-visible,.link:focus-visible{outline:2px solid va
 }
 
 /* ---- the door: the input ------------------------------------ */
-.hero{padding-block:44px 8px;text-align:center;transition:padding .2s}
+.hero{padding-block:34px 6px;text-align:center;transition:padding .2s}
 /* Once there is an answer on the page, the invitation gets out of its way. */
 body.answered .hero{padding-block:22px 0}
 body.answered .hero h1{font-size:clamp(26px,3.4vw,34px);margin-bottom:0}
 body.answered .hero p{display:none}
 body.answered .chips{display:none}
-.hero h1{font:900 clamp(40px,7vw,72px)/0.92 var(--display);letter-spacing:.045em;margin:0 0 12px}
+.hero h1{font:900 clamp(34px,5.6vw,56px)/0.94 var(--display);letter-spacing:.045em;margin:0 0 10px}
 .hero p{margin:0 auto;max-width:56ch;color:var(--muted);font-size:16px}
 .door{margin:26px auto 0;max-width:760px}
 .door form{display:flex;gap:10px;background:var(--surface);border:1px solid var(--line-2);border-radius:var(--r-lg);padding:8px;box-shadow:0 18px 50px -24px rgba(0,0,0,.9)}
@@ -163,7 +163,7 @@ body.answered .chips{display:none}
 .error p{margin:6px 0 0;color:var(--muted);font-size:14px}
 
 /* ---- THE VERDICT: the poster ------------------------------- */
-.slip{margin-top:30px;display:grid;gap:16px}
+.slip{margin-top:22px;display:grid;gap:12px}
 /* A grid item's min-width defaults to auto, which is its min-content, so a
    child can be wider than the column it sits in and take the page with it.
    This is defence, not a fix for anything measured: removing it changed no
@@ -191,9 +191,9 @@ body.answered .chips{display:none}
 .vaddr{margin-left:auto;min-width:0;background:var(--surface-2);border:1px solid var(--line);border-radius:999px;color:var(--dim);font:12px var(--mono);padding:7px 12px;cursor:pointer;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .vaddr:hover{color:var(--text);border-color:var(--line-2)}
 .vaddr:focus-visible{outline:2px solid var(--brass-2)}
-.vbody{display:grid;grid-template-columns:auto 1fr;gap:28px;align-items:center;padding:20px 24px 24px}
+.vbody{display:grid;grid-template-columns:auto 1fr;gap:24px;align-items:center;padding:16px 22px 20px}
 .vword{
-  font:900 clamp(58px,13vw,132px)/0.82 var(--display);letter-spacing:.02em;
+  font:900 clamp(46px,9vw,104px)/0.84 var(--display);letter-spacing:.02em;
   /* The one place the page is allowed to shout. */
   text-shadow:0 0 60px currentColor;
 }
@@ -212,7 +212,7 @@ body.answered .chips{display:none}
 @media (prefers-reduced-motion:reduce){.verdict.v-reading .vword{animation:none}}
 @keyframes breathe{from{opacity:.45}to{opacity:1}}
 .vsay{min-width:0}
-.vlead{margin:0;font-size:clamp(16px,2vw,19px);line-height:1.5;max-width:60ch}
+.vlead{margin:0;font-size:clamp(15px,1.7vw,17.5px);line-height:1.5;max-width:58ch}
 .vsub{margin:10px 0 0;color:var(--muted);font-size:14px}
 .vfoot{display:flex;align-items:center;gap:14px;flex-wrap:wrap;border-top:1px solid var(--line);padding:14px 24px;background:rgba(0,0,0,.25);min-width:0}
 .vat{min-width:0;overflow-wrap:anywhere}
@@ -235,28 +235,32 @@ body.answered .chips{display:none}
 .vlead,.vsub,.qblurb,.ans,.unread li,.tile .s,.kv dd,.rules li{overflow-wrap:anywhere}
 
 /* ---- the five questions ------------------------------------ */
-.qgrid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}
+/* The line between the answer and the evidence. Everything above it is
+   what a reader came for; everything below is where it was read from. */
+.stack-head{display:grid;gap:3px;margin:22px 0 -4px;font:600 15px/1.3 var(--sans);letter-spacing:-.01em}
+.stack-head span{font:400 13px/1.4 var(--sans);color:var(--dim)}
+.qgrid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;align-items:start}
 @media (max-width:820px){.qgrid{grid-template-columns:1fr}}
-.qcard{background:var(--surface);border:1px solid var(--line);border-radius:var(--r-lg);padding:20px 22px;min-width:0;position:relative;overflow:hidden}
+.qcard{background:var(--surface);border:1px solid var(--line);border-radius:var(--r-lg);padding:15px 17px;min-width:0;position:relative;overflow:hidden}
 .qcard::before{content:"";position:absolute;inset:0 0 auto 0;height:2px}
 .qcard.lv-stop::before{background:var(--stop)}
 .qcard.lv-watch::before{background:var(--watch)}
 .qcard.lv-info::before{background:var(--line-2)}
-.qcard h2{margin:0;font:600 17px/1.3 var(--sans);letter-spacing:-.01em}
-.qblurb{margin:6px 0 14px;color:var(--dim);font-size:13px;line-height:1.5}
-.answers{list-style:none;margin:0;padding:0;display:grid;gap:10px}
-.ans{display:grid;grid-template-columns:auto 1fr;gap:11px;align-items:start;font-size:14px;line-height:1.55;padding-top:10px;border-top:1px solid var(--line)}
+.qcard h2{margin:0;font:600 15px/1.3 var(--sans);letter-spacing:-.01em}
+.qblurb{margin:4px 0 10px;color:var(--dim);font-size:12.5px;line-height:1.45}
+.answers{list-style:none;margin:0;padding:0;display:grid;gap:7px}
+.ans{display:grid;grid-template-columns:auto 1fr;gap:10px;align-items:start;font-size:13.5px;line-height:1.5;padding-top:7px;border-top:1px solid var(--line)}
 .ans:first-child{border-top:0;padding-top:0}
-.ans .dot{width:7px;height:7px;border-radius:2px;margin-top:7px;background:var(--info)}
+.ans .dot{width:6px;height:6px;border-radius:2px;margin-top:6px;background:var(--info)}
 .ans.lv-stop .dot{background:var(--stop)}
 .ans.lv-watch .dot{background:var(--watch)}
 .ans.lv-stop{color:var(--text)}
 .ans.lv-info{color:var(--muted)}
 
 /* ---- what could not be read: its own strip, never a card ---- */
-.unread{background:repeating-linear-gradient(135deg,var(--surface),var(--surface) 10px,var(--surface-2) 10px,var(--surface-2) 20px);border:1px dashed var(--line-2);border-radius:var(--r-lg);padding:20px 22px}
-.unread h2{margin:0;font:600 17px/1.3 var(--sans)}
-.unread ul{margin:12px 0 0;padding-left:18px;display:grid;gap:8px;color:var(--muted);font-size:14px}
+.unread{background:repeating-linear-gradient(135deg,var(--surface),var(--surface) 10px,var(--surface-2) 10px,var(--surface-2) 20px);border:1px dashed var(--line-2);border-radius:var(--r-lg);padding:15px 17px}
+.unread h2{margin:0;font:600 15px/1.3 var(--sans)}
+.unread ul{margin:9px 0 0;padding-left:17px;display:grid;gap:6px;color:var(--muted);font-size:13px;line-height:1.5}
 .unread li::marker{color:var(--dim)}
 
 /* ---- buy it: someone else's venue, this project's referral --
@@ -283,6 +287,13 @@ body.answered .chips{display:none}
 
 /* ---- tiles: the numbers at a glance ------------------------ */
 .tiles{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}
+/* Inside the verdict block: no second border, no second background, just
+   dividers. Four boxes inside a box is a frame around a frame. */
+.verdict .tiles{gap:0;border-top:1px solid var(--line);background:rgba(0,0,0,.18)}
+.verdict .tiles .tile{border:0;border-left:1px solid var(--line);border-radius:0;background:none;padding:13px 18px}
+.verdict .tiles .tile:first-child{border-left:0}
+.verdict .tiles .tile .v{font-size:27px;margin-top:6px}
+.verdict .tiles .tile .s{margin-top:5px}
 .tile{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:16px;min-width:0}
 .tile .l{font:600 10px var(--mono);letter-spacing:.13em;text-transform:uppercase;color:var(--dim)}
 .tile .v{font:900 36px/1 var(--display);letter-spacing:.02em;margin-top:10px;font-variant-numeric:tabular-nums;word-break:break-word}

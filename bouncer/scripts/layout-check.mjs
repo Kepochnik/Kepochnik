@@ -27,10 +27,19 @@ const WIDTHS = [
 ];
 
 /** Every slip shape the demo chain can produce, so none of them is measured by luck. */
+/**
+ * How tall a full slip may be before it has stopped being one answer and
+ * become a document. Measured on the richest demo token.
+ */
+// Measured on the ordinary-token demo slip: 2070 px at 1280, 2666 at 768,
+// 3863 at 390. A narrow window is taller for the same content, so the
+// ceiling follows the width rather than pretending one number fits.
+const TALL = { 390: 4400, 768: 3050, 1280: 2400 };
+
 const ROUTES = [
   { hash: "", what: "the first load" },
-  { hash: "#/demo/0x00000000000000000000000000000000000bad01", what: "an impostor (STOP, every card)" },
-  { hash: "#/demo/0x0000000000000000000000000000000000f1a1a1", what: "an ordinary token" },
+  { hash: "#/demo/0x00000000000000000000000000000000000bad01", what: "an impostor (STOP, every card)", tall: true },
+  { hash: "#/demo/0x0000000000000000000000000000000000f1a1a1", what: "an ordinary token", tall: true },
   { hash: "#/board?hours=1&chain=demo", what: "the board" },
   { hash: "#/plan?tax=100&chain=demo", what: "the launch planner" },
 ];
@@ -143,6 +152,27 @@ for (const size of WIDTHS) {
       }
     }
 
+    // How tall the slip got.
+    //
+    // A page that answers in one screen and a page that answers in six are
+    // different products, and the difference creeps back one paragraph at a
+    // time. This one was 3631 px on a desktop and 6290 on a phone, mostly
+    // because four sections opened themselves and the summary said what the
+    // cards below it then said again.
+    //
+    // A ceiling, not a target: content varies, so it is set well above what
+    // the demo slip measures and only fires when something structural has
+    // changed.
+    if (route.tall) {
+      const height = await page.evaluate(() => document.documentElement.scrollHeight);
+      const ceiling = TALL[size.w];
+      if (!ceiling) throw new Error(`no height ceiling set for ${size.w}px; add one rather than letting the width go unchecked`);
+      if (height > ceiling) {
+        failures++;
+        console.error(`::error::${size.name} (${size.w}px), ${route.what}: the page is ${height}px tall, over its ceiling of ${ceiling}px — the answer has spread out again`);
+      }
+    }
+
     const over = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
     if (over > 1) {
       failures++;
@@ -179,4 +209,4 @@ if (failures) {
   console.error(`\nlayout: ${failures} of ${checked} checks failed.`);
   process.exit(1);
 }
-console.log(`layout: ${checked} page loads across ${WIDTHS.length} widths, no horizontal scroll, no page errors`);
+console.log(`layout: ${checked} page loads across ${WIDTHS.length} widths, no horizontal scroll, no page errors, nothing over its height ceiling`);

@@ -82,6 +82,30 @@ export interface TokenTransfer {
   hash: string;
 }
 
+/**
+ * A read the explorer refused, carrying the status.
+ *
+ * 404 is not a failure here, it is an answer: the explorer has not indexed
+ * this address. For a token minted a minute ago that is the ordinary case,
+ * and reporting it as "the explorer could not be read" tells a reader
+ * something is broken when nothing is. The two have to be told apart, so
+ * the status has to survive the throw.
+ */
+export class BlockscoutError extends Error {
+  constructor(
+    readonly status: number,
+    readonly path: string,
+  ) {
+    super(`blockscout ${status} for ${path}`);
+    this.name = "BlockscoutError";
+  }
+
+  /** True when the explorer answered, and its answer was "I do not have this". */
+  get notIndexed(): boolean {
+    return this.status === 404;
+  }
+}
+
 export class BlockscoutClient {
   private readonly baseUrl: string;
   private readonly fetchImpl: typeof fetch;
@@ -206,7 +230,7 @@ export class BlockscoutClient {
       // noise and at worst a preflight this endpoint has no reason to answer.
       if (typeof globalThis.window === "undefined") headers["user-agent"] = BlockscoutClient.USER_AGENT;
       const response = await this.fetchImpl(`${this.baseUrl}${path}`, { method: "GET", headers, signal: controller.signal });
-      if (!response.ok) throw new Error(`blockscout ${response.status} for ${path}`);
+      if (!response.ok) throw new BlockscoutError(response.status, path);
       const body = (await response.json()) as T;
       this.record(path, Date.now() - startedAt, false);
       // The proxy caches these for a few seconds, because one of them cost

@@ -148,6 +148,7 @@ const TOPIC_OF: Record<string, Topic> = {
   // ---- what could not be read
   "explorer-scam": "unread",
   "explorer-unread": "unread",
+  "too-new": "id",
   // A cached reading is not a missing one, but it belongs in the same strip:
   // this is where the page says how sure it is of what it just told you.
   "explorer-age": "unread",

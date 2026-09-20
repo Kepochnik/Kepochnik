@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { DEMO, DEMO_IMPOSTOR, demoRpc } from "../src/bouncer/demo.js";
+import { DEMO, DEMO_IMPOSTOR, DEMO_PLAIN, demoRpc } from "../src/bouncer/demo.js";
 import { doorReceipt, findLaunchBlock, readDoor, slipJson } from "../src/bouncer/door.js";
 import { readCoverCharge } from "../src/bouncer/coverCharge.js";
 import { readDevReport } from "../src/bouncer/devReport.js";
@@ -111,12 +111,31 @@ test("id check reads bytecode of token and curve", async () => {
   assert.equal(id.token.proxyImplementation, null);
 });
 
-test("the card is valid SVG with the stamp and the gorilla", async () => {
+test("the card leads with the verdict, because that is what gets read", async () => {
+  // A card is read in the second before somebody scrolls past it. The old
+  // one led with COVER CHARGE and HOUSE RULES — rows that are blank for
+  // every token the launchpad did not make — and never printed the one
+  // word the whole page is built around.
   const rpc = demoRpc();
   const slip = await readDoor(rpc, DEMO.tokens.fresh.token, opts);
-  const svg = doorCard(slip, { repoUrl: "github.com/Kepochnik/bouncer", ticker: "$BOUNCER", mascotSvg: '<rect x="0" y="0" width="1" height="1"/>' });
+  const svg = doorCard(slip, { repoUrl: "github.com/Kepochnik/bouncer", ticker: "$BOUNCER", mascotSvg: '<rect x="0" y="0" width="1" height="1"/>', checkUrl: "kepochnik.github.io/bouncer" });
   assert.match(svg, /^<svg xmlns/);
-  assert.match(svg, /ON THE LIST/);
-  assert.match(svg, /COVER CHARGE/);
-  assert.match(svg, /<rect x="0" y="0" width="1" height="1"\/>/);
+  assert.match(svg, /ON THE LIST/, "the stamp is still on it");
+  assert.match(svg, /<rect x="0" y="0" width="1" height="1"\/>/, "and so is the gorilla");
+  assert.match(svg, />(STOP|WATCH|CLEAR)</, "the verdict is the headline");
+  assert.match(svg, /kepochnik\.github\.io\/bouncer/, "and a reader can go check it themselves");
+  assert.match(svg, new RegExp(slip.subject), "the address is on it, so nobody has to trust the ticker");
+  // Every tile has a label and a value; a blank card row is worse than no row.
+  for (const label of ["TRADE FEE", "CREATOR TAX", "DEV HOLDS", "BUYBACK"]) assert.match(svg, new RegExp(label));
+});
+
+test("an ordinary token gets a card about an ordinary token", async () => {
+  // The bug this pins: the card was shaped for a launchpad launch, so a
+  // plain ERC-20 — which is most of what anybody pastes — got three empty
+  // rows where the facts should be.
+  const rpc = demoRpc();
+  const slip = await readDoor(rpc, DEMO_PLAIN.token, opts);
+  const svg = doorCard(slip, { repoUrl: "r", ticker: "$BOUNCER", mascotSvg: "" });
+  for (const label of ["OWNER", "CODE CAN", "SALE INTO POOL", "TOP 10 WALLETS"]) assert.match(svg, new RegExp(label));
+  assert.ok(!/COVER CHARGE|HOUSE RULES/.test(svg), "and none of the launch-only rows");
 });

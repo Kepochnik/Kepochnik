@@ -18,7 +18,7 @@ import { SolanaRpc } from "../../src/chain/solana.js";
 import { isSolanaAddress } from "../../src/chain/base58.js";
 import { readSplDoor, type SplSlip } from "../../src/bouncer/spl.js";
 import { findBlockByTimestamp } from "../../src/chain/tape.js";
-import { doorCard } from "../../src/bouncer/card.js";
+import { doorCard, splCard } from "../../src/bouncer/card.js";
 import { coverChargeLine } from "../../src/bouncer/coverCharge.js";
 import { DEMO, DEMO_BLOCKSCOUT, DEMO_IMPOSTOR, DEMO_PLAIN, DEMO_V1, demoBlockscoutFetch, demoRpc } from "../../src/bouncer/demo.js";
 import { devReportLine, readDevReport, type DevReport } from "../../src/bouncer/devReport.js";
@@ -707,6 +707,12 @@ function verdictBlock(opts: {
   stage?: Stage;
   /** What is still being read, when it is not what the EVM door reads. */
   stillReading?: string;
+  /**
+   * The four numbers that decide it, rendered inside the block rather than
+   * under it. They are the verdict said in figures; a separate row with its
+   * own margin made one idea look like two.
+   */
+  tiles?: string;
   actions: string;
 }): string {
   const stage = opts.stage ?? "done";
@@ -733,6 +739,7 @@ function verdictBlock(opts: {
         <p class="vsub">${esc(v.line)}</p>
       </div>
     </div>
+    ${opts.tiles ?? ""}
     <div class="vfoot">
       <div class="tallies">${counts || '<span class="tally lv-info"><i></i>nothing to flag</span>'}${stage === "done" ? "" : `<span class="tally pendingchip"><i></i>${esc(opts.stillReading ?? STILL_READING[stage])}</span>`}</div>
       <div class="vat">${opts.at}</div>
@@ -939,17 +946,17 @@ function renderSplSlip(slip: SplSlip, opts: { stage?: Stage } = {}): void {
       notes: slip.notes as DoorNote[],
       lead: splSentence(slip, blocked),
       stage: opts.stage ?? "done",
+      tiles,
       stillReading: SOL_STILL_READING,
-      actions: `<button class="ghost" id="act-json" type="button">JSON</button><button class="ghost" id="act-link" type="button">Link</button>`,
+      actions: `<button class="ghost primary" id="act-share" type="button">Copy card</button><button class="ghost" id="act-link" type="button">Copy link</button><button class="ghost" id="act-json" type="button">JSON</button>`,
     })}
-    ${tiles}
     ${answerCards(slip.notes as DoorNote[])}
     ${unreadStrip(slip.notes as DoorNote[], slip.skipped)}
     ${buyStrip(slip.chain.key, slip.subject, Boolean(slip.mint))}
     <div class="stack">
-      ${section("s-id", "Is it real?", "What this address actually is, who can print more of it, and who can freeze what you hold.", idBody, true)}
-      ${extBody ? section("s-ext", "Token-2022 extensions", "The rules the token program itself enforces on every transfer.", extBody, true) : ""}
-      ${holdersBodyText ? section("s-holders", "Who holds it", "The largest token accounts and the wallets behind them.", holdersBodyText, true) : ""}
+      ${section("s-id", "Is it real?", "What this address actually is, who can print more of it, and who can freeze what you hold.", idBody, false)}
+      ${extBody ? section("s-ext", "Token-2022 extensions", "The rules the token program itself enforces on every transfer.", extBody, false) : ""}
+      ${holdersBodyText ? section("s-holders", "Who holds it", "The largest token accounts and the wallets behind them.", holdersBodyText, false) : ""}
     </div>
   </div>`;
   $("act-json").addEventListener("click", async () => {
@@ -1044,8 +1051,22 @@ function openDoorSentence(slip: DoorSlip): string {
   return sentence(parts);
 }
 
+/**
+ * The lead, and only the lead.
+ *
+ * It used to print every clause the reader could want, which on an
+ * ordinary token ran to five sentences — and the question cards under it
+ * then said the same things again in the same words. A summary that is as
+ * long as the thing it summarises is not a summary, it is a first draft.
+ *
+ * Three clauses. The cards carry the rest, and they carry it grouped by
+ * the question it answers, which is a better place for it.
+ */
+const LEAD_CLAUSES = 3;
+
 function sentence(parts: string[]): string {
-  return parts.map((x) => x.charAt(0).toUpperCase() + x.slice(1)).join(". ") + ".";
+  const kept = parts.slice(0, LEAD_CLAUSES);
+  return kept.map((x) => x.charAt(0).toUpperCase() + x.slice(1)).join(". ") + ".";
 }
 
 /**
@@ -1061,6 +1082,72 @@ function keepPlace(render: () => void): void {
   render();
   for (const id of open) document.getElementById(id)?.setAttribute("open", "");
   if (y) window.scrollTo({ top: y, behavior: "auto" });
+}
+
+/** Where the card tells a reader to go and check for themselves. */
+function shareBase(): string {
+  return `${location.host}${location.pathname}`.replace(/\/$/, "");
+}
+
+/**
+ * The share card, as a PNG in the clipboard.
+ *
+ * "Copy" and not "download", because the thing people do with this is
+ * paste it into a chat. A download puts a file in a folder and asks them
+ * to go find it.
+ *
+ * The SVG is self-contained on purpose — no fetched fonts, no external
+ * images — which is what makes this possible at all: an <img> with a data
+ * URL of an SVG that referenced anything remote would taint the canvas and
+ * the export would throw on read.
+ *
+ * Two things can refuse: a browser without ClipboardItem (Firefox, until
+ * recently) and a page the user has not interacted with. Both fall back to
+ * a download rather than to nothing.
+ */
+async function copyCardImage(svg: string, filename: string): Promise<"copied" | "downloaded"> {
+  const scale = 2; // a 2400×1260 paste stays sharp on a retina screen
+  const blob = new Blob([svg], { type: "image/svg+xml;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  try {
+    const png = await new Promise<Blob>((resolve, reject) => {
+      const img = new Image();
+      img.onload = () => {
+        const canvas = document.createElement("canvas");
+        canvas.width = 1200 * scale;
+        canvas.height = 630 * scale;
+        const ctx = canvas.getContext("2d");
+        if (!ctx) return reject(new Error("no 2d context"));
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+        canvas.toBlob((out) => (out ? resolve(out) : reject(new Error("canvas produced nothing"))), "image/png");
+      };
+      img.onerror = () => reject(new Error("the card did not render"));
+      img.src = url;
+    });
+    // ClipboardItem is the only way to put an image on the clipboard, and
+    // Safari wants the promise handed to it rather than the resolved blob.
+    const Item = (window as unknown as { ClipboardItem?: typeof ClipboardItem }).ClipboardItem;
+    if (Item && navigator.clipboard && "write" in navigator.clipboard) {
+      await navigator.clipboard.write([new Item({ "image/png": png })]);
+      return "copied";
+    }
+    download(png, filename);
+    return "downloaded";
+  } catch {
+    download(blob, filename.replace(/\.png$/, ".svg"));
+    return "downloaded";
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
+function download(blob: Blob, filename: string): void {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1_000);
 }
 
 /**
@@ -1209,21 +1296,22 @@ function renderSlip(slip: DoorSlip, opts: { stage?: Stage } = {}): void {
       notes: slip.notes,
       lead: summarySentence(slip),
       stage: opts.stage ?? "done",
-      actions: `<button class="ghost" id="act-card" type="button">Image</button><button class="ghost" id="act-json" type="button">JSON</button><button class="ghost" id="act-link" type="button">Link</button>`,
+      tiles,
+      actions: `<button class="ghost primary" id="act-share" type="button">Copy card</button><button class="ghost" id="act-card" type="button">Preview</button><button class="ghost" id="act-link" type="button">Copy link</button><button class="ghost" id="act-json" type="button">JSON</button>`,
     })}
     <div class="card-wrap" id="card"></div>
-    ${tiles}
     ${answerCards(slip.notes)}
     ${unreadStrip(slip.notes, slip.skipped)}
     ${buyStrip(mode === "demo" ? "" : slip.chain.key, slip.subject, Boolean(slip.id.meta) && slip.open?.transferFunction !== false)}
+    <h2 class="stack-head">The evidence<span>every number above, and where it was read from</span></h2>
     <div class="stack">
-      ${section("s-id", "Is it real?", "Did the launchpad's factory deploy this token, and can its code change later?", idBody, !o)}
-      ${o ? section("s-control", "Who controls it", "Which switches the code has (mint, pause, blacklist, fees), who holds the keys, and whether holders can move tokens right now.", controlBody(slip), true) : ""}
-      ${o && tradesText ? section("s-trades", "Where it trades", "Pools on the chain's DEX factories and what they hold, plus the explorer's price feed.", tradesText, true) : ""}
-      ${o && (o.holders || o.deployer || o.activity) ? section("s-holders", "Who holds it", "The largest wallets, the deployer's share, what sits in pools and contracts, and when it last moved.", holdersBody(slip), true) : ""}
+      ${section("s-id", "Is it real?", "Did the launchpad's factory deploy this token, and can its code change later?", idBody, false)}
+      ${o ? section("s-control", "Who controls it", "Which switches the code has (mint, pause, blacklist, fees), who holds the keys, and whether holders can move tokens right now.", controlBody(slip), false) : ""}
+      ${o && tradesText ? section("s-trades", "Where it trades", "Pools on the chain's DEX factories and what they hold, plus the explorer's price feed.", tradesText, false) : ""}
+      ${o && (o.holders || o.deployer || o.activity) ? section("s-holders", "Who holds it", "The largest wallets, the deployer's share, what sits in pools and contracts, and when it last moved.", holdersBody(slip), false) : ""}
       ${registered && !v1 ? section("s-cover", "Door tax", `The anti-snipe tax in the first ${c?.terms.seconds ?? 15} seconds, and who paid it.`, coverBody, c?.status === "open") : ""}
       ${r ? section("s-rules", "Fees and rules", "What every trade costs, where the creator's cut goes, what buyback really does.", rulesBody, false) : ""}
-      ${v1 ? section("s-v1", "Rules (Pons V1)", "How this older kind of launch works: pool from block one, launch caps, locked liquidity.", `<ol class="rules">${v1.rules.map((x) => `<li>${esc(x)}</li>`).join("")}</ol>`, true) : ""}
+      ${v1 ? section("s-v1", "Rules (Pons V1)", "How this older kind of launch works: pool from block one, launch caps, locked liquidity.", `<ol class="rules">${v1.rules.map((x) => `<li>${esc(x)}</li>`).join("")}</ol>`, false) : ""}
       ${e ? section("s-exit", "Cash out now", "What you would actually get for selling part or all of a position right now.", exitBody, false) : ""}
       ${room ? section("s-room", "Who is inside", "Every buyer since launch, how much the creator's own wallets put in, buys landing in the same block.", roomBody, false) : ""}
       ${crew ? section("s-crew", "Same funder?", "Where the first buyers got their money. Wallets funded by one address before the launch are one group.", crewBody, false) : ""}
@@ -1233,10 +1321,34 @@ function renderSlip(slip: DoorSlip, opts: { stage?: Stage } = {}): void {
     </div>
   </div>`;
 
+  const cardSvg = () => doorCard(slip, { repoUrl: REPO, ticker: MARK, mascotSvg: MASCOT_SVG_INNER, checkUrl: shareBase() });
   $("act-card").addEventListener("click", () => {
     const wrap = $("card");
-    if (!wrap.classList.contains("open")) wrap.innerHTML = doorCard(slip, { repoUrl: REPO, ticker: MARK, mascotSvg: MASCOT_SVG_INNER });
+    if (!wrap.classList.contains("open")) wrap.innerHTML = cardSvg();
     wrap.classList.toggle("open");
+  });
+  $("act-share").addEventListener("click", async (event) => {
+    const button = event.currentTarget as HTMLButtonElement;
+    button.disabled = true;
+    try {
+      const sym = slip.id.meta?.symbol ?? slip.subject.slice(0, 10);
+      const how = await copyCardImage(cardSvg(), `bouncer-${sym.replace(/[^a-z0-9]+/gi, "-").toLowerCase()}.png`);
+      showToast(how === "copied" ? "Card copied — paste it anywhere" : "Your browser would not take an image; the card was downloaded instead");
+    } finally {
+      button.disabled = false;
+    }
+  });
+  $("act-share").addEventListener("click", async (event) => {
+    const button = event.currentTarget as HTMLButtonElement;
+    button.disabled = true;
+    try {
+      const sym = slip.metadata?.symbol ?? slip.subject.slice(0, 10);
+      const svg = splCard(slip, { repoUrl: REPO, ticker: MARK, mascotSvg: MASCOT_SVG_INNER, checkUrl: shareBase() });
+      const how = await copyCardImage(svg, `bouncer-${sym.replace(/[^a-z0-9]+/gi, "-").toLowerCase()}.png`);
+      showToast(how === "copied" ? "Card copied — paste it anywhere" : "Your browser would not take an image; the card was downloaded instead");
+    } finally {
+      button.disabled = false;
+    }
   });
   $("act-json").addEventListener("click", async () => {
     try { await navigator.clipboard.writeText(slipJson(slip)); showToast("JSON copied"); } catch { showToast("Clipboard blocked; use the CLI --format json"); }

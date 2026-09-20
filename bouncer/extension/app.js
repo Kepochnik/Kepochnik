@@ -409,6 +409,18 @@
   });
 
   // src/chain/blockscout.ts
+  var BlockscoutError = class extends Error {
+    constructor(status2, path) {
+      super(`blockscout ${status2} for ${path}`);
+      this.status = status2;
+      this.path = path;
+      this.name = "BlockscoutError";
+    }
+    /** True when the explorer answered, and its answer was "I do not have this". */
+    get notIndexed() {
+      return this.status === 404;
+    }
+  };
   var BlockscoutClient = class _BlockscoutClient {
     baseUrl;
     fetchImpl;
@@ -512,7 +524,7 @@
         const headers = { accept: "application/json" };
         if (typeof globalThis.window === "undefined") headers["user-agent"] = _BlockscoutClient.USER_AGENT;
         const response = await this.fetchImpl(`${this.baseUrl}${path}`, { method: "GET", headers, signal: controller.signal });
-        if (!response.ok) throw new Error(`blockscout ${response.status} for ${path}`);
+        if (!response.ok) throw new BlockscoutError(response.status, path);
         const body = await response.json();
         this.record(path, Date.now() - startedAt, false);
         const age = Number(response.headers?.get?.("x-bouncer-age") ?? 0);
@@ -734,6 +746,7 @@
     // ---- what could not be read
     "explorer-scam": "unread",
     "explorer-unread": "unread",
+    "too-new": "id",
     // A cached reading is not a missing one, but it belongs in the same strip:
     // this is where the page says how sure it is of what it just told you.
     "explorer-age": "unread",
@@ -3022,6 +3035,162 @@
     return digits.replace(/\B(?=(\d{3})+(?!\d))/g, ",");
   }
 
+  // src/bouncer/card.ts
+  var CARD_COLORS = {
+    ink: "#0b0b0f",
+    panel: "#15151c",
+    line: "#2a2a35",
+    brass: "#d4a017",
+    rope: "#c8102e",
+    text: "#f2efe6",
+    muted: "#8f8f9c",
+    stop: "#ff4d5e",
+    watch: "#e8b323",
+    ok: "#39d98a",
+    info: "#7f8ea3",
+    dim: "#5e5a66"
+  };
+  function cardVerdict(notes) {
+    const c = CARD_COLORS;
+    const stop = notes.filter((n) => n.level === "stop").length;
+    const watch = notes.filter((n) => n.level === "watch").length;
+    if (stop) return { word: "STOP", color: c.stop, line: `${stop} thing${stop === 1 ? "" : "s"} here can cost you money outright` };
+    if (watch) return { word: "WATCH", color: c.watch, line: `${watch} thing${watch === 1 ? "" : "s"} worth reading before you buy` };
+    return { word: "CLEAR", color: c.ok, line: "nothing in what was read stands out" };
+  }
+  function facts(slip) {
+    const o = slip.open;
+    const out2 = [];
+    if (o) {
+      const owner = o.ownerUnread ? "UNREAD" : o.owner === null ? "NONE" : o.owner.renounced ? "RENOUNCED" : shortAddress(o.owner.address).toUpperCase();
+      out2.push({ label: "OWNER", value: owner, bad: Boolean(o.owner && !o.owner.renounced) });
+      const powers = o.powers.filter((p) => p.kind !== "exempt" && p.kind !== "sweep").length;
+      out2.push({ label: "CODE CAN", value: String(powers), bad: powers > 0 });
+      const sells = o.probes.filter((p) => p.target === "pool");
+      const sale = !sells.length ? "NOT RUN" : sells.every((p) => p.status === "ok") ? "GOES THROUGH" : sells.some((p) => p.status === "reverts") ? "REVERTS" : "UNREAD";
+      out2.push({ label: "SALE INTO POOL", value: sale, bad: sale === "REVERTS" });
+      const top = o.holders?.top10WalletsBps ?? null;
+      out2.push({ label: "TOP 10 WALLETS", value: top === null ? "UNKNOWN" : `${(top / 100).toFixed(0)}%`, bad: top !== null && top >= 5e3 });
+    } else if (slip.rules) {
+      out2.push({ label: "TRADE FEE", value: formatBps(slip.rules.totalTradeBps), bad: slip.rules.totalTradeBps >= 1e3 });
+      out2.push({ label: "CREATOR TAX", value: formatBps(slip.rules.creatorTaxBps), bad: slip.rules.creatorTaxBps >= 500 });
+      out2.push({ label: "DEV HOLDS", value: `${(slip.rules.deployerShareBps / 100).toFixed(1)}%`, bad: slip.rules.deployerShareBps >= 2e3 });
+      out2.push({ label: "BUYBACK", value: slip.rules.buybackEnabled ? "VESTS" : "NONE", bad: slip.rules.buybackEnabled });
+    }
+    return out2.slice(0, 4);
+  }
+  function doorCard(slip, options) {
+    const meta = slip.id.meta;
+    return renderCard(
+      {
+        chain: slip.chain.name,
+        at: `block ${slip.at.block}`,
+        timestamp: slip.at.timestamp,
+        ticker: meta ? clip(meta.symbol, 12) : shortAddress(slip.subject),
+        name: meta ? clip(meta.name, 34) : slip.known ? "known contract" : "no name on chain",
+        address: slip.subject,
+        stamp: slip.stamp,
+        notes: slip.notes,
+        facts: facts(slip)
+      },
+      options
+    );
+  }
+  function splCard(slip, options) {
+    const m = slip.mint;
+    const fee = m?.extensions.find((e) => e.kind === "transfer-fee");
+    const top = slip.holders?.top10Bps ?? null;
+    return renderCard(
+      {
+        chain: slip.chain.name,
+        at: `slot ${slip.at.slot}`,
+        timestamp: slip.at.timestamp,
+        ticker: clip(slip.metadata?.symbol || shortAddress(slip.subject), 12),
+        name: clip(slip.metadata?.name || slip.whatItIs || "no name on chain", 34),
+        address: slip.subject,
+        stamp: slip.stamp,
+        notes: slip.notes,
+        facts: [
+          { label: "CAN THEY FREEZE YOU", value: m?.freezeAuthority ? "YES" : m ? "NO" : "UNREAD", bad: Boolean(m?.freezeAuthority) },
+          { label: "CAN THEY PRINT MORE", value: m?.mintAuthority ? "YES" : m ? "NO" : "UNREAD", bad: Boolean(m?.mintAuthority) },
+          {
+            label: "TAX PER TRANSFER",
+            value: fee?.kind === "transfer-fee" ? `${(fee.feeBps / 100).toFixed(2)}%` : m ? "0%" : "UNREAD",
+            bad: fee?.kind === "transfer-fee" && fee.feeBps >= 500
+          },
+          { label: "TOP 10 HOLDERS", value: top === null ? "UNKNOWN" : `${(top / 100).toFixed(0)}%`, bad: top !== null && top >= 5e3 }
+        ]
+      },
+      options
+    );
+  }
+  function renderCard(model, options) {
+    const c = CARD_COLORS;
+    const v = cardVerdict(model.notes);
+    const ticker2 = model.ticker;
+    const name = model.name;
+    const rank = { stop: 0, watch: 1, info: 2 };
+    const shown = [...model.notes].sort((a, b) => rank[a.level] - rank[b.level]).slice(0, 3);
+    const tiles = model.facts.map((f, i) => {
+      const x = 60 + i * 272;
+      return `<g>
+      <rect x="${x}" y="344" width="252" height="96" rx="12" fill="${c.ink}" stroke="${c.line}"/>
+      <text x="${x + 18}" y="374" font-size="12" letter-spacing="2" fill="${c.muted}">${esc(f.label)}</text>
+      <text x="${x + 18}" y="416" font-size="${f.value.length > 11 ? 21 : 29}" font-weight="700" fill="${f.bad ? c.stop : c.text}">${esc(f.value)}</text>
+    </g>`;
+    }).join("");
+    const noteRows = shown.map((n, i) => {
+      const y = 496 + i * 32;
+      const color = n.level === "stop" ? c.stop : n.level === "watch" ? c.watch : c.info;
+      return `<circle cx="66" cy="${y - 5}" r="5" fill="${color}"/><text x="86" y="${y}" font-size="17" fill="${n.level === "info" ? c.muted : c.text}">${esc(clip(n.text, 96))}</text>`;
+    }).join("");
+    const stamp = model.stamp;
+    const stampColor = stamp === "ON THE LIST" ? c.brass : stamp === "NOT A LAUNCH" ? c.muted : c.stop;
+    const stampWidth = stamp.length * 9.5 + 26;
+    return `<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">
+  <rect width="1200" height="630" fill="${c.ink}"/>
+  <rect x="24" y="24" width="1152" height="582" rx="20" fill="${c.panel}" stroke="${c.line}"/>
+  <rect x="24" y="24" width="1152" height="5" rx="2.5" fill="${v.color}"/>
+
+  <g transform="translate(56 50) scale(1.05)">${options.mascotSvg}</g>
+  <text x="112" y="70" font-size="22" font-weight="700" letter-spacing="6" fill="${c.brass}">BOUNCER</text>
+  <text x="112" y="92" font-size="13" fill="${c.dim}">read-only \xB7 no key \xB7 no signer</text>
+  <text x="1144" y="70" text-anchor="end" font-size="15" fill="${c.muted}">${esc(model.chain)} \xB7 ${esc(model.at)}</text>
+  <text x="1144" y="92" text-anchor="end" font-size="13" fill="${c.dim}">${model.timestamp ? esc(isoUtc(model.timestamp)) : ""}</text>
+  <line x1="56" y1="116" x2="1144" y2="116" stroke="${c.line}"/>
+
+  <text x="60" y="168" font-size="42" font-weight="800" fill="${c.text}">${esc(ticker2)}</text>
+  <text x="60" y="200" font-size="20" fill="${c.muted}">${esc(name)}</text>
+  <g transform="translate(${1144 - stampWidth} 142)">
+    <rect x="0" y="0" width="${stampWidth}" height="30" rx="15" fill="none" stroke="${stampColor}"/>
+    <text x="${stampWidth / 2}" y="20" text-anchor="middle" font-size="13" font-weight="700" letter-spacing="2" fill="${stampColor}">${esc(stamp)}</text>
+  </g>
+  <text x="1144" y="200" text-anchor="end" font-size="15" fill="${c.dim}">${esc(model.address)}</text>
+
+  <text x="60" y="296" font-size="76" font-weight="800" letter-spacing="1" fill="${v.color}">${v.word}</text>
+  <text x="${60 + v.word.length * 46 + 34}" y="284" font-size="20" fill="${c.text}">${esc(v.line)}</text>
+  <text x="${60 + v.word.length * 46 + 34}" y="310" font-size="15" fill="${c.dim}">read at one block \xB7 nothing here is advice</text>
+
+  ${tiles}
+
+  <line x1="60" y1="470" x2="1140" y2="470" stroke="${c.line}"/>
+  ${noteRows}
+
+  <text x="60" y="588" font-size="15" fill="${c.muted}">${esc(options.checkUrl ?? options.repoUrl)}</text>
+  <text x="1144" y="588" text-anchor="end" font-size="15" fill="${c.dim}">check it yourself before you buy \xB7 ${esc(options.ticker)}</text>
+</svg>
+`;
+  }
+  function esc(text) {
+    return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+  }
+  function clip(text, max) {
+    if (text.length <= max) return text;
+    const cut = text.slice(0, max - 1);
+    const space = cut.lastIndexOf(" ");
+    return `${(space > max - 18 ? cut.slice(0, space) : cut).trimEnd()}\u2026`;
+  }
+
   // src/bouncer/coverCharge.ts
   init_abi();
   init_tape();
@@ -3106,156 +3275,6 @@
     const taxed = c.observed.filter((b) => !b.creatorWallet);
     const paid = taxed.length ? ` \xB7 ${taxed.length} paid at the door, highest ${(Math.max(...taxed.map((b) => b.chargeBps)) / 100).toFixed(1)}%` : "";
     return `closed \xB7 ${c.observed.length} buy${c.observed.length === 1 ? "" : "s"} inside the ${c.terms.seconds} s window${paid}`;
-  }
-
-  // src/bouncer/devReport.ts
-  init_abi();
-  init_tape();
-  async function readDevReport(rpc, deployer, options) {
-    const address = normalizeAddress(deployer);
-    const factory = options.factory ?? PONS_V2_FACTORY;
-    const tape = await readTapeAdaptive(
-      rpc,
-      { fromBlock: options.fromBlock, toBlock: options.toBlock, address: factory, events: [FACTORY_EVENTS.TokenLaunched], topics: [null, null, addressTopic(address)] },
-      options.chunking
-    );
-    const all = tape.logs.slice().reverse();
-    const limit = options.limit ?? 40;
-    const detailed = all.slice(0, limit);
-    const records = detailed.length ? await rpc.callBatch(
-      detailed.map((l) => ({ to: factory, data: encodeCall(FACTORY_FUNCTIONS.getLaunchedToken, [String(l.args.token)]) })),
-      options.toBlock
-    ) : [];
-    const symbols = detailed.length ? await rpc.callBatch(detailed.map((l) => ({ to: String(l.args.token), data: encodeCall(ERC20_FUNCTIONS.symbol, []) })), options.toBlock) : [];
-    const launches = [];
-    for (let i = 0; i < detailed.length; i++) {
-      const log = detailed[i];
-      const record = decodeLaunchedToken(decodeOutputs(FACTORY_FUNCTIONS.getLaunchedToken, records[i]));
-      let symbol = "?";
-      try {
-        symbol = decodeOutputs(ERC20_FUNCTIONS.symbol, symbols[i])[0];
-      } catch {
-        symbol = "?";
-      }
-      const header = await rpc.getBlock(log.blockNumber);
-      const sweptAt = Number(record.sweptAt);
-      launches.push({
-        token: String(log.args.token).toLowerCase(),
-        curve: String(log.args.curve).toLowerCase(),
-        symbol,
-        launchedBlock: log.blockNumber,
-        launchedAt: header.timestamp,
-        phase: record.phase,
-        creatorTaxBps: record.creatorTaxBps,
-        sweptAt,
-        secondsToSweep: sweptAt > 0 ? Math.max(0, sweptAt - header.timestamp) : null
-      });
-    }
-    const counts = { launched: all.length, graduated: 0, swept: 0, onCurve: 0 };
-    for (const l of launches) {
-      if (l.phase === 2 /* PoolCreated */ || l.phase === 3 /* Rescued */) counts.graduated++;
-      else if (l.phase === 1 /* Swept */) counts.swept++;
-      else counts.onCurve++;
-    }
-    const sweeps = launches.map((l) => l.secondsToSweep).filter((s) => s !== null).sort((a, b) => a - b);
-    const seen = /* @__PURE__ */ new Map();
-    for (const l of launches) seen.set(l.symbol.toUpperCase(), (seen.get(l.symbol.toUpperCase()) ?? 0) + 1);
-    const taxes = launches.map((l) => l.creatorTaxBps);
-    return {
-      deployer: address,
-      window: { fromBlock: options.fromBlock, toBlock: options.toBlock },
-      launches,
-      truncated: all.length > detailed.length,
-      counts,
-      medianSecondsToSweep: sweeps.length ? sweeps[Math.floor(sweeps.length / 2)] : null,
-      repeatedSymbols: [...seen.entries()].filter(([, n]) => n > 1).map(([s]) => s),
-      taxRangeBps: taxes.length ? [taxes.reduce((a, b) => a < b ? a : b), taxes.reduce((a, b) => a > b ? a : b)] : null
-    };
-  }
-  function devReportLine(d) {
-    const c = d.counts;
-    if (c.launched === 0) return "first launch from this address in the window";
-    const parts = [`${c.launched} launch${c.launched === 1 ? "" : "es"}`, `${c.graduated} graduated`];
-    if (c.swept) parts.push(`${c.swept} swept, no pool`);
-    if (c.onCurve) parts.push(`${c.onCurve} still on the curve`);
-    if (d.repeatedSymbols.length) parts.push(`same ticker ${d.repeatedSymbols.length}\xD7`);
-    return parts.join(" \xB7 ");
-  }
-
-  // src/bouncer/card.ts
-  var CARD_COLORS = {
-    ink: "#0b0b0f",
-    panel: "#15151c",
-    line: "#2a2a35",
-    brass: "#d4a017",
-    rope: "#c8102e",
-    text: "#f2efe6",
-    muted: "#8f8f9c",
-    stop: "#ff4d5e",
-    watch: "#e8b323",
-    info: "#7f8ea3",
-    dim: "#5e5a66"
-  };
-  function doorCard(slip, options) {
-    const c = CARD_COLORS;
-    const meta = slip.id.meta;
-    const title = meta ? esc(meta.symbol) : shortAddress(slip.subject);
-    const sub = meta ? esc(meta.name) : "unregistered contract";
-    const stampColor = slip.stamp === "ON THE LIST" ? c.brass : slip.stamp === "NOT A LAUNCH" ? c.watch : c.stop;
-    const lines = [];
-    const idBits = [slip.id.registered ? "factory record" : "no factory record", slip.id.token.code.empty ? "no code" : `${slip.id.token.code.bytes} bytes`];
-    if (slip.id.token.proxyImplementation || slip.id.token.code.minimalProxyTarget) idBits.push("proxy");
-    if (slip.id.token.code.opcodes.selfdestruct) idBits.push("SELFDESTRUCT");
-    if (slip.id.token.code.opcodes.delegatecall) idBits.push("DELEGATECALL");
-    if (idBits.length === 2 && !slip.id.token.code.empty) idBits.push("no SELFDESTRUCT, no DELEGATECALL, no proxy");
-    lines.push(["ID CHECK", idBits.join(" \xB7 ")].join("  "));
-    if (slip.cover) lines.push(["COVER CHARGE", coverChargeLine(slip.cover)].join("  "));
-    if (slip.rules) {
-      lines.push(["HOUSE RULES", `${formatBps(slip.rules.totalTradeBps)} per curve trade \xB7 creator ${formatBps(slip.rules.creatorTaxBps)} \xB7 ${slip.rules.buybackEnabled ? "buyback vests, no burn" : "no buyback"} \xB7 ${slip.rules.quote.symbol}`].join("  "));
-      lines.push(["PHASE", `${PHASE_LABEL[slip.rules.phase]}${slip.rules.fill ? ` \xB7 ${(slip.rules.fill.bps / 100).toFixed(1)}% full` : ""} \xB7 dev holds ${(slip.rules.deployerShareBps / 100).toFixed(1)}%`].join("  "));
-    }
-    if (slip.dev) lines.push(["DEV REPORT CARD", devReportLine(slip.dev)].join("  "));
-    const notes = slip.notes.slice(0, 4);
-    const noteRows = notes.map((n, i) => {
-      const y = 396 + i * 38;
-      const color = n.level === "stop" ? c.stop : n.level === "watch" ? c.watch : c.info;
-      return `<circle cx="72" cy="${y - 6}" r="6" fill="${color}"/><text x="92" y="${y}" font-size="18" fill="${c.text}">${esc(clip(n.text, 74))}</text>`;
-    }).join("");
-    const factRows = lines.map((l, i) => {
-      const [label, value] = l.split("  ");
-      const y = 214 + i * 36;
-      return `<text x="60" y="${y}" font-size="15" font-weight="700" letter-spacing="2" fill="${c.brass}">${esc(label)}</text><text x="270" y="${y}" font-size="19" fill="${c.text}">${esc(clip(value, 70))}</text>`;
-    }).join("");
-    const _phaseUnused = slip.rules?.phase ?? null;
-    void _phaseUnused;
-    return `<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">
-  <rect width="1200" height="630" fill="${c.ink}"/>
-  <rect x="40" y="40" width="1120" height="550" rx="18" fill="${c.panel}" stroke="${c.line}"/>
-  <rect x="40" y="40" width="1120" height="6" fill="${c.rope}"/>
-  <text x="60" y="96" font-size="22" font-weight="700" letter-spacing="6" fill="${c.brass}">BOUNCER</text>
-  <text x="60" y="122" font-size="15" fill="${c.muted}">read-only check \xB7 ${esc(slip.chain.launchpad ? `${slip.chain.launchpad} \xB7 ` : "")}${esc(slip.chain.name)}${slip.chain.chainId ? ` ${slip.chain.chainId}` : ""} \xB7 block ${slip.at.block} \xB7 ${isoUtc(slip.at.timestamp)}</text>
-  <text x="60" y="176" font-size="44" font-weight="700" fill="${c.text}">${title}</text>
-  <text x="${60 + Math.min(title.length, 14) * 27 + 24}" y="176" font-size="20" fill="${c.muted}">${sub}</text>
-  ${factRows}
-  <line x1="60" y1="340" x2="900" y2="340" stroke="${c.line}"/>
-  <text x="60" y="366" font-size="13" font-weight="700" letter-spacing="3" fill="${c.muted}">DOOR NOTES</text>
-  ${noteRows}
-  <g transform="translate(880 150) rotate(-8)">
-    <rect x="0" y="0" width="270" height="64" rx="8" fill="none" stroke="${stampColor}" stroke-width="4"/>
-    <text x="135" y="42" text-anchor="middle" font-size="${slip.stamp.length > 12 ? 22 : 26}" font-weight="800" letter-spacing="3" fill="${stampColor}">${slip.stamp}</text>
-  </g>
-  <g transform="translate(964 330) scale(5.5)">${options.mascotSvg}</g>
-  <text x="60" y="562" font-size="14" fill="${c.muted}">${esc(slip.subject)}</text>
-  <text x="1140" y="540" text-anchor="end" font-size="13" fill="${c.dim}">no key \xB7 no signer \xB7 no transaction path</text>
-  <text x="1140" y="562" text-anchor="end" font-size="14" fill="${c.muted}">${esc(options.repoUrl)} \xB7 ${esc(options.ticker)}</text>
-</svg>
-`;
-  }
-  function esc(text) {
-    return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
-  }
-  function clip(text, max) {
-    return text.length > max ? `${text.slice(0, max - 1)}\u2026` : text;
   }
 
   // src/bouncer/demo.ts
@@ -3927,6 +3946,80 @@
   };
   function demoRpc(memo = false) {
     return new RpcClient({ urls: ["demo://robinhood-chain"], expectedChainId: ROBINHOOD_CHAIN_ID, fetchImpl: demoFetch(), minSpacingMs: 0, memo });
+  }
+
+  // src/bouncer/devReport.ts
+  init_abi();
+  init_tape();
+  async function readDevReport(rpc, deployer, options) {
+    const address = normalizeAddress(deployer);
+    const factory = options.factory ?? PONS_V2_FACTORY;
+    const tape = await readTapeAdaptive(
+      rpc,
+      { fromBlock: options.fromBlock, toBlock: options.toBlock, address: factory, events: [FACTORY_EVENTS.TokenLaunched], topics: [null, null, addressTopic(address)] },
+      options.chunking
+    );
+    const all = tape.logs.slice().reverse();
+    const limit = options.limit ?? 40;
+    const detailed = all.slice(0, limit);
+    const records = detailed.length ? await rpc.callBatch(
+      detailed.map((l) => ({ to: factory, data: encodeCall(FACTORY_FUNCTIONS.getLaunchedToken, [String(l.args.token)]) })),
+      options.toBlock
+    ) : [];
+    const symbols = detailed.length ? await rpc.callBatch(detailed.map((l) => ({ to: String(l.args.token), data: encodeCall(ERC20_FUNCTIONS.symbol, []) })), options.toBlock) : [];
+    const launches = [];
+    for (let i = 0; i < detailed.length; i++) {
+      const log = detailed[i];
+      const record = decodeLaunchedToken(decodeOutputs(FACTORY_FUNCTIONS.getLaunchedToken, records[i]));
+      let symbol = "?";
+      try {
+        symbol = decodeOutputs(ERC20_FUNCTIONS.symbol, symbols[i])[0];
+      } catch {
+        symbol = "?";
+      }
+      const header = await rpc.getBlock(log.blockNumber);
+      const sweptAt = Number(record.sweptAt);
+      launches.push({
+        token: String(log.args.token).toLowerCase(),
+        curve: String(log.args.curve).toLowerCase(),
+        symbol,
+        launchedBlock: log.blockNumber,
+        launchedAt: header.timestamp,
+        phase: record.phase,
+        creatorTaxBps: record.creatorTaxBps,
+        sweptAt,
+        secondsToSweep: sweptAt > 0 ? Math.max(0, sweptAt - header.timestamp) : null
+      });
+    }
+    const counts = { launched: all.length, graduated: 0, swept: 0, onCurve: 0 };
+    for (const l of launches) {
+      if (l.phase === 2 /* PoolCreated */ || l.phase === 3 /* Rescued */) counts.graduated++;
+      else if (l.phase === 1 /* Swept */) counts.swept++;
+      else counts.onCurve++;
+    }
+    const sweeps = launches.map((l) => l.secondsToSweep).filter((s) => s !== null).sort((a, b) => a - b);
+    const seen = /* @__PURE__ */ new Map();
+    for (const l of launches) seen.set(l.symbol.toUpperCase(), (seen.get(l.symbol.toUpperCase()) ?? 0) + 1);
+    const taxes = launches.map((l) => l.creatorTaxBps);
+    return {
+      deployer: address,
+      window: { fromBlock: options.fromBlock, toBlock: options.toBlock },
+      launches,
+      truncated: all.length > detailed.length,
+      counts,
+      medianSecondsToSweep: sweeps.length ? sweeps[Math.floor(sweeps.length / 2)] : null,
+      repeatedSymbols: [...seen.entries()].filter(([, n]) => n > 1).map(([s]) => s),
+      taxRangeBps: taxes.length ? [taxes.reduce((a, b) => a < b ? a : b), taxes.reduce((a, b) => a > b ? a : b)] : null
+    };
+  }
+  function devReportLine(d) {
+    const c = d.counts;
+    if (c.launched === 0) return "first launch from this address in the window";
+    const parts = [`${c.launched} launch${c.launched === 1 ? "" : "es"}`, `${c.graduated} graduated`];
+    if (c.swept) parts.push(`${c.swept} swept, no pool`);
+    if (c.onCurve) parts.push(`${c.onCurve} still on the curve`);
+    if (d.repeatedSymbols.length) parts.push(`same ticker ${d.repeatedSymbols.length}\xD7`);
+    return parts.join(" \xB7 ");
   }
 
   // src/bouncer/door.ts
@@ -5330,7 +5423,12 @@
     let verified = null;
     let explorer = null;
     let explorerError = null;
+    let explorerMissing = 0;
     const note = (error) => {
+      if (error instanceof BlockscoutError && error.notIndexed) {
+        explorerMissing++;
+        return;
+      }
       const text = error instanceof Error ? error.message : String(error);
       explorerError = explorerError ? `${explorerError}; ${text}` : text;
     };
@@ -5435,6 +5533,7 @@
       ownerBalance,
       explorer,
       explorerError,
+      explorerNotIndexed: explorerMissing > 0 && explorerError === null,
       pools,
       market,
       liquidity,
@@ -6037,7 +6136,15 @@
     if (o.explorer?.tokenType && o.explorer.tokenType !== "ERC-20") {
       notes.push({ level: "info", code: "not-erc20", text: `The explorer indexes this as ${o.explorer.tokenType}, not ERC-20. The questions below are asked of fungible tokens; read them with that in mind.` });
     }
-    if (o.explorerError) notes.push({ level: "info", code: "explorer-unread", text: `The explorer could not be read, so holders, the deployer and recent trades are missing: ${o.explorerError}` });
+    if (o.explorerNotIndexed) {
+      notes.push({
+        level: "watch",
+        code: "too-new",
+        text: "The explorer has not indexed this address yet, which usually means it was deployed very recently. Everything above came off the chain and is current; who holds it, who deployed it and its recent trades are not available until the explorer catches up. A token nobody has had time to look at is worth more caution, not less."
+      });
+    } else if (o.explorerError) {
+      notes.push({ level: "info", code: "explorer-unread", text: `The explorer could not be read, so holders, the deployer and recent trades are missing: ${o.explorerError}` });
+    }
     if (o.explorer && o.explorer.ageSeconds >= 3) {
       notes.push({
         level: "info",
@@ -6997,6 +7104,7 @@
         <p class="vsub">${esc2(v.line)}</p>
       </div>
     </div>
+    ${opts.tiles ?? ""}
     <div class="vfoot">
       <div class="tallies">${counts || '<span class="tally lv-info"><i></i>nothing to flag</span>'}${stage === "done" ? "" : `<span class="tally pendingchip"><i></i>${esc2(opts.stillReading ?? STILL_READING[stage])}</span>`}</div>
       <div class="vat">${opts.at}</div>
@@ -7127,17 +7235,17 @@
       notes: slip.notes,
       lead: splSentence(slip, blocked),
       stage: opts.stage ?? "done",
+      tiles,
       stillReading: SOL_STILL_READING,
-      actions: `<button class="ghost" id="act-json" type="button">JSON</button><button class="ghost" id="act-link" type="button">Link</button>`
+      actions: `<button class="ghost primary" id="act-share" type="button">Copy card</button><button class="ghost" id="act-link" type="button">Copy link</button><button class="ghost" id="act-json" type="button">JSON</button>`
     })}
-    ${tiles}
     ${answerCards(slip.notes)}
     ${unreadStrip(slip.notes, slip.skipped)}
     ${buyStrip(slip.chain.key, slip.subject, Boolean(slip.mint))}
     <div class="stack">
-      ${section("s-id", "Is it real?", "What this address actually is, who can print more of it, and who can freeze what you hold.", idBody, true)}
-      ${extBody ? section("s-ext", "Token-2022 extensions", "The rules the token program itself enforces on every transfer.", extBody, true) : ""}
-      ${holdersBodyText ? section("s-holders", "Who holds it", "The largest token accounts and the wallets behind them.", holdersBodyText, true) : ""}
+      ${section("s-id", "Is it real?", "What this address actually is, who can print more of it, and who can freeze what you hold.", idBody, false)}
+      ${extBody ? section("s-ext", "Token-2022 extensions", "The rules the token program itself enforces on every transfer.", extBody, false) : ""}
+      ${holdersBodyText ? section("s-holders", "Who holds it", "The largest token accounts and the wallets behind them.", holdersBodyText, false) : ""}
     </div>
   </div>`;
     $("act-json").addEventListener("click", async () => {
@@ -7236,8 +7344,10 @@
     }
     return sentence(parts);
   }
+  var LEAD_CLAUSES = 3;
   function sentence(parts) {
-    return parts.map((x) => x.charAt(0).toUpperCase() + x.slice(1)).join(". ") + ".";
+    const kept = parts.slice(0, LEAD_CLAUSES);
+    return kept.map((x) => x.charAt(0).toUpperCase() + x.slice(1)).join(". ") + ".";
   }
   function keepPlace(render) {
     const open = [...document.querySelectorAll("details.sec[open]")].map((d) => d.id).filter(Boolean);
@@ -7245,6 +7355,50 @@
     render();
     for (const id of open) document.getElementById(id)?.setAttribute("open", "");
     if (y) window.scrollTo({ top: y, behavior: "auto" });
+  }
+  function shareBase() {
+    return `${location.host}${location.pathname}`.replace(/\/$/, "");
+  }
+  async function copyCardImage(svg, filename) {
+    const scale = 2;
+    const blob = new Blob([svg], { type: "image/svg+xml;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    try {
+      const png = await new Promise((resolve, reject) => {
+        const img = new Image();
+        img.onload = () => {
+          const canvas = document.createElement("canvas");
+          canvas.width = 1200 * scale;
+          canvas.height = 630 * scale;
+          const ctx = canvas.getContext("2d");
+          if (!ctx) return reject(new Error("no 2d context"));
+          ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+          canvas.toBlob((out2) => out2 ? resolve(out2) : reject(new Error("canvas produced nothing")), "image/png");
+        };
+        img.onerror = () => reject(new Error("the card did not render"));
+        img.src = url;
+      });
+      const Item = window.ClipboardItem;
+      if (Item && navigator.clipboard && "write" in navigator.clipboard) {
+        await navigator.clipboard.write([new Item({ "image/png": png })]);
+        return "copied";
+      }
+      download(png, filename);
+      return "downloaded";
+    } catch {
+      download(blob, filename.replace(/\.png$/, ".svg"));
+      return "downloaded";
+    } finally {
+      URL.revokeObjectURL(url);
+    }
+  }
+  function download(blob, filename) {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1e3);
   }
   function noteRender(stage, word) {
     const log = window.__bouncerRenders ??= [];
@@ -7340,21 +7494,22 @@
       notes: slip.notes,
       lead: summarySentence(slip),
       stage: opts.stage ?? "done",
-      actions: `<button class="ghost" id="act-card" type="button">Image</button><button class="ghost" id="act-json" type="button">JSON</button><button class="ghost" id="act-link" type="button">Link</button>`
+      tiles,
+      actions: `<button class="ghost primary" id="act-share" type="button">Copy card</button><button class="ghost" id="act-card" type="button">Preview</button><button class="ghost" id="act-link" type="button">Copy link</button><button class="ghost" id="act-json" type="button">JSON</button>`
     })}
     <div class="card-wrap" id="card"></div>
-    ${tiles}
     ${answerCards(slip.notes)}
     ${unreadStrip(slip.notes, slip.skipped)}
     ${buyStrip(mode === "demo" ? "" : slip.chain.key, slip.subject, Boolean(slip.id.meta) && slip.open?.transferFunction !== false)}
+    <h2 class="stack-head">The evidence<span>every number above, and where it was read from</span></h2>
     <div class="stack">
-      ${section("s-id", "Is it real?", "Did the launchpad's factory deploy this token, and can its code change later?", idBody, !o)}
-      ${o ? section("s-control", "Who controls it", "Which switches the code has (mint, pause, blacklist, fees), who holds the keys, and whether holders can move tokens right now.", controlBody(slip), true) : ""}
-      ${o && tradesText ? section("s-trades", "Where it trades", "Pools on the chain's DEX factories and what they hold, plus the explorer's price feed.", tradesText, true) : ""}
-      ${o && (o.holders || o.deployer || o.activity) ? section("s-holders", "Who holds it", "The largest wallets, the deployer's share, what sits in pools and contracts, and when it last moved.", holdersBody(slip), true) : ""}
+      ${section("s-id", "Is it real?", "Did the launchpad's factory deploy this token, and can its code change later?", idBody, false)}
+      ${o ? section("s-control", "Who controls it", "Which switches the code has (mint, pause, blacklist, fees), who holds the keys, and whether holders can move tokens right now.", controlBody(slip), false) : ""}
+      ${o && tradesText ? section("s-trades", "Where it trades", "Pools on the chain's DEX factories and what they hold, plus the explorer's price feed.", tradesText, false) : ""}
+      ${o && (o.holders || o.deployer || o.activity) ? section("s-holders", "Who holds it", "The largest wallets, the deployer's share, what sits in pools and contracts, and when it last moved.", holdersBody(slip), false) : ""}
       ${registered && !v1 ? section("s-cover", "Door tax", `The anti-snipe tax in the first ${c?.terms.seconds ?? 15} seconds, and who paid it.`, coverBody, c?.status === "open") : ""}
       ${r ? section("s-rules", "Fees and rules", "What every trade costs, where the creator's cut goes, what buyback really does.", rulesBody, false) : ""}
-      ${v1 ? section("s-v1", "Rules (Pons V1)", "How this older kind of launch works: pool from block one, launch caps, locked liquidity.", `<ol class="rules">${v1.rules.map((x) => `<li>${esc2(x)}</li>`).join("")}</ol>`, true) : ""}
+      ${v1 ? section("s-v1", "Rules (Pons V1)", "How this older kind of launch works: pool from block one, launch caps, locked liquidity.", `<ol class="rules">${v1.rules.map((x) => `<li>${esc2(x)}</li>`).join("")}</ol>`, false) : ""}
       ${e ? section("s-exit", "Cash out now", "What you would actually get for selling part or all of a position right now.", exitBody, false) : ""}
       ${room ? section("s-room", "Who is inside", "Every buyer since launch, how much the creator's own wallets put in, buys landing in the same block.", roomBody, false) : ""}
       ${crew ? section("s-crew", "Same funder?", "Where the first buyers got their money. Wallets funded by one address before the launch are one group.", crewBody, false) : ""}
@@ -7363,10 +7518,34 @@
       ${registered && !v1 ? section("s-watch", "Watch for changes", "Get told when the dev moves, right in this tab.", watchBody, new URLSearchParams(location.hash.split("?")[1] ?? "").get("watch") === "1") : ""}
     </div>
   </div>`;
+    const cardSvg = () => doorCard(slip, { repoUrl: REPO, ticker: MARK, mascotSvg: MASCOT_SVG_INNER, checkUrl: shareBase() });
     $("act-card").addEventListener("click", () => {
       const wrap = $("card");
-      if (!wrap.classList.contains("open")) wrap.innerHTML = doorCard(slip, { repoUrl: REPO, ticker: MARK, mascotSvg: MASCOT_SVG_INNER });
+      if (!wrap.classList.contains("open")) wrap.innerHTML = cardSvg();
       wrap.classList.toggle("open");
+    });
+    $("act-share").addEventListener("click", async (event) => {
+      const button = event.currentTarget;
+      button.disabled = true;
+      try {
+        const sym2 = slip.id.meta?.symbol ?? slip.subject.slice(0, 10);
+        const how = await copyCardImage(cardSvg(), `bouncer-${sym2.replace(/[^a-z0-9]+/gi, "-").toLowerCase()}.png`);
+        showToast(how === "copied" ? "Card copied \u2014 paste it anywhere" : "Your browser would not take an image; the card was downloaded instead");
+      } finally {
+        button.disabled = false;
+      }
+    });
+    $("act-share").addEventListener("click", async (event) => {
+      const button = event.currentTarget;
+      button.disabled = true;
+      try {
+        const sym2 = slip.metadata?.symbol ?? slip.subject.slice(0, 10);
+        const svg = splCard(slip, { repoUrl: REPO, ticker: MARK, mascotSvg: MASCOT_SVG_INNER, checkUrl: shareBase() });
+        const how = await copyCardImage(svg, `bouncer-${sym2.replace(/[^a-z0-9]+/gi, "-").toLowerCase()}.png`);
+        showToast(how === "copied" ? "Card copied \u2014 paste it anywhere" : "Your browser would not take an image; the card was downloaded instead");
+      } finally {
+        button.disabled = false;
+      }
     });
     $("act-json").addEventListener("click", async () => {
       try {

@@ -14,7 +14,7 @@
  * otherwise it is null and the slip says so rather than printing 0.0%.
  */
 import { decodeOutputs, encodeCall, selector, type FunctionAbi, type Hex } from "../chain/abi.js";
-import type { BlockscoutClient, TokenHolder, TokenTransfer } from "../chain/blockscout.js";
+import { BlockscoutError, type BlockscoutClient, type TokenHolder, type TokenTransfer } from "../chain/blockscout.js";
 import type { ChainConfig } from "../chain/chains.js";
 import { canPrice, depth, readMarket, readPools, type Market, type MarketPool } from "../chain/market.js";
 import { nameHolders, readPoolLock, type PoolLock } from "../chain/liquidity.js";
@@ -175,6 +175,13 @@ export interface OpenDoor {
   } | null;
   /** Why the explorer could not be read, when it could not. */
   explorerError: string | null;
+  /**
+   * True when the explorer answered and said it does not know this address.
+   * For a token minted minutes ago that is the ordinary state of the world:
+   * the chain has it, the index has not caught up. Told apart from a broken
+   * or refused explorer, which is a different sentence entirely.
+   */
+  explorerNotIndexed: boolean;
   /** Pools on the chain's known DEX factories, paired with the wrapped native coin; null when the chain lists none. */
   pools: MarketPool[] | null;
   /** What a sale of the reference position would pay, priced on the deepest pool that can be priced. */
@@ -550,7 +557,15 @@ export async function readOpenDoor(rpc: RpcClient, token: ContractId, meta: Toke
   let verified: boolean | null = null;
   let explorer: OpenDoor["explorer"] = null;
   let explorerError: string | null = null;
+  // A 404 is the explorer saying "I have not indexed this", which for a
+  // token minted a minute ago is the normal state of the world and not a
+  // fault. Counted separately so the slip can say which happened.
+  let explorerMissing = 0;
   const note = (error: unknown) => {
+    if (error instanceof BlockscoutError && error.notIndexed) {
+      explorerMissing++;
+      return;
+    }
     const text = error instanceof Error ? error.message : String(error);
     explorerError = explorerError ? `${explorerError}; ${text}` : text;
   };
@@ -670,6 +685,7 @@ export async function readOpenDoor(rpc: RpcClient, token: ContractId, meta: Toke
     ownerBalance,
     explorer,
     explorerError,
+    explorerNotIndexed: explorerMissing > 0 && explorerError === null,
     pools,
     market,
     liquidity,

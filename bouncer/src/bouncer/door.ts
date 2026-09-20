@@ -585,7 +585,20 @@ function openDoorFactNotes(slip: DoorSlip, o: OpenDoor): DoorNote[] {
   if (o.explorer?.tokenType && o.explorer.tokenType !== "ERC-20") {
     notes.push({ level: "info", code: "not-erc20", text: `The explorer indexes this as ${o.explorer.tokenType}, not ERC-20. The questions below are asked of fungible tokens; read them with that in mind.` });
   }
-  if (o.explorerError) notes.push({ level: "info", code: "explorer-unread", text: `The explorer could not be read, so holders, the deployer and recent trades are missing: ${o.explorerError}` });
+  if (o.explorerNotIndexed) {
+    // Brand new, most likely. The chain answered every question about this
+    // contract; the explorer simply has not seen it yet, which for a token
+    // minted minutes ago is the ordinary state of the world. Saying "could
+    // not be read" there reports a fault where there is none, and hides the
+    // one fact a reader of a fresh launch most wants: it is fresh.
+    notes.push({
+      level: "watch",
+      code: "too-new",
+      text: "The explorer has not indexed this address yet, which usually means it was deployed very recently. Everything above came off the chain and is current; who holds it, who deployed it and its recent trades are not available until the explorer catches up. A token nobody has had time to look at is worth more caution, not less.",
+    });
+  } else if (o.explorerError) {
+    notes.push({ level: "info", code: "explorer-unread", text: `The explorer could not be read, so holders, the deployer and recent trades are missing: ${o.explorerError}` });
+  }
   // A cached reading is fine for what these numbers are for and not fine to
   // present as live. Three seconds is the threshold because below it the
   // explorer's own index lag is the bigger number anyway.
