@@ -16,6 +16,7 @@ import { PonsReader } from "../../src/chain/reader.js";
 import { RpcClient, type BlockHeader } from "../../src/chain/rpc.js";
 import { SolanaRpc } from "../../src/chain/solana.js";
 import { isSolanaAddress } from "../../src/chain/base58.js";
+import { readChainSearch, searchableChains, whichChains, type ChainSearch } from "../../src/chain/whichChain.js";
 import { readSplDoor, type SplSlip } from "../../src/bouncer/spl.js";
 import { findBlockByTimestamp } from "../../src/chain/tape.js";
 import { doorCard, splCard } from "../../src/bouncer/card.js";
@@ -78,8 +79,27 @@ function storage(key: string, value?: string): string | null {
   }
 }
 
+/**
+ * The chain the page is reading.
+ *
+ * "auto" means nobody has been asked to know the answer yet: the address
+ * itself decides, and `autoChain` holds what the search found. Until a
+ * search has run there is no chain, and `chain()` must not invent one —
+ * the callers that need a name before then ask `chainOrNull()` and say
+ * "find the chain" instead of naming one at random.
+ */
+let autoChain: ChainConfig | null = null;
+/** Which address the current `autoChain` was found for, so a new paste searches again. */
+let resolvedFor: { address: string; chain: string } = { address: "", chain: "" };
+
+function chainOrNull(): ChainConfig | null {
+  if (mode === "demo") return CHAINS.robinhood;
+  if (chainSelect.value === "auto") return autoChain;
+  return chainByKey(chainSelect.value);
+}
+
 function chain(): ChainConfig {
-  return mode === "demo" ? CHAINS.robinhood : chainByKey(chainSelect.value);
+  return chainOrNull() ?? CHAINS.robinhood;
 }
 
 function setMode(next: Mode, silent = false): void {
@@ -87,7 +107,7 @@ function setMode(next: Mode, silent = false): void {
   $("mode-demo").setAttribute("aria-pressed", String(next === "demo"));
   $("mode-live").setAttribute("aria-pressed", String(next === "live"));
   chainSelect.disabled = next === "demo";
-  sourcePill.textContent = next === "demo" ? "Demo data" : `Live · ${chain().name}`;
+  sourcePill.textContent = next === "demo" ? "Demo data" : chainOrNull() ? `Live · ${chainOrNull()!.name}` : "Live · finding the chain";
   sourcePill.classList.toggle("live", next === "live");
   sourceText.innerHTML = next === "demo"
     ? SANDBOXED
@@ -115,7 +135,9 @@ function setView(next: View): void {
 function detect(raw: string): { view: View; parts: string[] } | null {
   const parts = raw.trim().split(/[\s,]+/).filter(Boolean);
   // A Solana mint is base58 and has no 0x, so it can only be a door subject.
-  if (parts.length === 1 && chain().family === "solana" && mode === "live" && isSolanaAddress(parts[0])) return { view: "door", parts };
+  // Base58 and no 0x: only a Solana mint looks like that, so the menu does
+  // not get a say — including when the menu has not been asked yet.
+  if (parts.length === 1 && mode === "live" && (chainSelect.value === "auto" || chain().family === "solana") && isSolanaAddress(parts[0]) && !ADDR.test(parts[0])) return { view: "door", parts };
   if (parts.length === 2 && ADDR.test(parts[0]) && ADDR.test(parts[1])) return { view: "wallet", parts };
   if (parts.length === 1 && ADDR.test(parts[0])) return { view: "door", parts };
   if (parts.length === 1 && /^0x[0-9a-fA-F]{64}$/.test(parts[0])) return { view: "tx", parts };
@@ -141,13 +163,16 @@ function proxyBase(): string {
  * outlive the read it belongs to, or the next paste would be answered off
  * the last one's chain.
  */
-function rpcFor(memo = false): RpcClient {
-  if (mode === "demo") return demoRpc(memo);
-  const c = chain();
+function rpcForChain(c: ChainConfig, memo = false): RpcClient {
   const url = rpcInput.value.trim();
   const proxy = proxyBase();
   const urls = url ? [url] : proxy ? [`${proxy}/rpc/${c.key}`, ...c.rpc] : c.rpc;
   return new RpcClient({ urls, expectedChainId: c.chainId, minSpacingMs: 120, memo });
+}
+
+function rpcFor(memo = false): RpcClient {
+  if (mode === "demo") return demoRpc(memo);
+  return rpcForChain(chain(), memo);
 }
 
 /**
@@ -213,7 +238,9 @@ function renderChips(): void {
   }
   const more = document.createElement("div");
   more.className = "more";
-  const c = mode === "demo" ? "demo" : chain().key;
+  // With "auto" and no search run yet there is no chain to name, and
+  // writing one into the link would be picking for the reader.
+  const c = mode === "demo" ? "demo" : chainSelect.value === "auto" ? (chainOrNull()?.key ?? "auto") : chain().key;
   more.innerHTML = `<span>More:</span><a href="#/board?chain=${c}">Tonight's board</a><a href="#/plan?tax=100&chain=${c}">Plan a launch</a><span>Paste "token wallet" (two addresses) to see one wallet's bag.</span>`;
   chips.appendChild(more);
 }
@@ -382,13 +409,123 @@ async function runSearch(query: string): Promise<void> {
   }
 }
 
+/** The placeholder and the hint line, for whatever the menu is set to. */
+function paintSelectedChain(): void {
+  if (chainSelect.value === "auto") {
+    q.placeholder = "0x… or a Solana mint — BOUNCER finds the chain";
+    $("chain-hint").textContent = `BOUNCER asks every chain it knows where this address lives: ${searchableChains().map((c) => c.name).join(", ")}, and Solana by the shape of the address. Pick one from the menu to skip the search and read it directly.`;
+    return;
+  }
+  const c = chainByKey(chainSelect.value);
+  // The box asks for a different thing on a chain that does not use hex addresses.
+  q.placeholder = c.family === "solana" ? "a Solana mint address (base58, like EPjFWdd5…yTDt1v)" : "0x… (a token, its curve, a wallet or a transaction hash)";
+  $("chain-hint").textContent = `${c.name}${c.chainId ? ` (${c.chainId})` : ""}${c.launchpad ? ` · ${c.launchpad}` : " · no launchpad known here"} · RPC ${c.rpc[0]}${c.blockscout ? ` · explorer ${c.blockscout}` : " · no explorer known, the funder check and same-name search are off"}${c.notes ? ` · ${c.notes}` : ""}`;
+}
+
+/** Repaints the chrome that names the chain, after a search settles it. */
+function paintChain(): void {
+  const c = chainOrNull();
+  sourcePill.textContent = mode === "demo" ? "Demo data" : c ? `Live · ${c.name}` : "Live · finding the chain";
+}
+
+/**
+ * Work out which chain an address lives on, before reading it.
+ *
+ * Returns true when the read may go ahead. When it returns false it has
+ * already put the reason on screen — either several chains answered and
+ * the reader has to choose, or none did and the page has to say which
+ * chains were asked and which never replied.
+ */
+async function resolveChain(address: string): Promise<boolean> {
+  if (autoChain && autoChain.key === resolvedFor.chain && resolvedFor.address === address.toLowerCase()) return true;
+  busy("finding the chain this address lives on…");
+  let search: ChainSearch;
+  try {
+    search = await whichChains(address, (c) => rpcForChain(c), searchableChains());
+  } catch (error) {
+    bad(`The chains could not be asked where this address lives: ${error instanceof Error ? error.message : String(error)}. Pick one from the menu and BOUNCER will read it directly.`);
+    return false;
+  }
+  const verdict = readChainSearch(search);
+  if (verdict.kind === "one") {
+    autoChain = verdict.chain;
+    resolvedFor = { address: address.toLowerCase(), chain: verdict.chain.key };
+    paintChain();
+    return true;
+  }
+  if (verdict.kind === "several") {
+    renderChainChoice(address, search);
+    return false;
+  }
+  renderChainMiss(address, search);
+  return false;
+}
+
+/**
+ * Several chains hold a contract at this address, so the page asks.
+ *
+ * It does not rank them and it does not pre-select one. The identical
+ * address on two chains is the shape of a particular trick — a real token
+ * on one, something else at the same address on another — and a tool that
+ * quietly picked the likelier one would be answering the question the
+ * reader came here to ask.
+ */
+function renderChainChoice(address: string, search: ChainSearch): void {
+  const rows = search.hits
+    .map(
+      // Its own classes, not the ticker search's: a check asserts every
+      // `.hit-addr` on the page is a bare 0x address, and this one names a
+      // chain. Two different lists should not share a name.
+      (h) => `<button class="chain-hit" data-chain="${esc(h.chain.key)}">
+        <span class="hit-name">${esc(h.token ? `${h.token.name} · ${h.token.symbol}` : "a contract, which does not name itself")}</span>
+        <span class="chain-hit-where">${esc(h.chain.name)} · ${h.codeSize.toLocaleString()} bytes of code</span>
+      </button>`,
+    )
+    .join("");
+  out.innerHTML = `<section class="found">
+    <h2>${search.hits.length} chains have a contract at this address</h2>
+    <p class="qblurb">That is not a glitch. A contract's address comes from who deployed it and how many times they had deployed before, so the same pair lands on the same address on every chain — which is also how somebody puts a real token on one chain and something else at the matching address on another. Which one did you mean?</p>
+    <div class="hits">${rows}</div>
+    <p class="buy-gap"><span class="mono">${esc(address)}</span></p>
+  </section>`;
+  for (const button of out.querySelectorAll<HTMLButtonElement>("[data-chain]")) {
+    button.addEventListener("click", () => {
+      location.hash = `#/t/${address.toLowerCase()}?chain=${button.dataset.chain}`;
+    });
+  }
+}
+
+/** Nothing anywhere — and which chains were actually asked. */
+function renderChainMiss(address: string, search: ChainSearch): void {
+  const asked = search.empty.map((c) => c.name).join(", ");
+  const broke = search.unreachable.map((u) => `${u.chain.name} (${u.reason})`).join("; ");
+  out.innerHTML = `<section class="found">
+    <h2>No contract at this address on any chain BOUNCER could read</h2>
+    <p class="qblurb">${asked ? `Asked and answered nothing: ${esc(asked)}.` : ""} ${
+      broke
+        ? `<b>These never answered, so this address could still be on one of them:</b> ${esc(broke)}. Try again, or pick the chain from the menu to read it directly.`
+        : "An address with no code is a wallet, not a token — or the token has not been deployed yet."
+    }</p>
+    <p class="buy-gap"><span class="mono">${esc(address)}</span></p>
+  </section>`;
+}
+
 async function runDoor(address: string): Promise<void> {
-  if (chain().family === "solana" && mode === "live") return await runSolanaDoor(address);
+  // A Solana mint is base58 and an EVM address is 0x and hex, so which
+  // family it belongs to is readable off the address with nothing asked of
+  // anybody. Only WHICH EVM chain needs the network.
+  if (mode === "live" && chainSelect.value === "auto" && isSolanaAddress(address) && !ADDR.test(address)) {
+    autoChain = CHAINS.solana;
+    paintChain();
+    return await runSolanaDoor(address);
+  }
+  if (chainOrNull()?.family === "solana" && mode === "live") return await runSolanaDoor(address);
   if (!ADDR.test(address)) {
     // A ticker, most likely. Say so and go looking rather than refusing.
     if (mode === "live" && /^[a-z0-9$ ._-]{2,32}$/i.test(address)) return await runSearch(address.replace(/^\$/, ""));
     return bad("Paste a 20-byte hex address — 0x followed by 40 hex characters — or a token's name to search for it.");
   }
+  if (mode === "live" && chainSelect.value === "auto" && !(await resolveChain(address))) return;
   if (mode === "demo" && !isDemoAddress(address)) {
     // A real address pasted into the demo: the demo chain would call it an impostor. Go live instead.
     setMode("live");
@@ -1795,18 +1932,23 @@ function route(): void {
 
 function submit(): void {
   const v = q.value.trim();
-  const c = mode === "demo" ? "demo" : chain().key;
+  // With "auto" and no search run yet there is no chain to name, and writing
+  // one into the link would be picking for the reader — and route() reads it
+  // straight back into the menu, so a guess here turns itself into a choice.
+  const c = mode === "demo" ? "demo" : chainSelect.value === "auto" ? (chainOrNull()?.key ?? "auto") : chain().key;
   let hash: string;
   if (view === "plan") hash = `#/plan?tax=${encodeURIComponent(v || "100")}&chain=${c}`;
   else if (view === "board") hash = `#/board?hours=${encodeURIComponent(v || "1")}&chain=${c}`;
   else if (view === "dev" && ADDR.test(v)) hash = `#/dev/${v.toLowerCase()}?chain=${c}`;
   else {
     const found = detect(v);
-    if (!found) return bad(chain().family === "solana" && mode === "live" ? "Paste a Solana mint address: 32 bytes in base58, like EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v." : "Paste a token or curve address (0x + 40 hex characters), a transaction hash (0x + 64), or a token and a wallet address separated by a space.");
+    if (!found) return bad(chainOrNull()?.family === "solana" && mode === "live" ? "Paste a Solana mint address: 32 bytes in base58, like EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v." : "Paste a token or curve address (0x + 40 hex characters), a transaction hash (0x + 64), or a token and a wallet address separated by a space.");
     if (found.view === "wallet") hash = `#/wallet/${found.parts[0].toLowerCase()}/${found.parts[1].toLowerCase()}?chain=${c}`;
     else if (found.view === "tx") hash = `#/tx/${found.parts[0]}?chain=${c}`;
     // base58 is case-sensitive: lower-casing a Solana mint makes it a different account.
-    else hash = `#/${mode === "demo" ? "demo" : "t"}/${chain().family === "solana" && mode === "live" ? found.parts[0] : found.parts[0].toLowerCase()}${mode === "demo" ? "" : `?chain=${c}`}`;
+    // base58 is case-sensitive, and with the chain not yet known the shape
+    // of the address is what says whether lower-casing is safe.
+    else hash = `#/${mode === "demo" ? "demo" : "t"}/${mode === "live" && isSolanaAddress(found.parts[0]) && !ADDR.test(found.parts[0]) ? found.parts[0] : found.parts[0].toLowerCase()}${mode === "demo" ? "" : `?chain=${c}`}`;
   }
   if (location.hash === hash) route();
   else location.hash = hash;
@@ -1818,15 +1960,21 @@ function boot(): void {
   proxyInput.value = storage("bouncer.proxy") ?? "";
   proxyInput.addEventListener("change", () => storage("bouncer.proxy", proxyInput.value.trim()));
   factoryInput.value = storage("bouncer.factory") ?? "";
-  chainSelect.value = storage("bouncer.chain") ?? "robinhood";
+  // "auto" by default: the address knows which chain it is on, and asking
+  // a reader to know it first is asking them the question they came with.
+  chainSelect.value = storage("bouncer.chain") ?? "auto";
+  paintSelectedChain();
   rpcInput.addEventListener("change", () => storage("bouncer.rpc", rpcInput.value.trim()));
   factoryInput.addEventListener("change", () => storage("bouncer.factory", factoryInput.value.trim()));
   chainSelect.addEventListener("change", () => {
     storage("bouncer.chain", chainSelect.value);
-    const c = chainByKey(chainSelect.value);
-    // The box asks for a different thing on a chain that does not use hex addresses.
-    q.placeholder = c.family === "solana" ? "a Solana mint address (base58, like EPjFWdd5…yTDt1v)" : "0x… (a token, its curve, a wallet or a transaction hash)";
-    $("chain-hint").textContent = `${c.name}${c.chainId ? ` (${c.chainId})` : ""}${c.launchpad ? ` · ${c.launchpad}` : " · no launchpad known here"} · RPC ${c.rpc[0]}${c.blockscout ? ` · explorer ${c.blockscout}` : " · no explorer known, the funder check and same-name search are off"}${c.notes ? ` · ${c.notes}` : ""}`;
+    // Back to auto: forget whatever the last search settled on, or the next
+    // paste would be read on the chain the last one happened to live on.
+    if (chainSelect.value === "auto") {
+      autoChain = null;
+      resolvedFor = { address: "", chain: "" };
+    }
+    paintSelectedChain();
     if (mode === "live") setMode("live", true);
     renderChips();
   });

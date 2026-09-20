@@ -12,6 +12,8 @@
  *   1. paste an address → a verdict arrives
  *   2. type a ticker    → candidates arrive, each with its address
  *   3. press Copy card  → a PNG lands on the clipboard
+ *   4. paste an address with the chain menu untouched → the page finds the
+ *      chain by itself, or says which chains it asked
  *
  * The first is run against the demo chain so it needs no network; the
  * other two need the live site and are skipped against a file:// build,
@@ -122,6 +124,41 @@ await walk("press Copy card, get a PNG", async (page) => {
 });
 
 if (live) {
+  await walk("paste an address without picking a chain", async (page) => {
+    // The whole point of the feature: a reader who does not know which
+    // network a token is on should not have to. The menu is left exactly
+    // as it loads, and the only thing done to the page is pasting.
+    await page.goto(url, { waitUntil: "load" });
+    await page.waitForTimeout(600);
+    await page.evaluate(() => {
+      (document.querySelector("#mode-live") ?? document.querySelector('[data-mode="live"]'))?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    const menu = await page.$eval("#chain", (el) => el.value);
+    if (menu !== "auto") throw new Error(`the menu should start on auto and it is on "${menu}"`);
+    // USDC on Base. A reader pasting this has no reason to know that.
+    await page.fill("#q", "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913");
+    await page.click("#go");
+    await page.waitForSelector(".vword, .chain-hit, .error", { timeout: 40_000 });
+    const picked = await page.$$(".chain-hit");
+    if (picked.length) {
+      // Several chains hold that address. Legitimate, and the page must ask
+      // rather than choose — but it has to say which, or the question is
+      // unanswerable.
+      const named = await page.$$eval(".chain-hit .chain-hit-where", (els) => els.filter((e) => e.textContent.trim().length > 3).length);
+      if (named !== picked.length) throw new Error(`${picked.length} chains offered, ${named} of them named`);
+      console.log(`      (${picked.length} chains hold that address; the page asked instead of guessing, which is the other correct answer)`);
+      return;
+    }
+    const word = await page.$eval(".vword", (el) => el.textContent.trim()).catch(() => null);
+    if (!word) {
+      const message = await page.$eval(".error, .found", (el) => el.textContent.trim()).catch(() => "(no message)");
+      throw new Error(`no verdict and no chain choice: ${message.slice(0, 160)}`);
+    }
+    // And it has to have landed on the right one, not merely on one.
+    const where = await page.$eval("#source-pill, .source-pill", (el) => el.textContent.trim()).catch(() => "");
+    if (!/base/i.test(where)) throw new Error(`found a chain but not the right one: the page says "${where}"`);
+  });
+
   await walk("type a ticker, get candidates", async (page) => {
     await page.goto(url, { waitUntil: "load" });
     await page.waitForTimeout(600);

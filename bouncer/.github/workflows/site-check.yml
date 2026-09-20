@@ -87,6 +87,13 @@ jobs:
           rc=0
           node scripts/speed-check.mjs "$URL" base 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913 || rc=1
           node scripts/speed-check.mjs "$URL" robinhood 0x39dbed3a2bd333467115de45665cc57f813c4571 || rc=1
+          # And the same token again with the chain NOT given, which is what
+          # a reader who does not know the network gets. It costs a round
+          # trip to every chain before the read starts, and a cost nothing
+          # measures is a cost that grows — so it is measured, on the same
+          # budgets as the rest. `chain=auto` is not a chain, so the page
+          # leaves the menu alone and goes looking.
+          node scripts/speed-check.mjs "$URL" auto 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913 || rc=1
           exit $rc
       - uses: actions/upload-artifact@v4
         if: always()

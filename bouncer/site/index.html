@@ -256,14 +256,18 @@ body.answered .chips{display:none}
 .found{background:var(--surface);border:1px solid var(--line);border-radius:var(--r-lg);padding:18px 20px;margin-top:22px}
 .found h2{margin:0;font:600 17px/1.3 var(--sans);letter-spacing:-.01em}
 .hits{list-style:none;margin:12px 0 0;padding:0;display:grid;gap:8px}
-.hit{width:100%;display:grid;grid-template-columns:auto 1fr auto;align-items:baseline;gap:14px;text-align:left;
+.hit,.chain-hit{width:100%;display:grid;grid-template-columns:auto 1fr auto;align-items:baseline;gap:14px;text-align:left;
   background:var(--surface-2);border:1px solid var(--line);border-radius:var(--r);padding:11px 14px;cursor:pointer;color:inherit;min-width:0}
-.hit:hover{border-color:var(--brass-2);background:rgba(212,160,23,.07)}
-.hit:focus-visible{outline:2px solid var(--brass-2);outline-offset:2px}
+.hit:hover,.chain-hit:hover{border-color:var(--brass-2);background:rgba(212,160,23,.07)}
+.hit:focus-visible,.chain-hit:focus-visible{outline:2px solid var(--brass-2);outline-offset:2px}
 .hit-sym{font:800 16px var(--display);letter-spacing:.03em}
 .hit-name{color:var(--muted);font-size:13.5px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .hit-addr{color:var(--dim);font-size:11.5px;overflow-wrap:anywhere}
 @media (max-width:680px){.hit{grid-template-columns:1fr;gap:3px}.hit-name{white-space:normal}}
+.chain-hit{width:100%;display:grid;grid-template-columns:1fr auto;align-items:baseline;gap:14px;text-align:left}
+.chain-hit .hit-name{color:var(--ink);font-size:14.5px;font-weight:600}
+.chain-hit-where{color:var(--brass-2);font-size:12px;letter-spacing:.04em;text-transform:uppercase;white-space:nowrap}
+@media (max-width:680px){.chain-hit{grid-template-columns:1fr;gap:3px}.chain-hit-where{white-space:normal}}
 
 /* The line between the answer and the evidence. Everything above it is
    what a reader came for; everything below is where it was read from. */
@@ -445,6 +449,7 @@ footer a:hover{color:var(--brass-2)}
         <button type="button" id="mode-live" aria-pressed="false">live</button>
       </div>
       <select id="chain" aria-label="Chain">
+        <option value="auto">Find the chain</option>
         <option value="robinhood">Robinhood Chain</option>
         <option value="base">Base</option>
         <option value="bnb">BNB Chain</option>

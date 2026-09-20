@@ -2264,6 +2264,53 @@
     return { updateAuthority, mint, name, symbol, uri, sellerFeeBasisPoints, primarySaleHappened: d[offset] === 1, isMutable: d[offset + 1] === 1 };
   }
 
+  // src/chain/whichChain.ts
+  init_abi();
+  function searchableChains() {
+    return Object.values(CHAINS).filter((c) => c.family === "evm");
+  }
+  function decodeString(answer, fn) {
+    if (answer instanceof RpcError || typeof answer !== "string") return null;
+    try {
+      const [value] = decodeOutputs(fn, answer);
+      return typeof value === "string" && value.length ? value : null;
+    } catch {
+      return null;
+    }
+  }
+  async function whichChains(address, clientFor, chains = searchableChains()) {
+    const results = await Promise.all(
+      chains.map(async (chain2) => {
+        try {
+          const [code, name, symbol] = await clientFor(chain2).sendBatchSettled([
+            { method: "eth_getCode", params: [address, "latest"] },
+            { method: "eth_call", params: [{ to: address, data: encodeCall(ERC20_FUNCTIONS.name, []) }, "latest"] },
+            { method: "eth_call", params: [{ to: address, data: encodeCall(ERC20_FUNCTIONS.symbol, []) }, "latest"] }
+          ]);
+          if (code instanceof RpcError) return { chain: chain2, hit: null, reason: code.message };
+          if (typeof code !== "string") return { chain: chain2, hit: null, reason: "the endpoint answered with something that is not bytecode" };
+          const codeSize = Math.max(0, (code.length - 2) / 2);
+          if (codeSize === 0) return { chain: chain2, hit: null, reason: null };
+          const n = decodeString(name, ERC20_FUNCTIONS.name);
+          const s = decodeString(symbol, ERC20_FUNCTIONS.symbol);
+          return { chain: chain2, hit: { chain: chain2, codeSize, token: n !== null && s !== null ? { name: n, symbol: s } : null }, reason: null };
+        } catch (error) {
+          return { chain: chain2, hit: null, reason: error instanceof Error ? error.message : String(error) };
+        }
+      })
+    );
+    return {
+      hits: results.filter((r) => r.hit).map((r) => r.hit),
+      unreachable: results.filter((r) => !r.hit && r.reason !== null).map((r) => ({ chain: r.chain, reason: r.reason })),
+      empty: results.filter((r) => !r.hit && r.reason === null).map((r) => r.chain)
+    };
+  }
+  function readChainSearch(search) {
+    if (search.hits.length === 1) return { kind: "one", chain: search.hits[0].chain, search };
+    if (search.hits.length > 1) return { kind: "several", search };
+    return { kind: "none", search };
+  }
+
   // src/chain/solanaDerived.ts
   var WSOL = "So11111111111111111111111111111111111111112";
   var USDC = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
@@ -6707,15 +6754,22 @@
       return null;
     }
   }
+  var autoChain = null;
+  var resolvedFor = { address: "", chain: "" };
+  function chainOrNull() {
+    if (mode === "demo") return CHAINS.robinhood;
+    if (chainSelect.value === "auto") return autoChain;
+    return chainByKey(chainSelect.value);
+  }
   function chain() {
-    return mode === "demo" ? CHAINS.robinhood : chainByKey(chainSelect.value);
+    return chainOrNull() ?? CHAINS.robinhood;
   }
   function setMode(next, silent = false) {
     mode = next;
     $("mode-demo").setAttribute("aria-pressed", String(next === "demo"));
     $("mode-live").setAttribute("aria-pressed", String(next === "live"));
     chainSelect.disabled = next === "demo";
-    sourcePill.textContent = next === "demo" ? "Demo data" : `Live \xB7 ${chain().name}`;
+    sourcePill.textContent = next === "demo" ? "Demo data" : chainOrNull() ? `Live \xB7 ${chainOrNull().name}` : "Live \xB7 finding the chain";
     sourcePill.classList.toggle("live", next === "live");
     sourceText.innerHTML = next === "demo" ? SANDBOXED ? `You are looking at an invented example chain. This preview on claude.ai cannot reach the internet, so <b>Live</b> is off here: use the <a href="${HOSTED}">hosted site</a>, the Chrome extension or the CLI for real tokens.` : "You are looking at an invented example chain. Switch to <b>Live</b> to check a real token." : `Reading ${esc2(chain().name)} from your browser at one block. Nothing is cached.`;
     renderChips();
@@ -6735,7 +6789,7 @@
   }
   function detect(raw) {
     const parts = raw.trim().split(/[\s,]+/).filter(Boolean);
-    if (parts.length === 1 && chain().family === "solana" && mode === "live" && isSolanaAddress(parts[0])) return { view: "door", parts };
+    if (parts.length === 1 && mode === "live" && (chainSelect.value === "auto" || chain().family === "solana") && isSolanaAddress(parts[0]) && !ADDR.test(parts[0])) return { view: "door", parts };
     if (parts.length === 2 && ADDR.test(parts[0]) && ADDR.test(parts[1])) return { view: "wallet", parts };
     if (parts.length === 1 && ADDR.test(parts[0])) return { view: "door", parts };
     if (parts.length === 1 && /^0x[0-9a-fA-F]{64}$/.test(parts[0])) return { view: "tx", parts };
@@ -6746,13 +6800,15 @@
   function proxyBase() {
     return (proxyInput.value.trim() || DEFAULT_PROXY).replace(/\/$/, "");
   }
-  function rpcFor(memo = false) {
-    if (mode === "demo") return demoRpc(memo);
-    const c = chain();
+  function rpcForChain(c, memo = false) {
     const url = rpcInput.value.trim();
     const proxy = proxyBase();
     const urls = url ? [url] : proxy ? [`${proxy}/rpc/${c.key}`, ...c.rpc] : c.rpc;
     return new RpcClient({ urls, expectedChainId: c.chainId, minSpacingMs: 120, memo });
+  }
+  function rpcFor(memo = false) {
+    if (mode === "demo") return demoRpc(memo);
+    return rpcForChain(chain(), memo);
   }
   function blockscoutFor(memo = false) {
     if (mode === "demo") return new BlockscoutClient({ baseUrl: DEMO_BLOCKSCOUT, fetchImpl: demoBlockscoutFetch(), memo });
@@ -6802,7 +6858,7 @@
     }
     const more = document.createElement("div");
     more.className = "more";
-    const c = mode === "demo" ? "demo" : chain().key;
+    const c = mode === "demo" ? "demo" : chainSelect.value === "auto" ? chainOrNull()?.key ?? "auto" : chain().key;
     more.innerHTML = `<span>More:</span><a href="#/board?chain=${c}">Tonight's board</a><a href="#/plan?tax=100&chain=${c}">Plan a launch</a><span>Paste "token wallet" (two addresses) to see one wallet's bag.</span>`;
     chips.appendChild(more);
   }
@@ -6890,12 +6946,87 @@
       });
     }
   }
+  function paintSelectedChain() {
+    if (chainSelect.value === "auto") {
+      q.placeholder = "0x\u2026 or a Solana mint \u2014 BOUNCER finds the chain";
+      $("chain-hint").textContent = `BOUNCER asks every chain it knows where this address lives: ${searchableChains().map((c2) => c2.name).join(", ")}, and Solana by the shape of the address. Pick one from the menu to skip the search and read it directly.`;
+      return;
+    }
+    const c = chainByKey(chainSelect.value);
+    q.placeholder = c.family === "solana" ? "a Solana mint address (base58, like EPjFWdd5\u2026yTDt1v)" : "0x\u2026 (a token, its curve, a wallet or a transaction hash)";
+    $("chain-hint").textContent = `${c.name}${c.chainId ? ` (${c.chainId})` : ""}${c.launchpad ? ` \xB7 ${c.launchpad}` : " \xB7 no launchpad known here"} \xB7 RPC ${c.rpc[0]}${c.blockscout ? ` \xB7 explorer ${c.blockscout}` : " \xB7 no explorer known, the funder check and same-name search are off"}${c.notes ? ` \xB7 ${c.notes}` : ""}`;
+  }
+  function paintChain() {
+    const c = chainOrNull();
+    sourcePill.textContent = mode === "demo" ? "Demo data" : c ? `Live \xB7 ${c.name}` : "Live \xB7 finding the chain";
+  }
+  async function resolveChain(address) {
+    if (autoChain && autoChain.key === resolvedFor.chain && resolvedFor.address === address.toLowerCase()) return true;
+    busy("finding the chain this address lives on\u2026");
+    let search;
+    try {
+      search = await whichChains(address, (c) => rpcForChain(c), searchableChains());
+    } catch (error) {
+      bad(`The chains could not be asked where this address lives: ${error instanceof Error ? error.message : String(error)}. Pick one from the menu and BOUNCER will read it directly.`);
+      return false;
+    }
+    const verdict = readChainSearch(search);
+    if (verdict.kind === "one") {
+      autoChain = verdict.chain;
+      resolvedFor = { address: address.toLowerCase(), chain: verdict.chain.key };
+      paintChain();
+      return true;
+    }
+    if (verdict.kind === "several") {
+      renderChainChoice(address, search);
+      return false;
+    }
+    renderChainMiss(address, search);
+    return false;
+  }
+  function renderChainChoice(address, search) {
+    const rows = search.hits.map(
+      // Its own classes, not the ticker search's: a check asserts every
+      // `.hit-addr` on the page is a bare 0x address, and this one names a
+      // chain. Two different lists should not share a name.
+      (h) => `<button class="chain-hit" data-chain="${esc2(h.chain.key)}">
+        <span class="hit-name">${esc2(h.token ? `${h.token.name} \xB7 ${h.token.symbol}` : "a contract, which does not name itself")}</span>
+        <span class="chain-hit-where">${esc2(h.chain.name)} \xB7 ${h.codeSize.toLocaleString()} bytes of code</span>
+      </button>`
+    ).join("");
+    out.innerHTML = `<section class="found">
+    <h2>${search.hits.length} chains have a contract at this address</h2>
+    <p class="qblurb">That is not a glitch. A contract's address comes from who deployed it and how many times they had deployed before, so the same pair lands on the same address on every chain \u2014 which is also how somebody puts a real token on one chain and something else at the matching address on another. Which one did you mean?</p>
+    <div class="hits">${rows}</div>
+    <p class="buy-gap"><span class="mono">${esc2(address)}</span></p>
+  </section>`;
+    for (const button of out.querySelectorAll("[data-chain]")) {
+      button.addEventListener("click", () => {
+        location.hash = `#/t/${address.toLowerCase()}?chain=${button.dataset.chain}`;
+      });
+    }
+  }
+  function renderChainMiss(address, search) {
+    const asked = search.empty.map((c) => c.name).join(", ");
+    const broke = search.unreachable.map((u) => `${u.chain.name} (${u.reason})`).join("; ");
+    out.innerHTML = `<section class="found">
+    <h2>No contract at this address on any chain BOUNCER could read</h2>
+    <p class="qblurb">${asked ? `Asked and answered nothing: ${esc2(asked)}.` : ""} ${broke ? `<b>These never answered, so this address could still be on one of them:</b> ${esc2(broke)}. Try again, or pick the chain from the menu to read it directly.` : "An address with no code is a wallet, not a token \u2014 or the token has not been deployed yet."}</p>
+    <p class="buy-gap"><span class="mono">${esc2(address)}</span></p>
+  </section>`;
+  }
   async function runDoor(address) {
-    if (chain().family === "solana" && mode === "live") return await runSolanaDoor(address);
+    if (mode === "live" && chainSelect.value === "auto" && isSolanaAddress(address) && !ADDR.test(address)) {
+      autoChain = CHAINS.solana;
+      paintChain();
+      return await runSolanaDoor(address);
+    }
+    if (chainOrNull()?.family === "solana" && mode === "live") return await runSolanaDoor(address);
     if (!ADDR.test(address)) {
       if (mode === "live" && /^[a-z0-9$ ._-]{2,32}$/i.test(address)) return await runSearch(address.replace(/^\$/, ""));
       return bad("Paste a 20-byte hex address \u2014 0x followed by 40 hex characters \u2014 or a token's name to search for it.");
     }
+    if (mode === "live" && chainSelect.value === "auto" && !await resolveChain(address)) return;
     if (mode === "demo" && !isDemoAddress(address)) {
       setMode("live");
       showToast(`Real address: switched to live on ${chain().name}`);
@@ -7915,17 +8046,17 @@
   }
   function submit() {
     const v = q.value.trim();
-    const c = mode === "demo" ? "demo" : chain().key;
+    const c = mode === "demo" ? "demo" : chainSelect.value === "auto" ? chainOrNull()?.key ?? "auto" : chain().key;
     let hash;
     if (view === "plan") hash = `#/plan?tax=${encodeURIComponent(v || "100")}&chain=${c}`;
     else if (view === "board") hash = `#/board?hours=${encodeURIComponent(v || "1")}&chain=${c}`;
     else if (view === "dev" && ADDR.test(v)) hash = `#/dev/${v.toLowerCase()}?chain=${c}`;
     else {
       const found = detect(v);
-      if (!found) return bad(chain().family === "solana" && mode === "live" ? "Paste a Solana mint address: 32 bytes in base58, like EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v." : "Paste a token or curve address (0x + 40 hex characters), a transaction hash (0x + 64), or a token and a wallet address separated by a space.");
+      if (!found) return bad(chainOrNull()?.family === "solana" && mode === "live" ? "Paste a Solana mint address: 32 bytes in base58, like EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v." : "Paste a token or curve address (0x + 40 hex characters), a transaction hash (0x + 64), or a token and a wallet address separated by a space.");
       if (found.view === "wallet") hash = `#/wallet/${found.parts[0].toLowerCase()}/${found.parts[1].toLowerCase()}?chain=${c}`;
       else if (found.view === "tx") hash = `#/tx/${found.parts[0]}?chain=${c}`;
-      else hash = `#/${mode === "demo" ? "demo" : "t"}/${chain().family === "solana" && mode === "live" ? found.parts[0] : found.parts[0].toLowerCase()}${mode === "demo" ? "" : `?chain=${c}`}`;
+      else hash = `#/${mode === "demo" ? "demo" : "t"}/${mode === "live" && isSolanaAddress(found.parts[0]) && !ADDR.test(found.parts[0]) ? found.parts[0] : found.parts[0].toLowerCase()}${mode === "demo" ? "" : `?chain=${c}`}`;
     }
     if (location.hash === hash) route();
     else location.hash = hash;
@@ -7936,14 +8067,17 @@
     proxyInput.value = storage("bouncer.proxy") ?? "";
     proxyInput.addEventListener("change", () => storage("bouncer.proxy", proxyInput.value.trim()));
     factoryInput.value = storage("bouncer.factory") ?? "";
-    chainSelect.value = storage("bouncer.chain") ?? "robinhood";
+    chainSelect.value = storage("bouncer.chain") ?? "auto";
+    paintSelectedChain();
     rpcInput.addEventListener("change", () => storage("bouncer.rpc", rpcInput.value.trim()));
     factoryInput.addEventListener("change", () => storage("bouncer.factory", factoryInput.value.trim()));
     chainSelect.addEventListener("change", () => {
       storage("bouncer.chain", chainSelect.value);
-      const c = chainByKey(chainSelect.value);
-      q.placeholder = c.family === "solana" ? "a Solana mint address (base58, like EPjFWdd5\u2026yTDt1v)" : "0x\u2026 (a token, its curve, a wallet or a transaction hash)";
-      $("chain-hint").textContent = `${c.name}${c.chainId ? ` (${c.chainId})` : ""}${c.launchpad ? ` \xB7 ${c.launchpad}` : " \xB7 no launchpad known here"} \xB7 RPC ${c.rpc[0]}${c.blockscout ? ` \xB7 explorer ${c.blockscout}` : " \xB7 no explorer known, the funder check and same-name search are off"}${c.notes ? ` \xB7 ${c.notes}` : ""}`;
+      if (chainSelect.value === "auto") {
+        autoChain = null;
+        resolvedFor = { address: "", chain: "" };
+      }
+      paintSelectedChain();
       if (mode === "live") setMode("live", true);
       renderChips();
     });
