@@ -850,6 +850,7 @@ async function runSolanaDoor(address: string): Promise<void> {
 }
 
 function renderSplSlip(slip: SplSlip, opts: { stage?: Stage } = {}): void {
+  noteRender(opts.stage ?? "done", verdictOf(slip.notes as DoorNote[], opts.stage ?? "done").word);
   const m = slip.mint;
   const sym = slip.metadata?.symbol ? esc(slip.metadata.symbol) : shortSol(slip.subject);
   const name = slip.metadata?.name ? esc(slip.metadata.name) : slip.whatItIs ? esc(slip.whatItIs) : "no on-chain name";
@@ -1025,7 +1026,34 @@ function keepPlace(render: () => void): void {
   if (y) window.scrollTo({ top: y, behavior: "auto" });
 }
 
+/**
+ * What the page has drawn, in order, with the millisecond it was drawn at.
+ *
+ * The staged render is a claim about time, and the only honest way to check
+ * a claim about time is to have the thing being claimed about say when it
+ * happened. Watching the DOM from outside does not work: a MutationObserver
+ * reports after a microtask checkpoint, so three renders a millisecond
+ * apart — which is exactly what the demo chain produces, having no network
+ * to hide behind — arrive as one. The check called that a collapsed
+ * staging, which was wrong about the page and right to complain about
+ * itself.
+ *
+ * Bounded, because a page left open all day still renders on every watch
+ * tick.
+ */
+declare global {
+  interface Window {
+    __bouncerRenders?: { stage: Stage; at: number; word: string }[];
+  }
+}
+
+function noteRender(stage: Stage, word: string): void {
+  const log = (window.__bouncerRenders ??= []);
+  if (log.length < 200) log.push({ stage, at: Math.round(performance.now()), word });
+}
+
 function renderSlip(slip: DoorSlip, opts: { stage?: Stage } = {}): void {
+  noteRender(opts.stage ?? "done", verdictOf(slip.notes, opts.stage ?? "done").word);
   const meta = slip.id.meta;
   const c0 = chain();
   const explorer = c0.blockscout ? `${c0.blockscout}/address/${slip.subject}` : null;

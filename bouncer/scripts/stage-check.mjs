@@ -69,37 +69,24 @@ page.on("pageerror", (e) => errors.push(String(e)));
 const route = "#/demo/0x0000000000000000000000000000000000f1a1a1";
 await page.goto(`${url}${route}`, { waitUntil: "load" });
 
-// Record every distinct state the verdict block passes through, from before
-// the route is set until the reads have finished.
-await page.evaluate(() => {
-  window.__stages = [];
-  const seen = new Set();
-  const look = () => {
-    const el = document.querySelector(".verdict");
-    if (!el) return;
-    const kind = [...el.classList].find((c) => c.startsWith("v-")) ?? "";
-    const word = el.querySelector(".vword")?.textContent?.trim() ?? "";
-    const chip = el.querySelector(".pendingchip")?.textContent?.trim() ?? "";
-    const key = `${kind}|${word}|${chip}`;
-    if (seen.has(key)) return;
-    seen.add(key);
-    window.__stages.push({ kind, word, chip, at: Math.round(performance.now()) });
-  };
-  new MutationObserver(look).observe(document.body, { childList: true, subtree: true, attributes: true });
-  look();
-});
-
-// Long enough for the full pass, which walks the demo chain's log fixture.
+// The page records its own renders; see noteRender in site/src/app.ts.
+//
+// The first version of this watched the DOM from outside with a
+// MutationObserver, and it was wrong: an observer reports after a microtask
+// checkpoint, so three renders a millisecond apart arrive as one. On the
+// demo chain, which has no network to hide behind, that is exactly what
+// happens — and the check called it a collapsed staging when the staging
+// was fine and the instrument was not.
 for (let waited = 0; waited < 20_000; waited += 250) {
   await page.waitForTimeout(250);
   const done = await page.evaluate(() => !document.querySelector(".verdict .pendingchip") && Boolean(document.querySelector(".verdict")));
   if (done) break;
 }
 
-const stages = await page.evaluate(() => window.__stages);
+const stages = await page.evaluate(() => window.__bouncerRenders ?? []);
 await browser.close();
 
-for (const s of stages) console.log(`  ${String(s.at).padStart(5)} ms  ${s.word.padEnd(8)} ${s.kind}${s.chip ? ` · ${s.chip}` : ""}`);
+for (const s of stages) console.log(`  ${String(s.at).padStart(5)} ms  ${s.stage.padEnd(8)} ${s.word}`);
 
 let failed = false;
 if (errors.length) {
@@ -107,16 +94,30 @@ if (errors.length) {
   failed = true;
 }
 if (stages.length < 2) {
-  console.error(`::error::stages: the verdict block was drawn ${stages.length} time(s); the staged render is not happening`);
+  console.error(`::error::stages: the page drew ${stages.length} time(s); the staged render is not happening`);
+  failed = true;
+}
+if (stages.length && stages[0].stage !== "opening") {
+  console.error(`::error::stages: the first render was "${stages[0].stage}", not the opening one`);
   failed = true;
 }
 if (stages.length && stages[0].word !== "READING") {
   console.error(`::error::stages: the first render already said "${stages[0].word}" — a verdict off part of the evidence`);
   failed = true;
 }
-if (stages.length && stages[stages.length - 1].chip) {
-  console.error(`::error::stages: the last render still says "${stages[stages.length - 1].chip}"`);
+if (stages.length && stages[stages.length - 1].stage !== "done") {
+  console.error(`::error::stages: the last render was "${stages[stages.length - 1].stage}", so the slip never finished`);
   failed = true;
 }
+// Renders only ever move forward: the passes run together and can land out
+// of order, and drawing a smaller slip over a bigger one takes answers off
+// a reader's screen.
+const RANK = { opening: 0, fast: 1, done: 2 };
+for (let i = 1; i < stages.length; i++) {
+  if (RANK[stages[i].stage] <= RANK[stages[i - 1].stage]) {
+    console.error(`::error::stages: "${stages[i].stage}" was drawn after "${stages[i - 1].stage}" — a render went backwards`);
+    failed = true;
+  }
+}
 if (failed) process.exit(1);
-console.log(`stages: ${stages.length} renders, opening one carries no verdict, the last one carries no "still reading"`);
+console.log(`stages: ${stages.length} renders in order, the opening one carries no verdict, the last one is the complete slip`);

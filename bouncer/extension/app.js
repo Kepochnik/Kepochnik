@@ -7051,6 +7051,7 @@
     }
   }
   function renderSplSlip(slip, opts = {}) {
+    noteRender(opts.stage ?? "done", verdictOf(slip.notes, opts.stage ?? "done").word);
     const m = slip.mint;
     const sym = slip.metadata?.symbol ? esc2(slip.metadata.symbol) : shortSol(slip.subject);
     const name = slip.metadata?.name ? esc2(slip.metadata.name) : slip.whatItIs ? esc2(slip.whatItIs) : "no on-chain name";
@@ -7207,7 +7208,12 @@
     for (const id of open) document.getElementById(id)?.setAttribute("open", "");
     if (y) window.scrollTo({ top: y, behavior: "auto" });
   }
+  function noteRender(stage, word) {
+    const log = window.__bouncerRenders ??= [];
+    if (log.length < 200) log.push({ stage, at: Math.round(performance.now()), word });
+  }
   function renderSlip(slip, opts = {}) {
+    noteRender(opts.stage ?? "done", verdictOf(slip.notes, opts.stage ?? "done").word);
     const meta = slip.id.meta;
     const c0 = chain();
     const explorer = c0.blockscout ? `${c0.blockscout}/address/${slip.subject}` : null;
