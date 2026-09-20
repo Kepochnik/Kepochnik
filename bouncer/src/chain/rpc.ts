@@ -108,6 +108,8 @@ export class RpcClient {
    * rather than another plausible story.
    */
   private readonly counters = new Map<string, { calls: number; ms: number; failures: number }>();
+  /** One entry per request that reached the wire; see slowest(). Bounded so a log walk cannot grow it without limit. */
+  private readonly requestLog: { label: string; size: number; ms: number }[] = [];
   private nextId = 1;
   /** See RpcOptions.memo. Null when off, which is the default. */
   private readonly memo: Map<string, { ok: true; value: unknown } | { ok: false; error: RpcError }> | null;
@@ -255,12 +257,31 @@ export class RpcClient {
     return this.dispatch(requests, false);
   }
 
+  /**
+   * The slowest individual requests, newest cost first.
+   *
+   * The per-method numbers cannot answer "which request was slow", because a
+   * batch's time is charged to every method in it: 86 eth_calls and 8.3
+   * seconds could be one heavy batch or twenty light ones, and those call for
+   * opposite fixes. This records each request as it lands, so the next
+   * profile names the batch instead of the method.
+   */
+  slowest(limit = 8): { label: string; size: number; ms: number }[] {
+    return [...this.requestLog].sort((a, b) => b.ms - a.ms).slice(0, limit);
+  }
+
   /** Per-method call counts and total milliseconds, for working out where a slow read went. */
   stats(): { method: string; calls: number; ms: number; failures: number }[] {
     return [...this.counters.entries()].map(([method, v]) => ({ method, ...v })).sort((a, b) => b.ms - a.ms);
   }
 
   private record(requests: RpcRequest[], ms: number, failed: boolean): void {
+    if (this.requestLog.length < 400) {
+      const counts = new Map<string, number>();
+      for (const r of requests) counts.set(r.method, (counts.get(r.method) ?? 0) + 1);
+      const label = [...counts].map(([m, n]) => (n === 1 ? m : `${m} ×${n}`)).join(" + ");
+      this.requestLog.push({ label: failed ? `${label} (failed)` : label, size: requests.length, ms });
+    }
     // A batch is one round trip shared by its members, so the time is charged
     // once to each method in it rather than multiplied by the batch size.
     const methods = new Set(requests.map((r) => r.method));

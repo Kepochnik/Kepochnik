@@ -1262,6 +1262,8 @@
      * rather than another plausible story.
      */
     counters = /* @__PURE__ */ new Map();
+    /** One entry per request that reached the wire; see slowest(). Bounded so a log walk cannot grow it without limit. */
+    requestLog = [];
     nextId = 1;
     /** See RpcOptions.memo. Null when off, which is the default. */
     memo;
@@ -1390,11 +1392,29 @@
     async sendBatch(requests) {
       return this.dispatch(requests, false);
     }
+    /**
+     * The slowest individual requests, newest cost first.
+     *
+     * The per-method numbers cannot answer "which request was slow", because a
+     * batch's time is charged to every method in it: 86 eth_calls and 8.3
+     * seconds could be one heavy batch or twenty light ones, and those call for
+     * opposite fixes. This records each request as it lands, so the next
+     * profile names the batch instead of the method.
+     */
+    slowest(limit = 8) {
+      return [...this.requestLog].sort((a, b) => b.ms - a.ms).slice(0, limit);
+    }
     /** Per-method call counts and total milliseconds, for working out where a slow read went. */
     stats() {
       return [...this.counters.entries()].map(([method, v]) => ({ method, ...v })).sort((a, b) => b.ms - a.ms);
     }
     record(requests, ms, failed2) {
+      if (this.requestLog.length < 400) {
+        const counts = /* @__PURE__ */ new Map();
+        for (const r of requests) counts.set(r.method, (counts.get(r.method) ?? 0) + 1);
+        const label = [...counts].map(([m, n]) => n === 1 ? m : `${m} \xD7${n}`).join(" + ");
+        this.requestLog.push({ label: failed2 ? `${label} (failed)` : label, size: requests.length, ms });
+      }
       const methods = new Set(requests.map((r) => r.method));
       for (const method of methods) {
         const entry = this.counters.get(method) ?? { calls: 0, ms: 0, failures: 0 };

@@ -47,4 +47,8 @@ for (const [label, slow] of [["fast pass (what the reader waits for)", true], ["
   // the cost is somewhere nobody is counting, which is how the last four
   // wrong guesses happened.
   console.log(`  == rpc ${rpcMs} ms + explorer ${bsMs} ms = ${rpcMs + bsMs} ms of calls`);
+  // Which REQUEST was slow, not which method. A batch's time is charged to
+  // every method in it, so the per-method table above cannot tell one heavy
+  // batch from twenty light ones — and those want opposite fixes.
+  for (const r of rpc.slowest(6)) console.log(`  slowest: ${r.ms} ms · ${r.label}`);
 }

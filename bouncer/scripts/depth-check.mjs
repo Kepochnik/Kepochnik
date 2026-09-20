@@ -38,6 +38,12 @@ function slow(inner, tally, kind) {
     if (kind === "rpc") {
       const body = JSON.parse(String(init?.body));
       const items = Array.isArray(body) ? body : [body];
+      // Calls, not just requests. A round trip carrying forty eth_calls is
+      // one request and forty EVM executions, and on a real node the second
+      // number is the one that costs seconds — measured on Robinhood Chain,
+      // 86 eth_calls in the fast pass, 8.3 s, and only two log reads.
+      tally.calls += items.length;
+      for (const item of items) tally.byMethod.set(item.method, (tally.byMethod.get(item.method) ?? 0) + 1);
       label = items.length === 1 ? items[0].method : `${items[0].method} ×${items.length}`;
     } else {
       label = String(url).replace(/^https?:\/\/[^/]+/, "").split("?")[0];
@@ -53,7 +59,7 @@ const SLOW_SECTIONS = { skipLiquidity: true, skipDev: true, skipRoom: true, skip
 const OPENING_SECTIONS = { ...SLOW_SECTIONS, skipMarket: true, skipExplorer: true, skipProbes: true };
 
 async function pass(label, extra, spacingMs = 0, shared = null) {
-  const tally = shared?.tally ?? { requests: 0, timeline: [], started: Date.now() };
+  const tally = shared?.tally ?? { requests: 0, calls: 0, byMethod: new Map(), timeline: [], started: Date.now() };
   const rpc =
     shared?.rpc ??
     new RpcClient({
@@ -66,6 +72,8 @@ async function pass(label, extra, spacingMs = 0, shared = null) {
   const started = Date.now();
   if (!shared) tally.started = started;
   const before = tally.requests;
+  const beforeCalls = tally.calls;
+  const beforeByMethod = new Map(tally.byMethod);
   await readDoor(rpc, DEMO_PLAIN.token, {
     chain: CHAINS.robinhood,
     factory: PONS_V2_FACTORY,
@@ -78,7 +86,14 @@ async function pass(label, extra, spacingMs = 0, shared = null) {
   const ms = Date.now() - started;
   // Depth is what the number is for; the fraction is scheduler noise.
   const depth = ms / DELAY;
-  console.log(`${label.padEnd(34)} ${(tally.requests - before).toString().padStart(4)} requests · depth ${depth.toFixed(1)} · ${ms} ms at ${DELAY} ms/request`);
+  console.log(
+    `${label.padEnd(34)} ${(tally.requests - before).toString().padStart(4)} requests · ${(tally.calls - beforeCalls).toString().padStart(4)} calls · depth ${depth.toFixed(1)} · ${ms} ms at ${DELAY} ms/request`,
+  );
+  if (process.env.CALLS) {
+    for (const [method, n] of [...tally.byMethod].map(([m, n]) => [m, n - (beforeByMethod.get(m) ?? 0)]).filter(([, n]) => n > 0).sort((a, b) => b[1] - a[1])) {
+      console.log(`     ${String(n).padStart(4)}× ${method}`);
+    }
+  }
   if (process.env.TIMELINE) {
     // Grouped by the step they started in: everything in one group ran at
     // once, and the number of groups is the depth.
@@ -115,7 +130,7 @@ if (process.env.SPACING) await pass(`fast pass, ${process.env.SPACING} ms spacin
 // pays for the whole staged read, and the question is whether the two extra
 // renders cost anything worth having.
 {
-  const tally = { requests: 0, timeline: [], started: Date.now() };
+  const tally = { requests: 0, calls: 0, byMethod: new Map(), timeline: [], started: Date.now() };
   const rpc = new RpcClient({
     urls: ["demo://robinhood-chain"],
     expectedChainId: CHAINS.robinhood.chainId,
