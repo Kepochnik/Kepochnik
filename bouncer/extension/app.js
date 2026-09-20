@@ -2436,8 +2436,14 @@
   // src/bouncer/spl.ts
   async function readSplDoor(rpc, input, chain2, options = {}) {
     if (!isSolanaAddress(input)) throw new Error(`${input} is not a Solana address`);
-    const slot = await rpc.slot();
-    const timestamp = await rpc.blockTime(slot);
+    const metadataPda = metadataAddress(input);
+    const [{ slot, timestamp }, accounts] = await Promise.all([
+      (async () => {
+        const at = await rpc.slot();
+        return { slot: at, timestamp: await rpc.blockTime(at) };
+      })(),
+      rpc.multipleAccounts(metadataPda ? [input, metadataPda] : [input]).catch(async () => [await rpc.accountInfo(input), null])
+    ]);
     const slip = {
       chain: { key: chain2.key, name: chain2.name, family: "solana" },
       at: { slot, timestamp },
@@ -2452,7 +2458,7 @@
       notes: [],
       skipped: []
     };
-    const account = await rpc.accountInfo(input);
+    const account = accounts[0] ?? null;
     if (!account) {
       slip.stamp = "NOT ON THE LIST";
       slip.notes = [{ level: "stop", code: "no-account", text: `There is no account at this address on ${chain2.name}.` }];
@@ -2480,15 +2486,13 @@
     const readName = slip.metadata ? Promise.resolve() : attempt(
       "metadata",
       async () => {
-        const pda = metadataAddress(input);
-        if (!pda) return;
-        const metaAccount = await rpc.accountInfo(pda);
+        const metaAccount = metadataPda ? accounts[1] ?? null : null;
         if (metaAccount && metaAccount.owner === METADATA_PROGRAM) slip.metadata = parseMetadata(metaAccount);
       },
       options.deadlineMs ?? 8e3
     );
     let scan = null;
-    const readScan = attempt(
+    const readScan = options.skipHolders ? Promise.resolve() : attempt(
       "holders",
       async () => {
         const largest = (await rpc.largestAccounts(input)).slice(0, options.topHolders ?? 20);
@@ -6690,13 +6694,14 @@
     return parts.map((x) => x.charAt(0).toUpperCase() + x.slice(1)).join(". ") + ".";
   }
   function verdictOf(notes, stage = "done") {
-    if (stage === "opening") return { word: "READING", kind: "reading", line: "The code and the keys are below. Where it trades, who holds it and whether a sale goes through are still being read." };
+    if (stage === "opening") return { word: "READING", kind: "reading", line: "What the code can do and who holds the keys is below. The rest is still being read; there is no verdict until it is in." };
     const stop = notes.filter((n) => n.level === "stop").length;
     const watch = notes.filter((n) => n.level === "watch").length;
     if (stop) return { word: "STOP", kind: "stop", line: `${stop} thing${stop === 1 ? "" : "s"} here can cost you money outright.` };
     if (watch) return { word: "WATCH", kind: "watch", line: `Nothing outright dangerous, ${watch} thing${watch === 1 ? "" : "s"} worth reading before you buy.` };
     return { word: "CLEAR", kind: "clear", line: "Nothing in what was read stands out. That is not a promise about the price." };
   }
+  var SOL_STILL_READING = "still reading who holds it and where it trades";
   var STILL_READING = {
     opening: "still reading where it trades, who holds it, and whether a sale goes through",
     fast: "still reading who holds the liquidity and the dev history",
@@ -6724,7 +6729,7 @@
       </div>
     </div>
     <div class="vfoot">
-      <div class="tallies">${counts || '<span class="tally lv-info"><i></i>nothing to flag</span>'}${stage === "done" ? "" : `<span class="tally pendingchip"><i></i>${STILL_READING[stage]}</span>`}</div>
+      <div class="tallies">${counts || '<span class="tally lv-info"><i></i>nothing to flag</span>'}${stage === "done" ? "" : `<span class="tally pendingchip"><i></i>${esc2(opts.stillReading ?? STILL_READING[stage])}</span>`}</div>
       <div class="vat">${opts.at}</div>
       <div class="vacts">${opts.actions}</div>
     </div>
@@ -6778,18 +6783,36 @@
   }
   async function runSolanaDoor(address) {
     if (!isSolanaAddress(address)) return bad("Paste a Solana mint address: 32 bytes written in base58, which looks like EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v.");
+    const run = ++doorRun;
     busy("reading the mint account\u2026");
+    let opened = false;
+    try {
+      const first = await readSplDoor(solanaRpcFor(), address, chain(), { skipHolders: true, skipMarket: true });
+      if (run !== doorRun) return;
+      renderSplSlip(first, { stage: "opening" });
+      opened = true;
+      status.textContent = `${chain().name} \xB7 slot ${first.at.slot} \xB7 ${SOL_STILL_READING}\u2026`;
+    } catch {
+    }
     try {
       const slip = await readSplDoor(solanaRpcFor(), address, chain());
+      if (run !== doorRun) return;
+      if (opened) keepPlace(() => renderSplSlip(slip));
+      else renderSplSlip(slip);
       done(`slot ${slip.at.slot}${slip.at.timestamp ? ` \xB7 ${isoUtc(slip.at.timestamp)}` : ""} \xB7 ${slip.notes.length} thing${slip.notes.length === 1 ? "" : "s"} to know`);
-      renderSplSlip(slip);
     } catch (error) {
-      failed(error, address);
+      if (run !== doorRun) return;
+      if (opened) {
+        go.disabled = false;
+        status.textContent = `${chain().name} \xB7 the slower sections did not answer: ${error instanceof Error ? error.message : String(error)}`;
+      } else {
+        failed(error, address);
+      }
     } finally {
       go.disabled = false;
     }
   }
-  function renderSplSlip(slip) {
+  function renderSplSlip(slip, opts = {}) {
     const m = slip.mint;
     const sym = slip.metadata?.symbol ? esc2(slip.metadata.symbol) : shortSol(slip.subject);
     const name = slip.metadata?.name ? esc2(slip.metadata.name) : slip.whatItIs ? esc2(slip.whatItIs) : "no on-chain name";
@@ -6826,6 +6849,8 @@
       at: `${esc2(slip.chain.name)} \xB7 slot ${slip.at.slot}${slip.at.timestamp ? ` \xB7 ${isoUtc(slip.at.timestamp)}` : ""}`,
       notes: slip.notes,
       lead: splSentence(slip, blocked),
+      stage: opts.stage ?? "done",
+      stillReading: SOL_STILL_READING,
       actions: `<button class="ghost" id="act-json" type="button">JSON</button><button class="ghost" id="act-link" type="button">Link</button>`
     })}
     ${tiles}

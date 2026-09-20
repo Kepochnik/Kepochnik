@@ -68,14 +68,32 @@ export interface SplOptions {
   deadlineMs?: number;
   /** Skip the market read (a handful of extra calls). */
   skipMarket?: boolean;
+  /**
+   * Skip the holder list. getTokenLargestAccounts is the slowest read on
+   * this chain and the one free endpoints refuse most often, and none of
+   * what a reader wants first — can they print more, can they freeze you,
+   * what does a transfer cost — depends on it.
+   */
+  skipHolders?: boolean;
   /** The market read is several round trips; it gets its own, longer deadline. */
   marketDeadlineMs?: number;
 }
 
 export async function readSplDoor(rpc: SolanaRpc, input: string, chain: ChainConfig, options: SplOptions = {}): Promise<SplSlip> {
   if (!isSolanaAddress(input)) throw new Error(`${input} is not a Solana address`);
-  const slot = await rpc.slot();
-  const timestamp = await rpc.blockTime(slot);
+  // Three round trips in a row, and only one pair of them was related: the
+  // slot, then that slot's time, then the account at the pasted address —
+  // which has nothing to do with either. And the Metaplex metadata account,
+  // read further down as a fourth, is just another account: getMultipleAccounts
+  // fetches it beside the mint for the same one request.
+  const metadataPda = metadataAddress(input);
+  const [{ slot, timestamp }, accounts] = await Promise.all([
+    (async () => {
+      const at = await rpc.slot();
+      return { slot: at, timestamp: await rpc.blockTime(at) };
+    })(),
+    rpc.multipleAccounts(metadataPda ? [input, metadataPda] : [input]).catch(async () => [await rpc.accountInfo(input), null]),
+  ]);
   const slip: SplSlip = {
     chain: { key: chain.key, name: chain.name, family: "solana" },
     at: { slot, timestamp },
@@ -91,7 +109,7 @@ export async function readSplDoor(rpc: SolanaRpc, input: string, chain: ChainCon
     skipped: [],
   };
 
-  const account = await rpc.accountInfo(input);
+  const account = accounts[0] ?? null;
   if (!account) {
     slip.stamp = "NOT ON THE LIST";
     slip.notes = [{ level: "stop", code: "no-account", text: `There is no account at this address on ${chain.name}.` }];
@@ -124,14 +142,14 @@ export async function readSplDoor(rpc: SolanaRpc, input: string, chain: ChainCon
     slip.metadata = { updateAuthority: inline.updateAuthority ?? "", mint: input, name: inline.name, symbol: inline.symbol, uri: inline.uri, sellerFeeBasisPoints: 0, primarySaleHappened: false, isMutable: inline.updateAuthority !== null };
   }
 
+  // Already in hand: it came back beside the mint. It only costs a read of
+  // its own when the address could not be derived, which is the odd case.
   const readName = slip.metadata
     ? Promise.resolve()
     : attempt(
         "metadata",
         async () => {
-          const pda = metadataAddress(input);
-          if (!pda) return;
-          const metaAccount = await rpc.accountInfo(pda);
+          const metaAccount = metadataPda ? (accounts[1] ?? null) : null;
           if (metaAccount && metaAccount.owner === METADATA_PROGRAM) slip.metadata = parseMetadata(metaAccount);
         },
         options.deadlineMs ?? 8_000,
@@ -143,7 +161,7 @@ export async function readSplDoor(rpc: SolanaRpc, input: string, chain: ChainCon
   // one queue, the duplicate was time taken from whichever section was still
   // waiting — which is how both of them ended up losing their deadlines.
   let scan: HolderScan | null = null;
-  const readScan = attempt(
+  const readScan = options.skipHolders ? Promise.resolve() : attempt(
     "holders",
     async () => {
       const largest = (await rpc.largestAccounts(input)).slice(0, options.topHolders ?? 20);

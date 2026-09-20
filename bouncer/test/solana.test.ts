@@ -392,3 +392,54 @@ test("a throttled endpoint is left behind, not asked again", async () => {
   assert.ok(tried.includes("https://fine.invalid"));
   assert.ok(tried.filter((u) => u.startsWith("https://throttled")).length <= 2, `the throttled endpoint should not be hammered; got ${tried.length} attempts: ${tried.join(", ")}`);
 });
+
+test("the Solana door opens in two round trips, not four", async () => {
+  // The head used to be a queue: the slot, then that slot's time, then the
+  // account at the pasted address, then the Metaplex metadata account. Only
+  // the first pair is related. The other two are accounts, and one
+  // getMultipleAccounts fetches both — so a reader on Solana waited four
+  // round trips to be told the token's name.
+  //
+  // Counting requests is not the same as counting depth, so this counts
+  // both: which methods were asked, and how many rounds of asking there
+  // were before the mint and its metadata were in hand.
+  const mint = base58Encode(key(7));
+  const pda = metadataAddress(mint)!;
+  const asked: { method: string; params: unknown[] }[] = [];
+  const b64 = (a: AccountInfo) => ({ owner: a.owner, lamports: a.lamports, executable: a.executable, data: [Buffer.from(a.data).toString("base64"), "base64"] });
+  const account = mintAccount({ supply: 1_000_000n, decimals: 6, mintAuthority: null, freezeAuthority: null });
+
+  const rpc = new SolanaRpc({
+    urls: ["https://node.invalid"],
+    minSpacingMs: 0,
+    fetchImpl: (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body)) as { id: number; method: string; params: unknown[] };
+      asked.push({ method: body.method, params: body.params });
+      const answer = (result: unknown) => new Response(JSON.stringify({ jsonrpc: "2.0", id: body.id, result }), { status: 200, headers: { "content-type": "application/json" } });
+      switch (body.method) {
+        case "getSlot":
+          return answer(1234);
+        case "getBlockTime":
+          return answer(1_700_000_000);
+        case "getMultipleAccounts": {
+          const addresses = body.params[0] as string[];
+          // The mint comes back; this mint has no Metaplex record, which is
+          // the ordinary case for a Token-2022 launch and must not cost a read.
+          return answer({ value: addresses.map((a) => (a === mint ? b64(account) : null)) });
+        }
+        default:
+          return new Response(JSON.stringify({ jsonrpc: "2.0", id: body.id, error: { code: -32601, message: "not served here" } }), { status: 200, headers: { "content-type": "application/json" } });
+      }
+    }) as unknown as typeof fetch,
+  });
+
+  const slip = await readSplDoor(rpc, mint, CHAINS.solana, { deadlineMs: 2_000, marketDeadlineMs: 2_000, skipMarket: true });
+  assert.equal(slip.mint?.decimals, 6, "the mint must have been read");
+
+  const accountReads = asked.filter((a) => a.method === "getMultipleAccounts" || a.method === "getAccountInfo");
+  assert.ok(
+    accountReads.some((a) => Array.isArray(a.params[0]) && (a.params[0] as string[]).includes(mint) && (a.params[0] as string[]).includes(pda)),
+    `the mint and its metadata account must be asked for together; got ${JSON.stringify(accountReads.map((a) => a.params[0]))}`,
+  );
+  assert.equal(asked.filter((a) => a.method === "getAccountInfo").length, 0, "no single-account read is needed when the batch answered");
+});

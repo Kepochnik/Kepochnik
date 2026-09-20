@@ -587,7 +587,7 @@ function summarySentence(slip: DoorSlip): string {
  * the next one. So the first render says READING and means it.
  */
 function verdictOf(notes: DoorNote[], stage: Stage = "done"): { word: string; kind: "stop" | "watch" | "clear" | "reading"; line: string } {
-  if (stage === "opening") return { word: "READING", kind: "reading", line: "The code and the keys are below. Where it trades, who holds it and whether a sale goes through are still being read." };
+  if (stage === "opening") return { word: "READING", kind: "reading", line: "What the code can do and who holds the keys is below. The rest is still being read; there is no verdict until it is in." };
   const stop = notes.filter((n) => n.level === "stop").length;
   const watch = notes.filter((n) => n.level === "watch").length;
   if (stop) return { word: "STOP", kind: "stop", line: `${stop} thing${stop === 1 ? "" : "s"} here can cost you money outright.` };
@@ -607,6 +607,9 @@ function verdictOf(notes: DoorNote[], stage: Stage = "done"): { word: string; ki
  * before the slowest server involved has answered anything at all.
  */
 type Stage = "opening" | "fast" | "done";
+
+/** Solana has no sale simulation; it has a holder list and pools. */
+const SOL_STILL_READING = "still reading who holds it and where it trades";
 
 /** What a stage has not asked for yet, in the reader's words. */
 const STILL_READING: Record<Stage, string> = {
@@ -629,6 +632,8 @@ function verdictBlock(opts: {
   lead: string;
   /** How far along this render is; anything but "done" means the tallies will change. */
   stage?: Stage;
+  /** What is still being read, when it is not what the EVM door reads. */
+  stillReading?: string;
   actions: string;
 }): string {
   const stage = opts.stage ?? "done";
@@ -656,7 +661,7 @@ function verdictBlock(opts: {
       </div>
     </div>
     <div class="vfoot">
-      <div class="tallies">${counts || '<span class="tally lv-info"><i></i>nothing to flag</span>'}${stage === "done" ? "" : `<span class="tally pendingchip"><i></i>${STILL_READING[stage]}</span>`}</div>
+      <div class="tallies">${counts || '<span class="tally lv-info"><i></i>nothing to flag</span>'}${stage === "done" ? "" : `<span class="tally pendingchip"><i></i>${esc(opts.stillReading ?? STILL_READING[stage])}</span>`}</div>
       <div class="vat">${opts.at}</div>
       <div class="vacts">${opts.actions}</div>
     </div>
@@ -750,19 +755,46 @@ function section(id: string, title: string, what: string, body: string, open: bo
 
 async function runSolanaDoor(address: string): Promise<void> {
   if (!isSolanaAddress(address)) return bad("Paste a Solana mint address: 32 bytes written in base58, which looks like EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v.");
+  const run = ++doorRun;
   busy("reading the mint account…");
+
+  // Two renders, for the same reason the EVM door has three. The mint
+  // account and its metadata come back in one request; they carry the three
+  // answers that matter most on this chain — can they print more, can they
+  // freeze you, what does a transfer cost. The holder list and the pools are
+  // several reads each, and getTokenLargestAccounts is both the slowest of
+  // them and the one free endpoints refuse most often.
+  let opened = false;
+  try {
+    const first = await readSplDoor(solanaRpcFor(), address, chain(), { skipHolders: true, skipMarket: true });
+    if (run !== doorRun) return;
+    renderSplSlip(first, { stage: "opening" });
+    opened = true;
+    status.textContent = `${chain().name} · slot ${first.at.slot} · ${SOL_STILL_READING}…`;
+  } catch {
+    // The full read below asks the same questions and will say what went wrong.
+  }
+
   try {
     const slip = await readSplDoor(solanaRpcFor(), address, chain());
+    if (run !== doorRun) return;
+    if (opened) keepPlace(() => renderSplSlip(slip));
+    else renderSplSlip(slip);
     done(`slot ${slip.at.slot}${slip.at.timestamp ? ` · ${isoUtc(slip.at.timestamp)}` : ""} · ${slip.notes.length} thing${slip.notes.length === 1 ? "" : "s"} to know`);
-    renderSplSlip(slip);
   } catch (error) {
-    failed(error, address);
+    if (run !== doorRun) return;
+    if (opened) {
+      go.disabled = false;
+      status.textContent = `${chain().name} · the slower sections did not answer: ${error instanceof Error ? error.message : String(error)}`;
+    } else {
+      failed(error, address);
+    }
   } finally {
     go.disabled = false;
   }
 }
 
-function renderSplSlip(slip: SplSlip): void {
+function renderSplSlip(slip: SplSlip, opts: { stage?: Stage } = {}): void {
   const m = slip.mint;
   const sym = slip.metadata?.symbol ? esc(slip.metadata.symbol) : shortSol(slip.subject);
   const name = slip.metadata?.name ? esc(slip.metadata.name) : slip.whatItIs ? esc(slip.whatItIs) : "no on-chain name";
@@ -813,6 +845,8 @@ function renderSplSlip(slip: SplSlip): void {
       at: `${esc(slip.chain.name)} · slot ${slip.at.slot}${slip.at.timestamp ? ` · ${isoUtc(slip.at.timestamp)}` : ""}`,
       notes: slip.notes as DoorNote[],
       lead: splSentence(slip, blocked),
+      stage: opts.stage ?? "done",
+      stillReading: SOL_STILL_READING,
       actions: `<button class="ghost" id="act-json" type="button">JSON</button><button class="ghost" id="act-link" type="button">Link</button>`,
     })}
     ${tiles}
