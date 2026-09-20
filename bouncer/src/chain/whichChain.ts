@@ -75,15 +75,47 @@ function decodeString(answer: unknown | RpcError, fn: FunctionAbi): string | nul
  * is known, and it has to, or finding the chain would cost a round trip
  * before the round trip that finds the chain.
  */
-export async function whichChains(address: string, clientFor: (chain: ChainConfig) => RpcClient, chains = searchableChains()): Promise<ChainSearch> {
+/**
+ * A chain gets this long to answer before it counts as unreachable.
+ *
+ * Every chain is asked at once, so the search costs the SLOWEST of them —
+ * and measured live, one of them took 5080 ms and dragged a first paint to
+ * 5.7 s on a page whose budget is two. A search for where an address lives
+ * must not be hostage to the least reliable endpoint in the list.
+ *
+ * Past it the chain is unreachable, which this module already treats as its
+ * own answer and the page already prints: "these never answered, so this
+ * address could still be on one of them". That sentence is true of a chain
+ * that was too slow in exactly the way it is true of one that was down, and
+ * a reader who suspects their token is on that chain can pick it from the
+ * menu and be read directly with no clock on it.
+ */
+export const CHAIN_SEARCH_DEADLINE_MS = 1_500;
+
+export async function whichChains(
+  address: string,
+  clientFor: (chain: ChainConfig) => RpcClient,
+  chains = searchableChains(),
+  deadlineMs = CHAIN_SEARCH_DEADLINE_MS,
+): Promise<ChainSearch> {
+  const late = <T,>(value: T): Promise<T> =>
+    new Promise<T>((resolve) => {
+      const timer = setTimeout(() => resolve(value), deadlineMs) as unknown as { unref?: () => void };
+      timer.unref?.();
+    });
   const results = await Promise.all(
     chains.map(async (chain): Promise<{ chain: ChainConfig; hit: ChainHit | null; reason: string | null }> => {
       try {
-        const [code, name, symbol] = await clientFor(chain).sendBatchSettled([
-          { method: "eth_getCode", params: [address, "latest"] },
-          { method: "eth_call", params: [{ to: address, data: encodeCall(ERC20_FUNCTIONS.name, []) }, "latest"] },
-          { method: "eth_call", params: [{ to: address, data: encodeCall(ERC20_FUNCTIONS.symbol, []) }, "latest"] },
+        const answers = await Promise.race([
+          clientFor(chain).sendBatchSettled([
+            { method: "eth_getCode", params: [address, "latest"] },
+            { method: "eth_call", params: [{ to: address, data: encodeCall(ERC20_FUNCTIONS.name, []) }, "latest"] },
+            { method: "eth_call", params: [{ to: address, data: encodeCall(ERC20_FUNCTIONS.symbol, []) }, "latest"] },
+          ]),
+          late(null),
         ]);
+        if (answers === null) return { chain, hit: null, reason: `did not answer within ${deadlineMs} ms` };
+        const [code, name, symbol] = answers;
         // The code slot is the one that decides. If IT failed, the chain did
         // not answer the question asked — that is unreachable, not empty.
         if (code instanceof RpcError) return { chain, hit: null, reason: code.message };

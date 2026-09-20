@@ -503,7 +503,7 @@ function renderChainMiss(address: string, search: ChainSearch): void {
     <h2>No contract at this address on any chain BOUNCER could read</h2>
     <p class="qblurb">${asked ? `Asked and answered nothing: ${esc(asked)}.` : ""} ${
       broke
-        ? `<b>These never answered, so this address could still be on one of them:</b> ${esc(broke)}. Try again, or pick the chain from the menu to read it directly.`
+        ? `<b>These did not answer, so this address could still be on one of them:</b> ${esc(broke)}. Pick that chain from the menu and BOUNCER will read it directly, with no clock on it.`
         : "An address with no code is a wallet, not a token — or the token has not been deployed yet."
     }</p>
     <p class="buy-gap"><span class="mono">${esc(address)}</span></p>

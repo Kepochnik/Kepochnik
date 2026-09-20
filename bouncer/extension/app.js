@@ -2278,15 +2278,25 @@
       return null;
     }
   }
-  async function whichChains(address, clientFor, chains = searchableChains()) {
+  var CHAIN_SEARCH_DEADLINE_MS = 1500;
+  async function whichChains(address, clientFor, chains = searchableChains(), deadlineMs = CHAIN_SEARCH_DEADLINE_MS) {
+    const late = (value) => new Promise((resolve) => {
+      const timer = setTimeout(() => resolve(value), deadlineMs);
+      timer.unref?.();
+    });
     const results = await Promise.all(
       chains.map(async (chain2) => {
         try {
-          const [code, name, symbol] = await clientFor(chain2).sendBatchSettled([
-            { method: "eth_getCode", params: [address, "latest"] },
-            { method: "eth_call", params: [{ to: address, data: encodeCall(ERC20_FUNCTIONS.name, []) }, "latest"] },
-            { method: "eth_call", params: [{ to: address, data: encodeCall(ERC20_FUNCTIONS.symbol, []) }, "latest"] }
+          const answers = await Promise.race([
+            clientFor(chain2).sendBatchSettled([
+              { method: "eth_getCode", params: [address, "latest"] },
+              { method: "eth_call", params: [{ to: address, data: encodeCall(ERC20_FUNCTIONS.name, []) }, "latest"] },
+              { method: "eth_call", params: [{ to: address, data: encodeCall(ERC20_FUNCTIONS.symbol, []) }, "latest"] }
+            ]),
+            late(null)
           ]);
+          if (answers === null) return { chain: chain2, hit: null, reason: `did not answer within ${deadlineMs} ms` };
+          const [code, name, symbol] = answers;
           if (code instanceof RpcError) return { chain: chain2, hit: null, reason: code.message };
           if (typeof code !== "string") return { chain: chain2, hit: null, reason: "the endpoint answered with something that is not bytecode" };
           const codeSize = Math.max(0, (code.length - 2) / 2);
@@ -7019,7 +7029,7 @@
     const broke = search.unreachable.map((u) => `${u.chain.name} (${u.reason})`).join("; ");
     out.innerHTML = `<section class="found">
     <h2>No contract at this address on any chain BOUNCER could read</h2>
-    <p class="qblurb">${asked ? `Asked and answered nothing: ${esc2(asked)}.` : ""} ${broke ? `<b>These never answered, so this address could still be on one of them:</b> ${esc2(broke)}. Try again, or pick the chain from the menu to read it directly.` : "An address with no code is a wallet, not a token \u2014 or the token has not been deployed yet."}</p>
+    <p class="qblurb">${asked ? `Asked and answered nothing: ${esc2(asked)}.` : ""} ${broke ? `<b>These did not answer, so this address could still be on one of them:</b> ${esc2(broke)}. Pick that chain from the menu and BOUNCER will read it directly, with no clock on it.` : "An address with no code is a wallet, not a token \u2014 or the token has not been deployed yet."}</p>
     <p class="buy-gap"><span class="mono">${esc2(address)}</span></p>
   </section>`;
   }

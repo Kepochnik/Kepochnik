@@ -109,3 +109,45 @@ test("a contract that is not a readable token still counts as found", async () =
   assert.equal(readChainSearch(search).kind, "one");
   assert.equal(search.hits[0].token, null, "found, and honest that it does not name itself");
 });
+
+test("a slow chain is left behind, not waited for", async () => {
+  // Measured live: one endpoint took 5080 ms and dragged a first paint to
+  // 5.7 s on a page whose budget is two. The search costs the slowest chain
+  // asked, so the slowest chain needs a bound — and being too slow is
+  // reported the same way as being down, because for a reader waiting on an
+  // answer those are the same thing.
+  const slowOne = (chain: ChainConfig) =>
+    new RpcClient({
+      urls: [`demo://${chain.key}`],
+      expectedChainId: chain.chainId,
+      minSpacingMs: 0,
+      fetchImpl: (async (_url: string | URL | Request, init?: RequestInit) => {
+        if (chain.key === "arc") await new Promise((resolve) => setTimeout(resolve, 5_000));
+        const body = JSON.parse(String(init?.body)) as { id: number; method: string }[];
+        return new Response(
+          JSON.stringify(
+            body.map((r) =>
+              r.method === "eth_chainId"
+                ? { jsonrpc: "2.0", id: r.id, result: `0x${chain.chainId.toString(16)}` }
+                : r.method === "eth_getCode"
+                  ? { jsonrpc: "2.0", id: r.id, result: chain.key === "base" ? `0x${"ab".repeat(60)}` : "0x" }
+                  : { jsonrpc: "2.0", id: r.id, error: { code: -32000, message: "execution reverted" } },
+            ),
+          ),
+        );
+      }) as typeof fetch,
+    });
+
+  const started = Date.now();
+  const search = await whichChains(TOKEN, slowOne, EVM, 200);
+  const spent = Date.now() - started;
+
+  assert.ok(spent < 1_500, `one slow chain held the search for ${spent} ms`);
+  assert.equal(readChainSearch(search).kind, "one", "the chains that did answer still settle it");
+  assert.equal(search.hits[0].chain.key, "base");
+  // And the one that was dropped is named, never silently counted as empty.
+  const arc = search.unreachable.find((u) => u.chain.key === "arc");
+  assert.ok(arc, "the chain that was left behind has to be reported");
+  assert.match(arc.reason, /did not answer within/);
+  assert.ok(!search.empty.some((c) => c.key === "arc"), "too slow is not the same as nothing there");
+});
