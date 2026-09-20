@@ -137,8 +137,25 @@ if (live) {
     if (menu !== "auto") throw new Error(`the menu should start on auto and it is on "${menu}"`);
     // USDC on Base. A reader pasting this has no reason to know that.
     await page.fill("#q", "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913");
+    // Forget what is already drawn before pressing anything.
+    //
+    // The page renders the demo token as it loads, so `.vword` is on screen
+    // with a verdict in it before this walk pastes a thing — and waiting for
+    // `.vword` matched that instantly and then failed on it. The page keeps
+    // its own render log, so the honest signal is a render that lands AFTER
+    // the click, not an element that happens to exist.
+    await page.evaluate(() => { window.__bouncerRenders = []; });
     await page.click("#go");
-    await page.waitForSelector(".vword, .chain-hit, .error", { timeout: 40_000 });
+    await page.waitForFunction(
+      () => {
+        if (document.querySelector(".chain-hit")) return true;
+        if (document.querySelector("#out .error")) return true;
+        const drawn = window.__bouncerRenders ?? [];
+        return drawn.some((r) => r.word && r.word !== "READING");
+      },
+      null,
+      { timeout: 45_000 },
+    );
     const picked = await page.$$(".chain-hit");
     if (picked.length) {
       // Several chains hold that address. Legitimate, and the page must ask
@@ -149,10 +166,10 @@ if (live) {
       console.log(`      (${picked.length} chains hold that address; the page asked instead of guessing, which is the other correct answer)`);
       return;
     }
-    const word = await page.$eval(".vword", (el) => el.textContent.trim()).catch(() => null);
+    const word = await page.evaluate(() => (window.__bouncerRenders ?? []).map((r) => r.word).filter((w) => w && w !== "READING").pop() ?? null);
     if (!word) {
-      const message = await page.$eval(".error, .found", (el) => el.textContent.trim()).catch(() => "(no message)");
-      throw new Error(`no verdict and no chain choice: ${message.slice(0, 160)}`);
+      const message = await page.$eval("#out", (el) => el.innerText.trim()).catch(() => "(the output box is empty)");
+      throw new Error(`no verdict and no chain choice: ${message.slice(0, 200)}`);
     }
     // And it has to have landed on the right one, not merely on one.
     const where = await page.$eval("#source-pill, .source-pill", (el) => el.textContent.trim()).catch(() => "");
