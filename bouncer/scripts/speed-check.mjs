@@ -79,56 +79,96 @@ if (!executablePath) {
   process.exit(0);
 }
 
+/**
+ * How many times each token is measured, and why more than once.
+ *
+ * Two runs five minutes apart, against the same site and the same token,
+ * with a 250 ms change between them, came back 4.5 s and 9.1 s. Nothing in
+ * the code did that; a public endpoint had a bad minute. A check that fails
+ * on one sample of a noisy quantity is a check that gets ignored within a
+ * week, and every conclusion drawn from one sample of it is a guess wearing
+ * a number.
+ *
+ * So: three runs, judged on the median, with the spread printed. The spread
+ * is the honest part — when it is wide, the median is worth less, and
+ * whoever reads the run should be able to see that rather than take the
+ * middle number on faith.
+ */
+const RUNS = Number(process.env.SPEED_RUNS ?? 3);
+
 const browser = await chromium.launch({ executablePath });
-const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
-await page.goto(site, { waitUntil: "load" });
-await page.waitForTimeout(500);
 
-const started = Date.now();
-await page.evaluate((h) => { location.hash = h; }, `#/t/${token}?chain=${chain}`);
+/** One measurement: paste the address, watch for the three moments. */
+async function measure() {
+  const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+  try {
+    await page.goto(site, { waitUntil: "load" });
+    await page.waitForTimeout(500);
+    const started = Date.now();
+    await page.evaluate((h) => { location.hash = h; }, `#/t/${token}?chain=${chain}`);
+    let firstPaint = null;
+    let firstAnswer = null;
+    let complete = null;
+    const DEADLINE = 120_000;
+    while (Date.now() - started < DEADLINE) {
+      const state = await page.evaluate(() => {
+        const word = document.querySelector(".vword")?.textContent?.trim() ?? "";
+        return {
+          // Anything on screen at all, including the opening render.
+          painted: Boolean(word),
+          // A verdict proper. READING is the page saying it does not have one yet.
+          verdict: Boolean(word) && word !== "READING",
+          pending: !!document.querySelector(".pendingchip"),
+          failed: !!document.querySelector(".error"),
+        };
+      });
+      if (state.failed) return { unreadable: true };
+      if (state.painted && firstPaint === null) firstPaint = Date.now() - started;
+      if (state.verdict && firstAnswer === null) firstAnswer = Date.now() - started;
+      if (state.verdict && !state.pending && firstAnswer !== null) {
+        complete = Date.now() - started;
+        break;
+      }
+      await page.waitForTimeout(100);
+    }
+    return { firstPaint, firstAnswer, complete: complete ?? DEADLINE };
+  } finally {
+    await page.close();
+  }
+}
 
-let firstPaint = null;
-let firstAnswer = null;
-let complete = null;
-const DEADLINE = 120_000;
-while (Date.now() - started < DEADLINE) {
-  const state = await page.evaluate(() => {
-    const word = document.querySelector(".vword")?.textContent?.trim() ?? "";
-    return {
-      // Anything on screen at all, including the opening render.
-      painted: Boolean(word),
-      // A verdict proper. READING is the page saying it does not have one yet.
-      verdict: Boolean(word) && word !== "READING",
-      pending: !!document.querySelector(".pendingchip"),
-      failed: !!document.querySelector(".error"),
-    };
-  });
-  if (state.failed) {
+const samples = [];
+for (let i = 0; i < RUNS; i++) {
+  const one = await measure();
+  if (one.unreadable) {
     console.log(`::warning title=speed on ${chain}::the site could not read this chain from the runner, so nothing was timed`);
     await browser.close();
     process.exit(0);
   }
-  if (state.painted && firstPaint === null) firstPaint = Date.now() - started;
-  if (state.verdict && firstAnswer === null) firstAnswer = Date.now() - started;
-  // Complete means a verdict is up and the "still reading" chip is gone.
-  if (state.verdict && !state.pending && firstAnswer !== null) {
-    complete = Date.now() - started;
-    break;
+  if (one.firstAnswer === null) {
+    console.error(`::error::speed: no verdict appeared within 120 s`);
+    await browser.close();
+    process.exit(1);
   }
-  await page.waitForTimeout(100);
+  samples.push(one);
+  console.log(`  run ${i + 1}: painted ${(one.firstPaint / 1000).toFixed(1)} s · verdict ${(one.firstAnswer / 1000).toFixed(1)} s · complete ${(one.complete / 1000).toFixed(1)} s`);
 }
 await browser.close();
 
-if (firstAnswer === null) {
-  console.error(`::error::speed: no verdict appeared within ${DEADLINE / 1000} s`);
-  process.exit(1);
-}
-const full = complete ?? DEADLINE;
+const median = (xs) => [...xs].sort((a, b) => a - b)[Math.floor(xs.length / 2)];
+const spread = (xs) => `${(Math.min(...xs) / 1000).toFixed(1)}–${(Math.max(...xs) / 1000).toFixed(1)} s`;
+const painted = samples.map((s) => s.firstPaint ?? s.firstAnswer);
+const verdicts = samples.map((s) => s.firstAnswer);
+const completes = samples.map((s) => s.complete);
+const firstPaint = median(painted);
+const firstAnswer = median(verdicts);
+const full = median(completes);
+
 // A notice, not a log line: the numbers are the point of the run and they
 // were getting buried under the artifact upload. An annotation shows in the
 // run summary and comes back from the API without wrestling a log tail.
 console.log(
-  `::notice title=speed on ${chain}::first thing on screen in ${((firstPaint ?? firstAnswer) / 1000).toFixed(1)} s, verdict in ${(firstAnswer / 1000).toFixed(1)} s, complete in ${(full / 1000).toFixed(1)} s`,
+  `::notice title=speed on ${chain}::median of ${RUNS}: first thing on screen ${(firstPaint / 1000).toFixed(1)} s, verdict ${(firstAnswer / 1000).toFixed(1)} s, complete ${(full / 1000).toFixed(1)} s · spread ${spread(completes)}`,
 );
 // The whole point of the two passes. If the first answer is not meaningfully
 // sooner than the complete one, the split is costing a duplicate read and
@@ -144,7 +184,7 @@ for (const [what, got, budget] of [
   ["a complete slip", full, BUDGET.complete],
 ]) {
   if (got > budget) {
-    console.log(`::error title=speed on ${chain}::${what} took ${(got / 1000).toFixed(1)} s, over its budget of ${(budget / 1000).toFixed(1)} s`);
+    console.log(`::error title=speed on ${chain}::${what} took ${(got / 1000).toFixed(1)} s at the median of ${RUNS}, over its budget of ${(budget / 1000).toFixed(1)} s`);
     over = true;
   }
 }
