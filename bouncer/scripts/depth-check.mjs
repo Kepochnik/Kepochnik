@@ -50,13 +50,13 @@ function slow(inner, tally, kind) {
 
 const SLOW_SECTIONS = { skipLiquidity: true, skipDev: true, skipRoom: true, skipCrew: true, skipLookalikes: true };
 
-async function pass(label, extra) {
+async function pass(label, extra, spacingMs = 0) {
   const tally = { requests: 0, timeline: [], started: Date.now() };
   const rpc = new RpcClient({
     urls: ["demo://robinhood-chain"],
     expectedChainId: CHAINS.robinhood.chainId,
     fetchImpl: slow(demoFetch(), tally, "rpc"),
-    minSpacingMs: 0,
+    minSpacingMs: spacingMs,
   });
   const blockscout = new BlockscoutClient({ baseUrl: DEMO_BLOCKSCOUT, fetchImpl: slow(demoBlockscoutFetch(), tally, "explorer") });
   const started = Date.now();
@@ -94,10 +94,14 @@ async function pass(label, extra) {
  * puts an await back in front of a batch is caught here and not by a reader
  * three weeks from now watching a spinner.
  */
-const CEILING = { fast: 22, full: 30 };
+const CEILING = { fast: 10, full: 14 };
 
 const fast = await pass("fast pass (what the reader waits for)", SLOW_SECTIONS);
 const full = await pass("full pass", { skipDev: true });
+// What the client's own rate-limit spacing adds on top of the depth. The
+// site sets 120 ms between requests to keep public endpoints from refusing
+// it; that protection is not free and the bill is worth reading.
+if (process.env.SPACING) await pass(`fast pass, ${process.env.SPACING} ms spacing`, SLOW_SECTIONS, Number(process.env.SPACING));
 
 let failed = false;
 for (const [label, depth, ceiling] of [["fast pass", fast, CEILING.fast], ["full pass", full, CEILING.full]]) {

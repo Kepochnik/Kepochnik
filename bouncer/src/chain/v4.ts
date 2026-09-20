@@ -88,7 +88,16 @@ export async function readV4Pools(rpc: RpcClient, token: string, quote: string, 
   // A singleton holding every pool on the chain is the busiest contract there
   // is, so the same budget applies here as to the mint history: without one,
   // a wide window on Base costs minutes and finishes nothing.
-  const chunking = { minChunk: 1, startChunk: options.chunkSize ?? 5_000, maxChunk: 200_000, maxRequests: options.maxRequests ?? 20, budgetMs: options.budgetMs ?? 15_000 };
+  //
+  // The opening bid is the WHOLE window, not five thousand blocks. This
+  // filter names one token in one indexed position, so the node answers it
+  // from its index and returns a handful of logs however wide the span is —
+  // and a day on Base is forty thousand blocks, which at five thousand a
+  // request was four round trips deep before the doubling caught up. Wide
+  // first, and the adaptive walk below still shrinks for an endpoint that
+  // refuses the span. Measured: six round trips off the fast pass.
+  const window_ = Math.max(1, options.toBlock - options.fromBlock + 1);
+  const chunking = { minChunk: 1, startChunk: options.chunkSize ?? window_, maxChunk: Math.max(200_000, window_), maxRequests: options.maxRequests ?? 20, budgetMs: options.budgetMs ?? 15_000 };
 
   // The token can be either currency, so ask for both sides.
   const [asCurrency0, asCurrency1] = await Promise.all([

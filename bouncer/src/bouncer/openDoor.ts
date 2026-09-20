@@ -301,6 +301,74 @@ export async function readOpenDoor(rpc: RpcClient, token: ContractId, meta: Toke
     return settled.value;
   };
 
+  // ---- the two reads that hang off answers already in hand
+  //
+  // Who deployed this and when is a chain of three: the explorer's record of
+  // the creating transaction, that transaction's receipt for its block, and
+  // that block for its timestamp. The owner's balance is one call. Neither
+  // has anything to do with the market read or the transfer simulations that
+  // follow, and both used to sit in front of them, so a reader waited for
+  // four round trips in series that could have been running the whole time.
+  //
+  // Started, settled, awaited at the bottom. Settled because a promise that
+  // rejects before anything awaits it is an unhandled rejection, and the
+  // page reports that as a crash.
+  const deployerRead = bsEarly
+    ? settle(
+        (async () => {
+          const read = await unwrap(addressInfoP, () => bsEarly.addressInfo(address));
+          if (!read.creator) return { info: read, deployer: null as OpenDoor["deployer"] };
+          // When the deployment happened and how much they still hold are two
+          // separate questions of the chain; only the first is a chain of two.
+          const whenP = (async () => {
+            if (!read.creationTx) return { createdAtBlock: null as number | null, createdAt: null as number | null };
+            try {
+              const receipt = (await rpc.send("eth_getTransactionReceipt", [read.creationTx])) as { blockNumber: string } | null;
+              if (!receipt?.blockNumber) return { createdAtBlock: null, createdAt: null };
+              const createdAtBlock = Number(BigInt(receipt.blockNumber));
+              return { createdAtBlock, createdAt: (await rpc.getBlock(createdAtBlock)).timestamp };
+            } catch {
+              // the creation block is a nicety
+              return { createdAtBlock: null, createdAt: null };
+            }
+          })();
+          const [{ createdAtBlock, createdAt }, balance] = await Promise.all([whenP, readBalance(rpc, address, read.creator, block).catch(() => null)]);
+          return {
+            info: read,
+            deployer: { address: read.creator, creationTx: read.creationTx, createdAtBlock, createdAt, balance: balance ?? 0n, bps: balance === null ? null : bps(balance) },
+          };
+        })(),
+      )
+    : null;
+  const ownerBalanceP =
+    owner && !owner.renounced
+      ? readBalance(rpc, address, owner.address, block)
+          .then((balance) => ({ balance, bps: bps(balance) }))
+          .catch(() => null)
+      : Promise.resolve(null);
+
+  // Which wallets to simulate a sale FROM needs the holder list and who the
+  // deployer is, both already in flight — and nothing from the market read.
+  // It used to wait for the market anyway, which put its balance batch and
+  // the simulations themselves at the very end of the door, two round trips
+  // after everything else had finished. Only the target of the sale needs
+  // the pools, and that is decided below.
+  type Candidate = { address: string; source: TransferProbe["source"] };
+  const candidatesP: Promise<{ value: Candidate[] } | { error: unknown }> = !has(TRANSFER_SIGNATURE)
+    ? Promise.resolve({ value: [] as Candidate[] })
+    : settle(
+        (async () => {
+          const listed = (await holderList) ?? [];
+          // The explorer's record of the creator, not the whole deployer
+          // read: the creation block and the creator's balance are two more
+          // round trips, and who to exclude from the shortlist is decided by
+          // the address alone.
+          const settledInfo = addressInfoP ? await addressInfoP : null;
+          const deployerAddress = settledInfo && !("error" in settledInfo) ? settledInfo.value.creator : null;
+          return probeCandidates(rpc, address, block, listed, deployerAddress, owner?.address ?? null, options.probeHolders ?? 3, options.recentBlocks);
+        })(),
+      );
+
   // ---- where it trades, read before the probes so a sale can be simulated into the pool
   let pools: MarketPool[] | null = null;
   let market: Market | null = null;
@@ -428,29 +496,14 @@ export async function readOpenDoor(rpc: RpcClient, token: ContractId, meta: Toke
   const bs = options.blockscout;
   if (bs) {
     let info: { isScam: boolean; isVerified: boolean; creator: string | null; creationTx: string | null } | null = null;
-    try {
-      const read = await unwrap(addressInfoP, () => bs.addressInfo(address));
-      info = read;
-      verified = read.isVerified;
-      if (read.creator) {
-        let createdAtBlock: number | null = null;
-        let createdAt: number | null = null;
-        if (read.creationTx) {
-          try {
-            const receipt = (await rpc.send("eth_getTransactionReceipt", [read.creationTx])) as { blockNumber: string } | null;
-            if (receipt?.blockNumber) {
-              createdAtBlock = Number(BigInt(receipt.blockNumber));
-              createdAt = (await rpc.getBlock(createdAtBlock)).timestamp;
-            }
-          } catch {
-            // the creation block is a nicety
-          }
-        }
-        const balance = await readBalance(rpc, address, read.creator, block).catch(() => null);
-        deployer = { address: read.creator, creationTx: read.creationTx, createdAtBlock, createdAt, balance: balance ?? 0n, bps: balance === null ? null : bps(balance) };
-      }
-    } catch (error) {
-      note(error);
+    // Started above, long since running. See "the two reads that hang off
+    // answers already in hand".
+    const read = deployerRead ? await deployerRead : null;
+    if (read && "error" in read) note(read.error);
+    else if (read) {
+      info = read.value.info;
+      verified = read.value.info.isVerified;
+      deployer = read.value.deployer;
     }
     try {
       const [listed, tokenInfo] = await Promise.all([
@@ -505,12 +558,7 @@ export async function readOpenDoor(rpc: RpcClient, token: ContractId, meta: Toke
     }
   }
 
-  const ownerBalance =
-    owner && !owner.renounced
-      ? await readBalance(rpc, address, owner.address, block)
-          .then((balance) => ({ balance, bps: bps(balance) }))
-          .catch(() => null)
-      : null;
+  const ownerBalance = await ownerBalanceP;
 
   // ---- can a holder move it, and can they move it into the pool
   const probes: TransferProbe[] = [];
@@ -521,7 +569,8 @@ export async function readOpenDoor(rpc: RpcClient, token: ContractId, meta: Toke
         ? "the code that actually runs could not be read, so no transfer was simulated"
         : "this contract has no transfer(address,uint256) function, so it is not an ERC-20 and no transfer was simulated";
   } else {
-    const candidates = await probeCandidates(rpc, address, block, topHolders, deployer?.address ?? null, owner?.address ?? null, options.probeHolders ?? 3, options.recentBlocks);
+    const settledCandidates = await candidatesP;
+    const candidates = "error" in settledCandidates ? [] : settledCandidates.value;
     if (!candidates.length) {
       probesSkipped = "no wallet with a readable balance to simulate from";
     } else {

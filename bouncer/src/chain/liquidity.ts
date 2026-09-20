@@ -299,7 +299,14 @@ export async function readV3Lock(
       // the endpoint refuse every wide chunk, so the span halves to a single
       // block and a week's window becomes hundreds of thousands of requests —
       // ten minutes of a door, and then nothing to show for it.
-      { minChunk: 1, startChunk: options.chunkSize ?? 2_000, maxChunk: 100_000, maxRequests: options.maxRequests ?? 15, budgetMs: options.budgetMs ?? 20_000 },
+      //
+      // Twenty thousand to open, not two. Unlike the V4 scan next door this
+      // filter is not selective — every mint on the pool matches — so the
+      // whole window in one request is a real risk of a refusal on a busy
+      // pair. But two thousand meant five round trips to walk a day on Base
+      // before the doubling caught up, and that cost is paid by every
+      // memecoin pool, which is quiet, to spare the handful that are not.
+      { minChunk: 1, startChunk: options.chunkSize ?? 20_000, maxChunk: 100_000, maxRequests: options.maxRequests ?? 15, budgetMs: options.budgetMs ?? 20_000 },
     );
     logs = tape.logs;
     windowComplete = tape.complete !== false;

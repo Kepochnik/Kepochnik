@@ -100,6 +100,17 @@ export async function readDoor(rpc: RpcClient, input: string, options: DoorOptio
   const head = await rpc.head();
   const searchBlocks = options.launchSearchBlocks ?? Math.round(7 * 86_400 * chain.blocksPerSecond);
 
+  // Both factory resolvers ask a factory about itself, not about this token,
+  // so they have no reason to wait for the ID check to come back. Started
+  // here, awaited where the open-door check needs them.
+  //
+  // resolveLockers does take the V1 factory the ID check found, when it finds
+  // one — but only to prefer it over the configured address, and that case is
+  // rare enough to be worth a second read rather than a round trip in front
+  // of every check.
+  const v4ManagerP = resolveV4Manager(rpc, chain, options.factory, head.number).catch(() => undefined);
+  const lockersP = resolveLockers(rpc, chain, factory, undefined, head.number).catch(() => chain.lockers);
+
   const id = await readIdCheck(rpc, input, head.number, factory || undefined, {
     factoryV1: chain.factoryV1,
     olderFactoriesV1: chain.olderFactoriesV1,
@@ -146,10 +157,18 @@ export async function readDoor(rpc: RpcClient, input: string, options: DoorOptio
     // it trades); an ordinary token is also stamped as such.
     if (!id.registered) slip.stamp = "NOT A LAUNCH";
     await attempt("open door", async () => {
+      // Both were started before the ID check. Only a token whose own V1
+      // factory differs from the configured one costs a second read.
+      const [lockers, v4PoolManager] = await Promise.all([
+        id.v1?.factory && id.v1.factory !== chain.factoryV1
+          ? resolveLockers(rpc, chain, factory, id.v1.factory, head.number).catch(() => chain.lockers)
+          : lockersP,
+        v4ManagerP,
+      ]);
       slip.open = await readOpenDoor(rpc, id.token, id.meta, head.number, {
         blockscout: options.blockscout ?? null,
         dex: chain.dex,
-        lockers: await resolveLockers(rpc, chain, factory, id.v1?.factory, head.number),
+        lockers,
         liquidity: options.skipLiquidity !== true,
         // A day, not a week. This is read before a trade, and the measured
         // cost of a week on Base was the better part of a minute for a section
@@ -157,7 +176,7 @@ export async function readDoor(rpc: RpcClient, input: string, options: DoorOptio
         // is who holds the liquidity now; --liquidity-blocks widens it for
         // anyone who wants the longer history and will wait for it.
         liquidityFromBlock: head.number - (options.liquidityBlocks ?? Math.min(200_000, Math.round(86_400 * chain.blocksPerSecond))),
-        v4PoolManager: await resolveV4Manager(rpc, chain, options.factory, head.number),
+        v4PoolManager,
       });
     });
     if (!id.registered && launchpadKnown && options.blockscout && !options.skipLookalikes && id.meta?.symbol) {

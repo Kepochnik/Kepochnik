@@ -4216,7 +4216,8 @@
     const lower = token.toLowerCase();
     const quoteLower = quote.toLowerCase();
     const window2 = { address: poolManager, events: [V4_EVENTS.Initialize], fromBlock: options.fromBlock, toBlock: options.toBlock };
-    const chunking = { minChunk: 1, startChunk: options.chunkSize ?? 5e3, maxChunk: 2e5, maxRequests: options.maxRequests ?? 20, budgetMs: options.budgetMs ?? 15e3 };
+    const window_ = Math.max(1, options.toBlock - options.fromBlock + 1);
+    const chunking = { minChunk: 1, startChunk: options.chunkSize ?? window_, maxChunk: Math.max(2e5, window_), maxRequests: options.maxRequests ?? 20, budgetMs: options.budgetMs ?? 15e3 };
     const [asCurrency0, asCurrency1] = await Promise.all([
       readTapeAdaptive(rpc, { ...window2, topics: [addressTopic(lower)] }, chunking),
       readTapeAdaptive(rpc, { ...window2, topics: [null, addressTopic(lower)] }, chunking)
@@ -4707,7 +4708,14 @@
         // the endpoint refuse every wide chunk, so the span halves to a single
         // block and a week's window becomes hundreds of thousands of requests —
         // ten minutes of a door, and then nothing to show for it.
-        { minChunk: 1, startChunk: options.chunkSize ?? 2e3, maxChunk: 1e5, maxRequests: options.maxRequests ?? 15, budgetMs: options.budgetMs ?? 2e4 }
+        //
+        // Twenty thousand to open, not two. Unlike the V4 scan next door this
+        // filter is not selective — every mint on the pool matches — so the
+        // whole window in one request is a real risk of a refusal on a busy
+        // pair. But two thousand meant five round trips to walk a day on Base
+        // before the doubling caught up, and that cost is paid by every
+        // memecoin pool, which is quiet, to spare the handful that are not.
+        { minChunk: 1, startChunk: options.chunkSize ?? 2e4, maxChunk: 1e5, maxRequests: options.maxRequests ?? 15, budgetMs: options.budgetMs ?? 2e4 }
       );
       logs = tape.logs;
       windowComplete = tape.complete !== false;
@@ -4986,6 +4994,37 @@
       if ("error" in settled) throw settled.error;
       return settled.value;
     };
+    const deployerRead = bsEarly ? settle(
+      (async () => {
+        const read = await unwrap(addressInfoP, () => bsEarly.addressInfo(address));
+        if (!read.creator) return { info: read, deployer: null };
+        const whenP = (async () => {
+          if (!read.creationTx) return { createdAtBlock: null, createdAt: null };
+          try {
+            const receipt = await rpc.send("eth_getTransactionReceipt", [read.creationTx]);
+            if (!receipt?.blockNumber) return { createdAtBlock: null, createdAt: null };
+            const createdAtBlock2 = Number(BigInt(receipt.blockNumber));
+            return { createdAtBlock: createdAtBlock2, createdAt: (await rpc.getBlock(createdAtBlock2)).timestamp };
+          } catch {
+            return { createdAtBlock: null, createdAt: null };
+          }
+        })();
+        const [{ createdAtBlock, createdAt }, balance] = await Promise.all([whenP, readBalance(rpc, address, read.creator, block).catch(() => null)]);
+        return {
+          info: read,
+          deployer: { address: read.creator, creationTx: read.creationTx, createdAtBlock, createdAt, balance: balance ?? 0n, bps: balance === null ? null : bps3(balance) }
+        };
+      })()
+    ) : null;
+    const ownerBalanceP = owner && !owner.renounced ? readBalance(rpc, address, owner.address, block).then((balance) => ({ balance, bps: bps3(balance) })).catch(() => null) : Promise.resolve(null);
+    const candidatesP = !has(TRANSFER_SIGNATURE) ? Promise.resolve({ value: [] }) : settle(
+      (async () => {
+        const listed = await holderList ?? [];
+        const settledInfo = addressInfoP ? await addressInfoP : null;
+        const deployerAddress = settledInfo && !("error" in settledInfo) ? settledInfo.value.creator : null;
+        return probeCandidates(rpc, address, block, listed, deployerAddress, owner?.address ?? null, options.probeHolders ?? 3, options.recentBlocks);
+      })()
+    );
     let pools = null;
     let market = null;
     let liquidity = null;
@@ -5071,28 +5110,12 @@
     const bs = options.blockscout;
     if (bs) {
       let info = null;
-      try {
-        const read = await unwrap(addressInfoP, () => bs.addressInfo(address));
-        info = read;
-        verified = read.isVerified;
-        if (read.creator) {
-          let createdAtBlock = null;
-          let createdAt = null;
-          if (read.creationTx) {
-            try {
-              const receipt = await rpc.send("eth_getTransactionReceipt", [read.creationTx]);
-              if (receipt?.blockNumber) {
-                createdAtBlock = Number(BigInt(receipt.blockNumber));
-                createdAt = (await rpc.getBlock(createdAtBlock)).timestamp;
-              }
-            } catch {
-            }
-          }
-          const balance = await readBalance(rpc, address, read.creator, block).catch(() => null);
-          deployer = { address: read.creator, creationTx: read.creationTx, createdAtBlock, createdAt, balance: balance ?? 0n, bps: balance === null ? null : bps3(balance) };
-        }
-      } catch (error) {
-        note(error);
+      const read = deployerRead ? await deployerRead : null;
+      if (read && "error" in read) note(read.error);
+      else if (read) {
+        info = read.value.info;
+        verified = read.value.info.isVerified;
+        deployer = read.value.deployer;
       }
       try {
         const [listed, tokenInfo] = await Promise.all([
@@ -5144,13 +5167,14 @@
         activity = null;
       }
     }
-    const ownerBalance = owner && !owner.renounced ? await readBalance(rpc, address, owner.address, block).then((balance) => ({ balance, bps: bps3(balance) })).catch(() => null) : null;
+    const ownerBalance = await ownerBalanceP;
     const probes = [];
     let probesSkipped = null;
     if (!has(TRANSFER_SIGNATURE)) {
       probesSkipped = surfaceFrom === "implementation-unreadable" ? "the code that actually runs could not be read, so no transfer was simulated" : "this contract has no transfer(address,uint256) function, so it is not an ERC-20 and no transfer was simulated";
     } else {
-      const candidates = await probeCandidates(rpc, address, block, topHolders, deployer?.address ?? null, owner?.address ?? null, options.probeHolders ?? 3, options.recentBlocks);
+      const settledCandidates = await candidatesP;
+      const candidates = "error" in settledCandidates ? [] : settledCandidates.value;
       if (!candidates.length) {
         probesSkipped = "no wallet with a readable balance to simulate from";
       } else {
@@ -5432,6 +5456,8 @@
     const launchpadKnown = Boolean(factory);
     const head = await rpc.head();
     const searchBlocks = options.launchSearchBlocks ?? Math.round(7 * 86400 * chain2.blocksPerSecond);
+    const v4ManagerP = resolveV4Manager(rpc, chain2, options.factory, head.number).catch(() => void 0);
+    const lockersP = resolveLockers(rpc, chain2, factory, void 0, head.number).catch(() => chain2.lockers);
     const id = await readIdCheck(rpc, input, head.number, factory || void 0, {
       factoryV1: chain2.factoryV1,
       olderFactoriesV1: chain2.olderFactoriesV1,
@@ -5473,10 +5499,14 @@
     if (!id.launch && !id.token.code.empty) {
       if (!id.registered) slip.stamp = "NOT A LAUNCH";
       await attempt("open door", async () => {
+        const [lockers, v4PoolManager] = await Promise.all([
+          id.v1?.factory && id.v1.factory !== chain2.factoryV1 ? resolveLockers(rpc, chain2, factory, id.v1.factory, head.number).catch(() => chain2.lockers) : lockersP,
+          v4ManagerP
+        ]);
         slip.open = await readOpenDoor(rpc, id.token, id.meta, head.number, {
           blockscout: options.blockscout ?? null,
           dex: chain2.dex,
-          lockers: await resolveLockers(rpc, chain2, factory, id.v1?.factory, head.number),
+          lockers,
           liquidity: options.skipLiquidity !== true,
           // A day, not a week. This is read before a trade, and the measured
           // cost of a week on Base was the better part of a minute for a section
@@ -5484,7 +5514,7 @@
           // is who holds the liquidity now; --liquidity-blocks widens it for
           // anyone who wants the longer history and will wait for it.
           liquidityFromBlock: head.number - (options.liquidityBlocks ?? Math.min(2e5, Math.round(86400 * chain2.blocksPerSecond))),
-          v4PoolManager: await resolveV4Manager(rpc, chain2, options.factory, head.number)
+          v4PoolManager
         });
       });
       if (!id.registered && launchpadKnown && options.blockscout && !options.skipLookalikes && id.meta?.symbol) {
