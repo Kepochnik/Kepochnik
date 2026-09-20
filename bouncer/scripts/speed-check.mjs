@@ -42,7 +42,15 @@ const [, , site = "https://kepochnik.github.io/bouncer/", chain = "base", token 
  */
 const BUDGET = {
   painted: Number(process.env.BUDGET_PAINTED ?? 2_000),
-  verdict: Number(process.env.BUDGET_VERDICT ?? 3_000),
+  // Four, not three. Three was a number derived from the five, and the
+  // chain will not have it: on Robinhood one /api/v2/addresses read is
+  // about three seconds on its own, and the verdict needs it — that read
+  // carries the explorer's scam flag, which is a STOP. A verdict that does
+  // not wait for it is one that can turn CLEAR into STOP a second later,
+  // which is the thing this whole design refuses to do. So the budget is
+  // set to what the slowest server involved actually allows, and said so
+  // here rather than quietly relaxed.
+  verdict: Number(process.env.BUDGET_VERDICT ?? 4_000),
   complete: Number(process.env.BUDGET_COMPLETE ?? 5_000),
 };
 

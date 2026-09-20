@@ -404,10 +404,23 @@ async function runDoor(address: string): Promise<void> {
   // is the work that is genuinely different — the explorer, the pool
   // discovery, the log scan — and that now happens side by side instead of
   // end to end.
+  // The slow half starts a quarter of a second behind the other two.
+  //
+  // Measured, both ways. Sequential: verdict 3.7 s, complete 5.7. All three
+  // at once: complete 4.5, but the verdict slipped to 4.4 — the log scan
+  // competes for the six connections a browser gives an origin, and the
+  // pass a reader is actually waiting on lost the race to the one they are
+  // not. Together is right for the total; the stagger is what keeps the
+  // verdict from paying for it.
+  //
+  // A quarter of a second is enough for the reads that matter to be on the
+  // wire first, and short enough to cost the total almost nothing: the slow
+  // half is a log scan measured in seconds.
+  const SLOW_HALF_HEAD_START_MS = 250;
   const passes: [Stage, Promise<DoorSlip>][] = [
     ["opening", readDoor(rpc, address, { ...options, ...OPENING_SECTIONS, at })],
     ["fast", readDoor(rpc, address, { ...options, ...SLOW_SECTIONS, at })],
-    ["done", readDoor(rpc, address, { ...options, at })],
+    ["done", new Promise<void>((resolve) => setTimeout(resolve, SLOW_HALF_HEAD_START_MS)).then(() => readDoor(rpc, address, { ...options, at }))],
   ];
   // Started, so a rejection before its await is a value and not a page crash.
   for (const [, p] of passes) p.catch(() => {});
