@@ -93,6 +93,7 @@ export interface DoorOptions {
   skipExplorer?: boolean;
   skipProbes?: boolean;
   skipOwnerWallet?: boolean;
+  holdersDeadlineMs?: number;
   /** How far back to look for the mints that opened the pool's positions. */
   liquidityBlocks?: number;
   /** Wall-clock budget for the mint history, and for the liquidity section as a whole. */
@@ -228,6 +229,7 @@ export async function readDoor(rpc: RpcClient, input: string, options: DoorOptio
         skipExplorer: options.skipExplorer,
         skipProbes: options.skipProbes,
         skipOwnerWallet: options.skipOwnerWallet,
+        holdersDeadlineMs: options.holdersDeadlineMs,
         lockers,
         liquidity: options.skipLiquidity !== true,
         // A day, not a week. This is read before a trade, and the measured

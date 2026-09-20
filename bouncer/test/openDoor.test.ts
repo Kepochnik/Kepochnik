@@ -369,3 +369,42 @@ test("a named contract with no transfer selector is not accused of anything", as
   assert.ok(!slip.notes.some((n) => n.level === "stop"));
   assert.ok(slip.notes.some((n) => n.code === "no-probe"), "the quiet line still carries it");
 });
+
+test("a holder list the explorer will not serve in time is unread, not a wait", async () => {
+  // Measured on USDC: the explorer took 6001 ms on /holders — its client
+  // timeout to the millisecond — and the verdict landed at 6.8 s against a
+  // budget of four. The token with the most holders is the one whose holder
+  // page is slowest to build, so this is the popular case, not the rare one.
+  let asked = 0;
+  // The real client against the demo explorer, with only /holders made slow.
+  const slow = new BlockscoutClient({
+    baseUrl: DEMO_BLOCKSCOUT,
+    fetchImpl: (async (url: string | URL | Request, init?: RequestInit) => {
+      if (String(url).includes("/holders")) {
+        asked++;
+        await new Promise((resolve) => setTimeout(resolve, 3_000));
+      }
+      return demoBlockscoutFetch()(url as never, init as never);
+    }) as typeof fetch,
+  });
+
+  const started = Date.now();
+  const slip = await readDoor(demoRpc(), DEMO_PLAIN.token, {
+    ...opts(),
+    blockscout: slow,
+    holdersDeadlineMs: 150,
+    skipLiquidity: true,
+    skipDev: true,
+    skipRoom: true,
+    skipCrew: true,
+    skipLookalikes: true,
+  });
+  const spent = Date.now() - started;
+
+  assert.ok(asked > 0, "the explorer was asked, so this is about the wait and not about skipping it");
+  assert.ok(spent < 2_000, `the read waited ${spent} ms on a 150 ms deadline`);
+  assert.equal(slip.open?.holders, null, "an unserved holder list is unread, never an empty room");
+  // And the slip has to SAY so rather than quietly reporting nobody.
+  const said = slip.skipped.some((s) => /holder/i.test(s.reason)) || slip.notes.some((n) => /holder/i.test(n.text));
+  assert.ok(said, "the slip has to say the holder list went unread");
+});

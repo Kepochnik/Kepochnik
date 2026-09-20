@@ -5323,6 +5323,12 @@
   var RENOUNCE_SIGNATURES = ["renounceOwnership()", "transferOwnership(address)"];
   var TRANSFER_SIGNATURE = "transfer(address,uint256)";
   var PROBE_RECIPIENT = "0x000000000000000000000000000000000000b0ce";
+  function after(ms, value) {
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => resolve(value), ms);
+      timer.unref?.();
+    });
+  }
   var BURN_ADDRESSES2 = /* @__PURE__ */ new Set([ZERO_ADDRESS, "0x000000000000000000000000000000000000dead", "0x0000000000000000000000000000000000000001"]);
   async function readOpenDoor(rpc, token, meta, block, options = {}) {
     const address = token.address.toLowerCase();
@@ -5364,7 +5370,8 @@
     const bps3 = (v) => supply !== null && supply > 0n ? Number(v * 10000n / supply) : null;
     const settle = (p) => p.then((value) => ({ value }), (error) => ({ error }));
     const bsEarly = options.skipExplorer ? null : options.blockscout;
-    const holderList = bsEarly ? bsEarly.tokenHolders(address, 50).catch(() => null) : Promise.resolve(null);
+    const holdersDeadlineMs = options.holdersDeadlineMs ?? 2500;
+    const holderList = bsEarly ? Promise.race([bsEarly.tokenHolders(address, 50).catch(() => null), after(holdersDeadlineMs, null)]) : Promise.resolve(null);
     const addressInfoP = bsEarly ? settle(bsEarly.addressInfo(address)) : null;
     const tokenInfoP = bsEarly ? bsEarly.tokenInfo(address).catch(() => ({ holders: null, transfers: null, type: null, priceUsd: null, volume24hUsd: null, marketCapUsd: null })) : null;
     const transfersP = bsEarly ? settle(bsEarly.tokenTransfers(address)) : null;
@@ -5913,6 +5920,7 @@
           skipExplorer: options.skipExplorer,
           skipProbes: options.skipProbes,
           skipOwnerWallet: options.skipOwnerWallet,
+          holdersDeadlineMs: options.holdersDeadlineMs,
           lockers,
           liquidity: options.skipLiquidity !== true,
           // A day, not a week. This is read before a trade, and the measured

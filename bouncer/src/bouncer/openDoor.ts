@@ -271,6 +271,20 @@ export interface OpenDoorOptions {
    * not make the second one for free.
    */
   skipOwnerWallet?: boolean;
+  /** Wall-clock deadline for the explorer's holder list; past it the section reads as unread. */
+  holdersDeadlineMs?: number;
+}
+
+/**
+ * A promise that resolves to `value` after `ms`, used to put a clock on a
+ * read. Unref'd where the runtime has it, so a deadline that outlives the
+ * read it bounded does not keep the CLI alive waiting to resolve nothing.
+ */
+function after<T>(ms: number, value: T): Promise<T> {
+  return new Promise<T>((resolve) => {
+    const timer = setTimeout(() => resolve(value), ms) as unknown as { unref?: () => void };
+    timer.unref?.();
+  });
 }
 
 const BURN_ADDRESSES = new Set([ZERO_ADDRESS, "0x000000000000000000000000000000000000dead", "0x0000000000000000000000000000000000000001"]);
@@ -368,7 +382,26 @@ export async function readOpenDoor(rpc: RpcClient, token: ContractId, meta: Toke
   // failure until the await, where the existing catch already handles it.
   const settle = <T>(p: Promise<T>): Promise<{ value: T } | { error: unknown }> => p.then((value) => ({ value }), (error) => ({ error }));
   const bsEarly = options.skipExplorer ? null : options.blockscout;
-  const holderList = bsEarly ? bsEarly.tokenHolders(address, 50).catch(() => null) : Promise.resolve(null);
+  /**
+   * The holder list, with a clock on it.
+   *
+   * It had only the Blockscout client's own six-second timeout, which is
+   * longer than the whole budget for reaching a verdict — so on a token with
+   * a lot of holders the page sat waiting for a call that was going to fail
+   * anyway. Measured on USDC: 6001 ms, timed out to the millisecond, and a
+   * verdict at 6.8 s against a budget of four. A big token is exactly the
+   * one whose holder page an explorer is slowest to build, so this is not
+   * the rare case — it is the popular one.
+   *
+   * Past the deadline it reads as null, which every consumer below already
+   * treats as "the explorer did not return the token's holders" and puts on
+   * the slip as unread. An unread section that says so beats a true one
+   * nobody waited for.
+   */
+  const holdersDeadlineMs = options.holdersDeadlineMs ?? 2_500;
+  const holderList = bsEarly
+    ? Promise.race([bsEarly.tokenHolders(address, 50).catch(() => null), after(holdersDeadlineMs, null)])
+    : Promise.resolve(null);
   const addressInfoP = bsEarly ? settle(bsEarly.addressInfo(address)) : null;
   const tokenInfoP = bsEarly ? bsEarly.tokenInfo(address).catch(() => ({ holders: null, transfers: null, type: null, priceUsd: null, volume24hUsd: null, marketCapUsd: null })) : null;
   const transfersP = bsEarly ? settle(bsEarly.tokenTransfers(address)) : null;
