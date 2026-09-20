@@ -1556,7 +1556,7 @@
     async dispatch(requests, settled) {
       if (!this.memo) return this.fetchAll(requests, settled);
       const keys = requests.map((request) => memoKey(request));
-      const answers = new Array(requests.length);
+      const pending = new Array(requests.length);
       const missing = [];
       for (let i = 0; i < requests.length; i++) {
         const key = keys[i];
@@ -1566,23 +1566,37 @@
           continue;
         }
         this.memoHits++;
-        if (hit.ok) answers[i] = hit.value;
-        else if (settled) answers[i] = hit.error;
-        else throw hit.error;
+        pending[i] = hit;
       }
       if (missing.length) {
-        const fresh = await this.fetchAll(
+        const batch = this.fetchAll(
           missing.map((i) => requests[i]),
           settled
+        ).then(
+          (fresh) => fresh.map((value) => value instanceof RpcError ? { ok: false, error: value } : { ok: true, value }),
+          (error) => {
+            const failure = error instanceof RpcError ? error : new RpcError(error instanceof Error ? error.message : String(error));
+            for (const i of missing) if (keys[i] !== null) this.memo.delete(keys[i]);
+            throw failure;
+          }
         );
         missing.forEach((target, j) => {
-          const value = fresh[j];
-          answers[target] = value;
+          const slot = batch.then((all) => all[j]);
+          pending[target] = slot;
           const key = keys[target];
-          if (key !== null) this.memo.set(key, value instanceof RpcError ? { ok: false, error: value } : { ok: true, value });
+          if (key !== null) {
+            slot.catch(() => {
+            });
+            this.memo.set(key, slot);
+          }
         });
       }
-      return answers;
+      const settledAnswers = await Promise.all(pending);
+      return settledAnswers.map((answer) => {
+        if (answer.ok) return answer.value;
+        if (settled) return answer.error;
+        throw answer.error;
+      });
     }
     async fetchAll(requests, settled) {
       for (const request of requests) {
@@ -6699,44 +6713,45 @@
     const rpc = rpcFor(true);
     if (options.blockscout) options.blockscout.prewarm(BlockscoutClient.doorPaths(address.toLowerCase()));
     let at;
+    const RANK = { opening: 0, fast: 1, done: 2 };
     let drawn = null;
     const draw = (slip, stage) => {
       if (run !== doorRun) return false;
+      if (drawn !== null && RANK[stage] <= RANK[drawn]) return true;
       if (drawn === null) renderSlip(slip, { stage });
       else keepPlace(() => renderSlip(slip, { stage }));
       drawn = stage;
-      status.textContent = `${mode === "demo" ? "DEMO \xB7 " : `${chain().name} \xB7 `}block ${slip.at.block} \xB7 ${STILL_READING[stage]}\u2026`;
+      if (stage === "done") done(`block ${slip.at.block} \xB7 ${isoUtc(slip.at.timestamp)} \xB7 ${slip.notes.length} thing${slip.notes.length === 1 ? "" : "s"} to know`);
+      else status.textContent = `${mode === "demo" ? "DEMO \xB7 " : `${chain().name} \xB7 `}block ${slip.at.block} \xB7 ${STILL_READING[stage]}\u2026`;
       return true;
     };
     try {
       at = await rpc.head();
-      const opening = await readDoor(rpc, address, { ...options, ...OPENING_SECTIONS, at });
-      if (!draw(opening, "opening")) return;
-    } catch {
-    }
-    try {
-      const fast = await readDoor(rpc, address, { ...options, ...SLOW_SECTIONS, at });
-      if (!draw(fast, "fast")) return;
-    } catch {
-    }
-    const quick = drawn !== null;
-    try {
-      const slip = await readDoor(rpc, address, { ...options, at });
-      if (run !== doorRun) return;
-      if (quick) keepPlace(() => renderSlip(slip));
-      else renderSlip(slip);
-      done(`block ${slip.at.block} \xB7 ${isoUtc(slip.at.timestamp)} \xB7 ${slip.notes.length} thing${slip.notes.length === 1 ? "" : "s"} to know`);
     } catch (error) {
-      if (run !== doorRun) return;
-      if (quick) {
-        go.disabled = false;
-        status.textContent = `${chain().name} \xB7 the slower sections did not answer: ${error instanceof Error ? error.message : String(error)}`;
-      } else {
-        failed(error, address);
-      }
-    } finally {
-      go.disabled = false;
+      return failed(error, address);
     }
+    const passes = [
+      ["opening", readDoor(rpc, address, { ...options, ...OPENING_SECTIONS, at })],
+      ["fast", readDoor(rpc, address, { ...options, ...SLOW_SECTIONS, at })],
+      ["done", readDoor(rpc, address, { ...options, at })]
+    ];
+    for (const [, p] of passes) p.catch(() => {
+    });
+    let lastError = null;
+    for (const [stage, pass] of passes) {
+      try {
+        const slip = await pass;
+        if (!draw(slip, stage)) return;
+      } catch (error) {
+        lastError = error;
+      }
+    }
+    if (run !== doorRun) return;
+    if (drawn === null) failed(lastError, address);
+    else if (drawn !== "done") {
+      status.textContent = `${chain().name} \xB7 the slower sections did not answer: ${lastError instanceof Error ? lastError.message : String(lastError)}`;
+    }
+    go.disabled = false;
   }
   async function runDev(address) {
     if (!ADDR.test(address)) return bad("Paste the deployer's address.");

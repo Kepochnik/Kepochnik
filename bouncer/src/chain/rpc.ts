@@ -125,7 +125,7 @@ export class RpcClient {
   logSpanRefused = Infinity;
 
   /** See RpcOptions.memo. Null when off, which is the default. */
-  private readonly memo: Map<string, { ok: true; value: unknown } | { ok: false; error: RpcError }> | null;
+  private readonly memo: Map<string, Promise<{ ok: true; value: unknown } | { ok: false; error: RpcError }>> | null;
   private verifiedChain = false;
   private lastRequestAt = 0;
 
@@ -342,7 +342,7 @@ export class RpcClient {
   private async dispatch(requests: RpcRequest[], settled: boolean): Promise<unknown[]> {
     if (!this.memo) return this.fetchAll(requests, settled);
     const keys = requests.map((request) => memoKey(request));
-    const answers: unknown[] = new Array(requests.length);
+    const pending: Promise<{ ok: true; value: unknown } | { ok: false; error: RpcError }>[] = new Array(requests.length);
     const missing: number[] = [];
     for (let i = 0; i < requests.length; i++) {
       const key = keys[i];
@@ -352,25 +352,45 @@ export class RpcClient {
         continue;
       }
       this.memoHits++;
-      if (hit.ok) answers[i] = hit.value;
-      // A revert at a pinned block is deterministic, so it is remembered too
-      // — and handed back the way this caller asked for it.
-      else if (settled) answers[i] = hit.error;
-      else throw hit.error;
+      pending[i] = hit;
     }
     if (missing.length) {
-      const fresh = await this.fetchAll(
+      // One promise for the whole outstanding batch, and every slot in it
+      // holds its own share. A second caller asking for one of these reads
+      // while it is in flight joins this request instead of making another:
+      // the page runs its passes at the same time now, so two readers of the
+      // same read before either answer arrives is the ordinary case.
+      const batch = this.fetchAll(
         missing.map((i) => requests[i]),
         settled,
+      ).then(
+        (fresh) => fresh.map((value) => (value instanceof RpcError ? ({ ok: false, error: value } as const) : ({ ok: true, value } as const))),
+        (error) => {
+          const failure = error instanceof RpcError ? error : new RpcError(error instanceof Error ? error.message : String(error));
+          // Not remembered: a transport failure says nothing about the read,
+          // only about the moment, and the next caller deserves its own try.
+          for (const i of missing) if (keys[i] !== null) this.memo!.delete(keys[i]!);
+          throw failure;
+        },
       );
       missing.forEach((target, j) => {
-        const value = fresh[j];
-        answers[target] = value;
+        const slot = batch.then((all) => all[j]);
+        pending[target] = slot;
         const key = keys[target];
-        if (key !== null) this.memo!.set(key, value instanceof RpcError ? { ok: false, error: value } : { ok: true, value });
+        if (key !== null) {
+          slot.catch(() => {});
+          this.memo!.set(key, slot);
+        }
       });
     }
-    return answers;
+    const settledAnswers = await Promise.all(pending);
+    return settledAnswers.map((answer) => {
+      if (answer.ok) return answer.value;
+      // A revert at a pinned block is deterministic, so it is remembered too
+      // — and handed back the way this caller asked for it.
+      if (settled) return answer.error;
+      throw answer.error;
+    });
   }
 
   private async fetchAll(requests: RpcRequest[], settled: boolean): Promise<unknown[]> {

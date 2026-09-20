@@ -347,12 +347,11 @@ async function runDoor(address: string): Promise<void> {
   // It carries no verdict word, because a verdict off a quarter of the
   // evidence is one that changes while you read it.
   //
-  // Then the fast one, then the whole thing. Each costs the reads before it
-  // over again, which is cheap and parallel; what it buys is that nobody
-  // watches a blank page while the slowest server makes up its mind.
-  // One client for all three passes, so the second and third get the first
-  // one's answers for free, and one block for all three, so they are three
-  // views of the same moment rather than three different ones.
+  // The fast one and the whole thing run alongside it, not after it — see
+  // the note above the passes below. One client for all three, so a read
+  // one of them starts is a read the others join rather than repeat, and
+  // one block for all three, so they are three views of the same moment
+  // rather than three different ones.
   const rpc = rpcFor(true);
   // The explorer starts now, not when the pass that needs it starts.
   //
@@ -365,53 +364,73 @@ async function runDoor(address: string): Promise<void> {
   // asks next, finished or still in flight.
   if (options.blockscout) options.blockscout.prewarm(BlockscoutClient.doorPaths(address.toLowerCase()));
   let at: BlockHeader | undefined;
+
+  // Renders only ever move forward. The three passes run together now, and
+  // on a chain where the slow half is cheap they can land out of order —
+  // drawing the smaller slip over the bigger one would take answers off the
+  // screen a reader had already been given.
+  const RANK: Record<Stage, number> = { opening: 0, fast: 1, done: 2 };
   let drawn: Stage | null = null;
   const draw = (slip: DoorSlip, stage: Stage) => {
     if (run !== doorRun) return false;
+    if (drawn !== null && RANK[stage] <= RANK[drawn]) return true;
     if (drawn === null) renderSlip(slip, { stage });
     else keepPlace(() => renderSlip(slip, { stage }));
     drawn = stage;
-    status.textContent = `${mode === "demo" ? "DEMO · " : `${chain().name} · `}block ${slip.at.block} · ${STILL_READING[stage]}…`;
+    if (stage === "done") done(`block ${slip.at.block} · ${isoUtc(slip.at.timestamp)} · ${slip.notes.length} thing${slip.notes.length === 1 ? "" : "s"} to know`);
+    else status.textContent = `${mode === "demo" ? "DEMO · " : `${chain().name} · `}block ${slip.at.block} · ${STILL_READING[stage]}…`;
     return true;
   };
 
   try {
     at = await rpc.head();
-    const opening = await readDoor(rpc, address, { ...options, ...OPENING_SECTIONS, at });
-    if (!draw(opening, "opening")) return;
-  } catch {
-    // Nothing to report: the passes below ask the same questions again and
-    // will say what went wrong when they cannot answer them either.
-  }
-
-  try {
-    const fast = await readDoor(rpc, address, { ...options, ...SLOW_SECTIONS, at });
-    if (!draw(fast, "fast")) return;
-  } catch {
-    // The fast pass failing is not itself worth reporting: the full pass is
-    // about to try the same reads and will say what went wrong.
-  }
-  const quick = drawn !== null;
-
-  try {
-    const slip = await readDoor(rpc, address, { ...options, at });
-    if (run !== doorRun) return;
-    if (quick) keepPlace(() => renderSlip(slip));
-    else renderSlip(slip);
-    done(`block ${slip.at.block} · ${isoUtc(slip.at.timestamp)} · ${slip.notes.length} thing${slip.notes.length === 1 ? "" : "s"} to know`);
   } catch (error) {
-    if (run !== doorRun) return;
-    // A fast answer already on screen is not thrown away because the slow
-    // half failed. It says what is missing and stays.
-    if (quick) {
-      go.disabled = false;
-      status.textContent = `${chain().name} · the slower sections did not answer: ${error instanceof Error ? error.message : String(error)}`;
-    } else {
-      failed(error, address);
-    }
-  } finally {
-    go.disabled = false;
+    return failed(error, address);
   }
+
+  // All three at once.
+  //
+  // They used to queue — opening, then fast, then full — and the bill was
+  // plain in the last measurement: on Robinhood Chain the verdict landed at
+  // 3.7 s and the complete slip at 5.7, while the chain answered every
+  // request in under two hundred milliseconds. The opening render took a
+  // second and a half of that, and the fast pass did not start its own
+  // reads until it was done, although it wanted most of the same ones.
+  //
+  // What makes running them together free rather than three times as
+  // expensive is that both clients hand a second caller a read that is
+  // still IN FLIGHT, not just one that has already come back. The passes
+  // ask overlapping questions; each question goes out once. What is left
+  // is the work that is genuinely different — the explorer, the pool
+  // discovery, the log scan — and that now happens side by side instead of
+  // end to end.
+  const passes: [Stage, Promise<DoorSlip>][] = [
+    ["opening", readDoor(rpc, address, { ...options, ...OPENING_SECTIONS, at })],
+    ["fast", readDoor(rpc, address, { ...options, ...SLOW_SECTIONS, at })],
+    ["done", readDoor(rpc, address, { ...options, at })],
+  ];
+  // Started, so a rejection before its await is a value and not a page crash.
+  for (const [, p] of passes) p.catch(() => {});
+
+  let lastError: unknown = null;
+  for (const [stage, pass] of passes) {
+    try {
+      const slip = await pass;
+      if (!draw(slip, stage)) return;
+    } catch (error) {
+      lastError = error;
+      // An earlier pass failing is not worth reporting on its own: the ones
+      // after it ask the same questions and will say what went wrong.
+    }
+  }
+  if (run !== doorRun) return;
+  if (drawn === null) failed(lastError, address);
+  else if (drawn !== "done") {
+    // Something is on screen and the slow half did not arrive. It stays, and
+    // says what is missing.
+    status.textContent = `${chain().name} · the slower sections did not answer: ${lastError instanceof Error ? lastError.message : String(lastError)}`;
+  }
+  go.disabled = false;
 }
 
 async function runDev(address: string): Promise<void> {

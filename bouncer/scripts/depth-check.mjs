@@ -115,7 +115,7 @@ async function pass(label, extra, spacingMs = 0, shared = null) {
  * puts an await back in front of a batch is caught here and not by a reader
  * three weeks from now watching a spinner.
  */
-const CEILING = { opening: 6, fast: 10, full: 14, staged: 18 };
+const CEILING = { opening: 6, fast: 10, full: 14, staged: 9 };
 
 const opening = await pass("opening pass (first thing on screen)", OPENING_SECTIONS);
 const fast = await pass("fast pass (what the reader waits for)", SLOW_SECTIONS);
@@ -142,13 +142,27 @@ if (process.env.SPACING) await pass(`fast pass, ${process.env.SPACING} ms spacin
   const blockscout = new BlockscoutClient({ baseUrl: DEMO_BLOCKSCOUT, fetchImpl: slow(demoBlockscoutFetch(), tally, "explorer"), memo: true });
   const at = await rpc.head();
   const shared = { rpc, tally, at, blockscout };
-  console.log("\nall three, one client, one block — what a reader actually waits through:");
-  const a = await pass("  something on screen", OPENING_SECTIONS, 0, shared);
-  const b = await pass("  a verdict", SLOW_SECTIONS, 0, shared);
-  const c = await pass("  the whole slip", { skipDev: true }, 0, shared);
+  console.log("\nall three at once, one client, one block — what a reader actually waits through:");
+  // Together, because that is what the page does. Running them one after
+  // the other here would measure a version of the code that no longer
+  // exists, which is the failure mode this whole file was built against.
+  const started = Date.now();
+  const marks = {};
+  await Promise.all(
+    [
+      ["something on screen", OPENING_SECTIONS],
+      ["a verdict", SLOW_SECTIONS],
+      ["the whole slip", { skipDev: true }],
+    ].map(async ([label, extra]) => {
+      await pass(`  ${label}`, extra, 0, shared);
+      marks[label] = (Date.now() - started) / DELAY;
+    }),
+  );
   const total = (Date.now() - tally.started) / DELAY;
-  console.log(`  cumulative depth: ${a.toFixed(1)} to the first render, ${(a + b).toFixed(1)} to the verdict, ${total.toFixed(1)} to the end`);
-  console.log(`  ${tally.requests} requests in all · ${rpc.memoHits} chain reads and ${blockscout.memoHits} explorer reads answered from memory instead of asked again`);
+  console.log(
+    `  cumulative depth: ${marks["something on screen"].toFixed(1)} to the first render, ${marks["a verdict"].toFixed(1)} to the verdict, ${marks["the whole slip"].toFixed(1)} to the end`,
+  );
+  console.log(`  ${tally.requests} requests in all · ${rpc.memoHits} chain reads and ${blockscout.memoHits} explorer reads shared instead of asked again`);
   if (total > CEILING.staged) {
     console.error(`depth: the staged read is ${total.toFixed(1)} round trips deep, over its ceiling of ${CEILING.staged}.`);
     process.exit(1);
