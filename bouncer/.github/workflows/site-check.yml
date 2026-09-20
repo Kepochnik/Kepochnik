@@ -65,6 +65,13 @@ jobs:
         # could quietly collapse into one, or the first could start printing
         # a verdict it has not earned, and every unit test would stay green.
         run: node scripts/stage-check.mjs "${{ inputs.url || 'https://kepochnik.github.io/bouncer/' }}"
+      - name: Can somebody actually use it
+        env:
+          PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/.pw
+        # The journeys, not the parts. Every other check here would pass
+        # with a share button that throws and a search box that goes
+        # nowhere, because neither is a number.
+        run: node scripts/flow-check.mjs "${{ inputs.url || 'https://kepochnik.github.io/bouncer/' }}"
       - name: How long until there is an answer on screen
         env:
           PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/.pw
