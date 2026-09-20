@@ -149,7 +149,15 @@ async function measure() {
     }
     // Where the seconds went, from the page's own clock. Only worth printing
     // when a run was slow; on a fast one it is noise.
-    const wire = await page.evaluate(() => (window.__bouncerWire ?? []).map((w) => ({ ...w, url: w.url.replace(/^https?:\/\/[^/]+/, "").split("?")[0] })));
+    const wire = await page.evaluate(() =>
+      (window.__bouncerWire ?? []).map((w) => {
+        // Strip the host for readability, but never to nothing: a request to a
+        // bare origin printed as an empty line, which is the one thing a log
+        // of what-took-so-long must not do.
+        const short = w.url.replace(/^https?:\/\/[^/]+/, "").split("?")[0];
+        return { ...w, url: short || w.url.split("?")[0] };
+      }),
+    );
     return { firstPaint, firstAnswer, complete: complete ?? DEADLINE, wire };
   } finally {
     await page.close();
