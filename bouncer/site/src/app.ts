@@ -792,7 +792,23 @@ function unreadStrip(notes: DoorNote[], skipped: { section: string; reason: stri
  * it out silently made BasedBot look broken on every chain but Robinhood,
  * when the truth was that nobody had a working URL for it there.
  */
-function buyStrip(chainKey: string, address: string): string {
+/**
+ * Where to buy it, when there is an "it".
+ *
+ * `sellable` is the gate, and it was missing. A contract with no readable
+ * name, no transfer function and no market still got two buy links under
+ * it — and the venue they opened showed "this symbol doesn't exist", which
+ * is the same answer the slip already had and had not passed on. Offering
+ * to buy a thing this page could not identify is the one recommendation it
+ * has no business making.
+ */
+function buyStrip(chainKey: string, address: string, sellable = true): string {
+  if (!sellable) {
+    return `<section class="buy">
+      <div class="buy-head"><h2>Buy it</h2></div>
+      <p class="qblurb">No links here. BOUNCER could not establish that this address is a token you can hold or sell, and sending you to a venue to buy it anyway would be the one piece of advice on this page that is not read off the chain.</p>
+    </section>`;
+  }
   const venues = tradeVenues(chainKey, address);
   if (!venues.length) return "";
   const links = venues
@@ -929,7 +945,7 @@ function renderSplSlip(slip: SplSlip, opts: { stage?: Stage } = {}): void {
     ${tiles}
     ${answerCards(slip.notes as DoorNote[])}
     ${unreadStrip(slip.notes as DoorNote[], slip.skipped)}
-    ${buyStrip(slip.chain.key, slip.subject)}
+    ${buyStrip(slip.chain.key, slip.subject, Boolean(slip.mint))}
     <div class="stack">
       ${section("s-id", "Is it real?", "What this address actually is, who can print more of it, and who can freeze what you hold.", idBody, true)}
       ${extBody ? section("s-ext", "Token-2022 extensions", "The rules the token program itself enforces on every transfer.", extBody, true) : ""}
@@ -1199,7 +1215,7 @@ function renderSlip(slip: DoorSlip, opts: { stage?: Stage } = {}): void {
     ${tiles}
     ${answerCards(slip.notes)}
     ${unreadStrip(slip.notes, slip.skipped)}
-    ${buyStrip(mode === "demo" ? "" : slip.chain.key, slip.subject)}
+    ${buyStrip(mode === "demo" ? "" : slip.chain.key, slip.subject, Boolean(slip.id.meta) && slip.open?.transferFunction !== false)}
     <div class="stack">
       ${section("s-id", "Is it real?", "Did the launchpad's factory deploy this token, and can its code change later?", idBody, !o)}
       ${o ? section("s-control", "Who controls it", "Which switches the code has (mint, pause, blacklist, fees), who holds the keys, and whether holders can move tokens right now.", controlBody(slip), true) : ""}

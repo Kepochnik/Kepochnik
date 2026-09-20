@@ -651,6 +651,8 @@
     "no-account": "id",
     "not-a-mint": "id",
     "not-erc20": "id",
+    "not-a-token": "id",
+    "meta-unread": "id",
     "not-registered": "id",
     spl: "id",
     "v1-launch": "id",
@@ -5425,6 +5427,7 @@
       paused,
       tradingOpen,
       probes,
+      transferFunction: has(TRANSFER_SIGNATURE),
       probesSkipped,
       probesPending: options.skipProbes === true,
       verified,
@@ -5930,6 +5933,28 @@
         code: "lookalike-shared-ticker",
         text: `${registeredLookalikes(slip.lookalikes).length} launchpad token${registeredLookalikes(slip.lookalikes).length === 1 ? " carries" : "s carry"} the ticker ${slip.lookalikes.query} as well. Which came first could not be established, so neither is called a copy here; check the address the team posted.`
       });
+    }
+    const ident = slip.open;
+    if (ident && !slip.id.meta && !slip.id.registered && !slip.known) {
+      if (ident.surfaceFrom === "implementation-unreadable") {
+        notes.push({
+          level: "watch",
+          code: "surface-unreadable",
+          text: "This is a proxy and the code it actually runs could not be read, so its name, symbol and supply are unknown and nothing below describes what a call to it would really do."
+        });
+      } else if (!ident.transferFunction) {
+        notes.push({
+          level: "stop",
+          code: "not-a-token",
+          text: "Nothing here identifies a token. Its name, symbol, decimals and total supply did not read, and its code has no transfer(address,uint256) function, so no balance of it can be held or sold. Whatever ticker this address was posted under, it is not that token \u2014 and it is not something you can buy."
+        });
+      } else {
+        notes.push({
+          level: "watch",
+          code: "meta-unread",
+          text: "Its name, symbol, decimals and total supply did not read, so there is no ticker here to check against the one you were given, and every share of supply below is unknown rather than zero."
+        });
+      }
     }
     if (slip.id.claimedFactory) notes.push({ level: "watch", code: "claimed-factory", text: `The token names ${shortAddress(slip.id.claimedFactory)} as its launch factory (launchFactory()), but that factory is not one BOUNCER knows or its record does not confirm this token. A contract can claim any factory; only a known factory's record counts.` });
     if (slip.known) notes.push({ level: "info", code: "known-address", text: `This is ${slip.known}` });
@@ -7003,7 +7028,13 @@
     <ul>${rows}</ul>
   </section>`;
   }
-  function buyStrip(chainKey, address) {
+  function buyStrip(chainKey, address, sellable = true) {
+    if (!sellable) {
+      return `<section class="buy">
+      <div class="buy-head"><h2>Buy it</h2></div>
+      <p class="qblurb">No links here. BOUNCER could not establish that this address is a token you can hold or sell, and sending you to a venue to buy it anyway would be the one piece of advice on this page that is not read off the chain.</p>
+    </section>`;
+    }
     const venues = tradeVenues(chainKey, address);
     if (!venues.length) return "";
     const links = venues.map(
@@ -7102,7 +7133,7 @@
     ${tiles}
     ${answerCards(slip.notes)}
     ${unreadStrip(slip.notes, slip.skipped)}
-    ${buyStrip(slip.chain.key, slip.subject)}
+    ${buyStrip(slip.chain.key, slip.subject, Boolean(slip.mint))}
     <div class="stack">
       ${section("s-id", "Is it real?", "What this address actually is, who can print more of it, and who can freeze what you hold.", idBody, true)}
       ${extBody ? section("s-ext", "Token-2022 extensions", "The rules the token program itself enforces on every transfer.", extBody, true) : ""}
@@ -7315,7 +7346,7 @@
     ${tiles}
     ${answerCards(slip.notes)}
     ${unreadStrip(slip.notes, slip.skipped)}
-    ${buyStrip(mode === "demo" ? "" : slip.chain.key, slip.subject)}
+    ${buyStrip(mode === "demo" ? "" : slip.chain.key, slip.subject, Boolean(slip.id.meta) && slip.open?.transferFunction !== false)}
     <div class="stack">
       ${section("s-id", "Is it real?", "Did the launchpad's factory deploy this token, and can its code change later?", idBody, !o)}
       ${o ? section("s-control", "Who controls it", "Which switches the code has (mint, pause, blacklist, fees), who holds the keys, and whether holders can move tokens right now.", controlBody(slip), true) : ""}

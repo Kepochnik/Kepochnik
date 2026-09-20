@@ -423,6 +423,50 @@ function openDoorNotes(slip: DoorSlip, findings: string[]): DoorNote[] {
       text: `${registeredLookalikes(slip.lookalikes).length} launchpad token${registeredLookalikes(slip.lookalikes).length === 1 ? " carries" : "s carry"} the ticker ${slip.lookalikes.query} as well. Which came first could not be established, so neither is called a copy here; check the address the team posted.`,
     });
   }
+
+  // ---- is this a token at all
+  //
+  // The gap this closes: a contract whose name, symbol, decimals and supply
+  // all failed to read, with no transfer function and no owner, came back
+  // CLEAR — because CLEAR is what you get when no note is loud, and every
+  // sentence saying "this could not be read" was filed as an aside. "We
+  // found nothing" and "there was nothing to look at" are the two things
+  // this project exists to keep apart, and the one place they were still
+  // being confused was the word at the top.
+  //
+  // Nothing here is asked when something better already answered it. A
+  // factory record proves the thing IS a token, and the chain table naming
+  // the address says what it is. The selector scan is a heuristic and it
+  // demonstrably misses — on the demo chain it misses transfer() on a real
+  // V1 launch. A heuristic may fill a silence; it may not contradict
+  // evidence.
+  //
+  // And the STOP needs both reads to agree: the ERC-20 views did not answer
+  // AND the dispatcher carries no transfer. Either alone is too thin to
+  // tell somebody the thing they were sent does not exist.
+  const ident = slip.open;
+  if (ident && !slip.id.meta && !slip.id.registered && !slip.known) {
+    if (ident.surfaceFrom === "implementation-unreadable") {
+      notes.push({
+        level: "watch",
+        code: "surface-unreadable",
+        text: "This is a proxy and the code it actually runs could not be read, so its name, symbol and supply are unknown and nothing below describes what a call to it would really do.",
+      });
+    } else if (!ident.transferFunction) {
+      notes.push({
+        level: "stop",
+        code: "not-a-token",
+        text: "Nothing here identifies a token. Its name, symbol, decimals and total supply did not read, and its code has no transfer(address,uint256) function, so no balance of it can be held or sold. Whatever ticker this address was posted under, it is not that token — and it is not something you can buy.",
+      });
+    } else {
+      notes.push({
+        level: "watch",
+        code: "meta-unread",
+        text: "Its name, symbol, decimals and total supply did not read, so there is no ticker here to check against the one you were given, and every share of supply below is unknown rather than zero.",
+      });
+    }
+  }
+
   if (slip.id.claimedFactory) notes.push({ level: "watch", code: "claimed-factory", text: `The token names ${shortAddress(slip.id.claimedFactory)} as its launch factory (launchFactory()), but that factory is not one BOUNCER knows or its record does not confirm this token. A contract can claim any factory; only a known factory's record counts.` });
   if (slip.known) notes.push({ level: "info", code: "known-address", text: `This is ${slip.known}` });
   else if (slip.open) {

@@ -137,6 +137,14 @@ export interface OpenDoor {
   tradingOpen: { view: string; open: boolean } | null;
   /** Transfer simulations (eth_call, nothing is sent). Empty when the token has no transfer function. */
   probes: TransferProbe[];
+  /**
+   * Whether the code carries transfer(address,uint256) at all.
+   *
+   * The one question that decides whether anything else on this slip is
+   * about a token. A contract without it is not an ERC-20, whatever it is
+   * called and whatever a chart site shows next to it.
+   */
+  transferFunction: boolean;
   /** Why no transfer was simulated, when none was. */
   probesSkipped: string | null;
   /**
@@ -654,6 +662,7 @@ export async function readOpenDoor(rpc: RpcClient, token: ContractId, meta: Toke
     paused,
     tradingOpen,
     probes,
+    transferFunction: has(TRANSFER_SIGNATURE),
     probesSkipped,
     probesPending: options.skipProbes === true,
     verified,

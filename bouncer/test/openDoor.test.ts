@@ -297,3 +297,55 @@ test("an explorer path that failed is not retried into the same wall twice", asy
   await assert.rejects(() => bs.addressInfo(DEMO_PLAIN.token));
   assert.equal(calls, 1, "six seconds of timeout is not worth paying for twice in one read");
 });
+
+test("a contract that reads as nothing is never CLEAR", async () => {
+  // From a live report. Someone was given an address for a ticker, pasted
+  // it, and got a green CLEAR on a slip that also said: no name, no owner,
+  // no switches, no simulation, explorer unreachable, holders unknown. The
+  // tool had read almost nothing and said so in six quiet places, and then
+  // put the one loud word on the page in the colour that means "fine".
+  //
+  // CLEAR is only ever "nothing was found". It must never be reachable when
+  // there was nothing to look at.
+  const nothing = dispatcherCode(["somethingElse()"]);
+  const meta = new Set([selector("name()"), selector("symbol()"), selector("decimals()"), selector("totalSupply()")]);
+  const rpc = demoRpcWith((method, params) => {
+    if (method === "eth_getCode" && String(params[0]).toLowerCase() === DEMO_PLAIN.token) return { result: nothing };
+    if (method === "eth_call" && meta.has(callData(params).slice(0, 10) as `0x${string}`)) return { error: { code: 3, message: "execution reverted" } };
+    return null;
+  });
+  const slip = await readDoor(rpc, DEMO_PLAIN.token, { ...opts(), blockscout: null });
+
+  assert.equal(slip.id.meta, null, "the premise: nothing identifies it");
+  assert.equal(slip.open!.transferFunction, false, "and no balance of it can move");
+  const stop = slip.notes.find((n) => n.code === "not-a-token");
+  assert.ok(stop, "the slip has to say so");
+  assert.equal(stop!.level, "stop");
+  assert.match(stop!.text, /not that token/);
+  assert.ok(
+    slip.notes.some((n) => n.level === "stop"),
+    "and with a stop present the page cannot render CLEAR",
+  );
+});
+
+test("a named contract with no transfer selector is not accused of anything", async () => {
+  // The other half of the same rule, and the reason it is narrow.
+  //
+  // The selector scan is a heuristic reading bytes out of a dispatcher, and
+  // it misses: on the demo chain it misses transfer() on a real Pons V1
+  // launch, a token the factory itself vouches for. So "no transfer
+  // selector" on its own earns no headline — it stays the quiet line it has
+  // always been, under the simulation that did not run. Only when a second,
+  // independent read agrees — the ERC-20 views answering nothing at all —
+  // does the slip tell somebody the thing they were sent is not a token.
+  const code = dispatcherCode(["owner()", "balanceOf(address)", "totalSupply()"]);
+  const rpc = demoRpcWith((method, params) =>
+    method === "eth_getCode" && String(params[0]).toLowerCase() === DEMO_PLAIN.token ? { result: code } : null,
+  );
+  const slip = await readDoor(rpc, DEMO_PLAIN.token, { ...opts(), blockscout: blockscout() });
+  assert.equal(slip.open!.transferFunction, false);
+  assert.ok(slip.id.meta, "but the chain did say what it is called");
+  assert.ok(!slip.notes.some((n) => n.code === "not-a-token"), "a heuristic on its own does not get to say that");
+  assert.ok(!slip.notes.some((n) => n.level === "stop"));
+  assert.ok(slip.notes.some((n) => n.code === "no-probe"), "the quiet line still carries it");
+});

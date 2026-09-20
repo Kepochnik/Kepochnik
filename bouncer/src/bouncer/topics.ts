@@ -60,6 +60,8 @@ const TOPIC_OF: Record<string, Topic> = {
   "no-account": "id",
   "not-a-mint": "id",
   "not-erc20": "id",
+  "not-a-token": "id",
+  "meta-unread": "id",
   "not-registered": "id",
   spl: "id",
   "v1-launch": "id",
