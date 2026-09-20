@@ -13,7 +13,7 @@ import { missingVenues, tradeVenues } from "../../src/bouncer/trade.js";
 import { CHAINS, chainByKey, type ChainConfig } from "../../src/chain/chains.js";
 import { PHASE_LABEL } from "../../src/chain/pons.js";
 import { PonsReader } from "../../src/chain/reader.js";
-import { RpcClient } from "../../src/chain/rpc.js";
+import { RpcClient, type BlockHeader } from "../../src/chain/rpc.js";
 import { SolanaRpc } from "../../src/chain/solana.js";
 import { isSolanaAddress } from "../../src/chain/base58.js";
 import { readSplDoor, type SplSlip } from "../../src/bouncer/spl.js";
@@ -127,13 +127,22 @@ function proxyBase(): string {
   return (proxyInput.value.trim() || DEFAULT_PROXY).replace(/\/$/, "");
 }
 
-function rpcFor(): RpcClient {
-  if (mode === "demo") return demoRpc();
+/**
+ * A client per read, never one shared across reads.
+ *
+ * With `memo` on it remembers every answer pinned to a block number, which
+ * is what lets the page's three renders share one set of reads instead of
+ * asking the chain the same questions three times. That memory must not
+ * outlive the read it belongs to, or the next paste would be answered off
+ * the last one's chain.
+ */
+function rpcFor(memo = false): RpcClient {
+  if (mode === "demo") return demoRpc(memo);
   const c = chain();
   const url = rpcInput.value.trim();
   const proxy = proxyBase();
   const urls = url ? [url] : proxy ? [`${proxy}/rpc/${c.key}`, ...c.rpc] : c.rpc;
-  return new RpcClient({ urls, expectedChainId: c.chainId, minSpacingMs: 120 });
+  return new RpcClient({ urls, expectedChainId: c.chainId, minSpacingMs: 120, memo });
 }
 
 function blockscoutFor(): BlockscoutClient | null {
@@ -333,6 +342,11 @@ async function runDoor(address: string): Promise<void> {
   // Then the fast one, then the whole thing. Each costs the reads before it
   // over again, which is cheap and parallel; what it buys is that nobody
   // watches a blank page while the slowest server makes up its mind.
+  // One client for all three passes, so the second and third get the first
+  // one's answers for free, and one block for all three, so they are three
+  // views of the same moment rather than three different ones.
+  const rpc = rpcFor(true);
+  let at: BlockHeader | undefined;
   let drawn: Stage | null = null;
   const draw = (slip: DoorSlip, stage: Stage) => {
     if (run !== doorRun) return false;
@@ -344,7 +358,8 @@ async function runDoor(address: string): Promise<void> {
   };
 
   try {
-    const opening = await readDoor(rpcFor(), address, { ...options, ...OPENING_SECTIONS });
+    at = await rpc.head();
+    const opening = await readDoor(rpc, address, { ...options, ...OPENING_SECTIONS, at });
     if (!draw(opening, "opening")) return;
   } catch {
     // Nothing to report: the passes below ask the same questions again and
@@ -352,7 +367,7 @@ async function runDoor(address: string): Promise<void> {
   }
 
   try {
-    const fast = await readDoor(rpcFor(), address, { ...options, ...SLOW_SECTIONS });
+    const fast = await readDoor(rpc, address, { ...options, ...SLOW_SECTIONS, at });
     if (!draw(fast, "fast")) return;
   } catch {
     // The fast pass failing is not itself worth reporting: the full pass is
@@ -361,7 +376,7 @@ async function runDoor(address: string): Promise<void> {
   const quick = drawn !== null;
 
   try {
-    const slip = await readDoor(rpcFor(), address, options);
+    const slip = await readDoor(rpc, address, { ...options, at });
     if (run !== doorRun) return;
     if (quick) keepPlace(() => renderSlip(slip));
     else renderSlip(slip);

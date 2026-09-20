@@ -52,17 +52,20 @@ const SLOW_SECTIONS = { skipLiquidity: true, skipDev: true, skipRoom: true, skip
 /** What the page's FIRST render asks for: the chain, and only the chain. */
 const OPENING_SECTIONS = { ...SLOW_SECTIONS, skipMarket: true, skipExplorer: true, skipProbes: true };
 
-async function pass(label, extra, spacingMs = 0) {
-  const tally = { requests: 0, timeline: [], started: Date.now() };
-  const rpc = new RpcClient({
-    urls: ["demo://robinhood-chain"],
-    expectedChainId: CHAINS.robinhood.chainId,
-    fetchImpl: slow(demoFetch(), tally, "rpc"),
-    minSpacingMs: spacingMs,
-  });
+async function pass(label, extra, spacingMs = 0, shared = null) {
+  const tally = shared?.tally ?? { requests: 0, timeline: [], started: Date.now() };
+  const rpc =
+    shared?.rpc ??
+    new RpcClient({
+      urls: ["demo://robinhood-chain"],
+      expectedChainId: CHAINS.robinhood.chainId,
+      fetchImpl: slow(demoFetch(), tally, "rpc"),
+      minSpacingMs: spacingMs,
+    });
   const blockscout = new BlockscoutClient({ baseUrl: DEMO_BLOCKSCOUT, fetchImpl: slow(demoBlockscoutFetch(), tally, "explorer") });
   const started = Date.now();
-  tally.started = started;
+  if (!shared) tally.started = started;
+  const before = tally.requests;
   await readDoor(rpc, DEMO_PLAIN.token, {
     chain: CHAINS.robinhood,
     factory: PONS_V2_FACTORY,
@@ -70,11 +73,12 @@ async function pass(label, extra, spacingMs = 0) {
     chunkSize: 100_000,
     launchSearchBlocks: 400_000,
     ...extra,
+    ...(shared?.at ? { at: shared.at } : {}),
   });
   const ms = Date.now() - started;
   // Depth is what the number is for; the fraction is scheduler noise.
   const depth = ms / DELAY;
-  console.log(`${label.padEnd(34)} ${tally.requests.toString().padStart(4)} requests · depth ${depth.toFixed(1)} · ${ms} ms at ${DELAY} ms/request`);
+  console.log(`${label.padEnd(34)} ${(tally.requests - before).toString().padStart(4)} requests · depth ${depth.toFixed(1)} · ${ms} ms at ${DELAY} ms/request`);
   if (process.env.TIMELINE) {
     // Grouped by the step they started in: everything in one group ran at
     // once, and the number of groups is the depth.
@@ -96,7 +100,7 @@ async function pass(label, extra, spacingMs = 0) {
  * puts an await back in front of a batch is caught here and not by a reader
  * three weeks from now watching a spinner.
  */
-const CEILING = { opening: 6, fast: 10, full: 14 };
+const CEILING = { opening: 6, fast: 10, full: 14, staged: 18 };
 
 const opening = await pass("opening pass (first thing on screen)", OPENING_SECTIONS);
 const fast = await pass("fast pass (what the reader waits for)", SLOW_SECTIONS);
@@ -105,6 +109,35 @@ const full = await pass("full pass", { skipDev: true });
 // site sets 120 ms between requests to keep public endpoints from refusing
 // it; that protection is not free and the bill is worth reading.
 if (process.env.SPACING) await pass(`fast pass, ${process.env.SPACING} ms spacing`, SLOW_SECTIONS, Number(process.env.SPACING));
+
+// What the page actually does: all three passes, one client, one block. The
+// three numbers above are each measured from cold; this is the bill a reader
+// pays for the whole staged read, and the question is whether the two extra
+// renders cost anything worth having.
+{
+  const tally = { requests: 0, timeline: [], started: Date.now() };
+  const rpc = new RpcClient({
+    urls: ["demo://robinhood-chain"],
+    expectedChainId: CHAINS.robinhood.chainId,
+    fetchImpl: slow(demoFetch(), tally, "rpc"),
+    minSpacingMs: 0,
+    memo: true,
+  });
+  const at = await rpc.head();
+  const shared = { rpc, tally, at };
+  console.log("\nall three, one client, one block — what a reader actually waits through:");
+  const a = await pass("  something on screen", OPENING_SECTIONS, 0, shared);
+  const b = await pass("  a verdict", SLOW_SECTIONS, 0, shared);
+  const c = await pass("  the whole slip", { skipDev: true }, 0, shared);
+  const total = (Date.now() - tally.started) / DELAY;
+  console.log(`  cumulative depth: ${a.toFixed(1)} to the first render, ${(a + b).toFixed(1)} to the verdict, ${total.toFixed(1)} to the end`);
+  console.log(`  ${tally.requests} requests in all · ${rpc.memoHits} reads answered from memory instead of asked again`);
+  if (total > CEILING.staged) {
+    console.error(`depth: the staged read is ${total.toFixed(1)} round trips deep, over its ceiling of ${CEILING.staged}.`);
+    process.exit(1);
+  }
+  console.log(`depth: the staged read is under its ceiling of ${CEILING.staged}`);
+}
 
 let failed = false;
 for (const [label, depth, ceiling] of [["opening pass", opening, CEILING.opening], ["fast pass", fast, CEILING.fast], ["full pass", full, CEILING.full]]) {

@@ -75,3 +75,61 @@ test("a walk that reads nothing is an error; one that reads something keeps it",
   assert.equal(tape.complete, false, "a walk cut short must say so");
   assert.ok(tape.toBlock < 199, "and must report how far it actually got");
 });
+
+test("the memo remembers a pinned read and never remembers a moving one", async () => {
+  // The page reads one token three times so a reader sees something true
+  // early. Pinned to one block those passes ask the same questions, and
+  // asking again is pure waste — but "latest" is the one thing a cache can
+  // never be right about, so it has to go out every time.
+  const sent: { method: string; params: unknown[] }[] = [];
+  const rpc = new RpcClient({
+    urls: ["https://node.invalid"],
+    expectedChainId: 1,
+    memo: true,
+    fetchImpl: (async (_url: string | URL | Request, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body)) as { id: number; method: string; params: unknown[] } | { id: number; method: string; params: unknown[] }[];
+      const items = Array.isArray(body) ? body : [body];
+      for (const item of items) sent.push({ method: item.method, params: item.params });
+      const answer = (m: string) => (m === "eth_chainId" ? "0x1" : m === "eth_getBlockByNumber" ? { number: "0x10", timestamp: "0x20", hash: "0xabc" } : "0x2a");
+      const out = items.map((item) => ({ jsonrpc: "2.0", id: item.id, result: answer(item.method) }));
+      return new Response(JSON.stringify(Array.isArray(body) ? out : out[0]), { headers: { "content-type": "application/json" } });
+    }) as unknown as typeof fetch,
+  });
+
+  await rpc.getCode("0xabc", 16);
+  await rpc.getCode("0xabc", 16);
+  await rpc.getCode("0xabc", 17);
+  assert.equal(sent.filter((s) => s.method === "eth_getCode").length, 2, "the same code at the same block is asked for once");
+
+  sent.length = 0;
+  await rpc.getBlock("latest");
+  await rpc.getBlock("latest");
+  assert.equal(sent.filter((s) => s.method === "eth_getBlockByNumber").length, 2, "'latest' must never come out of a cache");
+
+  // A batch where some slots are known sends only the rest, and the answers
+  // still line up with the calls that asked for them.
+  sent.length = 0;
+  const [a, b] = await rpc.callBatch([{ to: "0x1", data: "0xaa" }, { to: "0x2", data: "0xbb" }], 16);
+  const before = sent.length;
+  const [c, d] = await rpc.callBatch([{ to: "0x1", data: "0xaa" }, { to: "0x3", data: "0xcc" }], 16);
+  assert.equal(a, c, "the repeated call gives the same answer");
+  assert.equal(b, d, "and the new one is still answered");
+  assert.equal(sent.length - before, 1, "only the call nobody had asked before goes out");
+  assert.ok(rpc.memoHits >= 2, `the memo should report its hits; got ${rpc.memoHits}`);
+});
+
+test("a client without the memo asks every time, which is the default", async () => {
+  let sent = 0;
+  const rpc = new RpcClient({
+    urls: ["https://node.invalid"],
+    expectedChainId: 1,
+    fetchImpl: (async (_url: string | URL | Request, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body)) as { id: number };
+      sent++;
+      return new Response(JSON.stringify({ jsonrpc: "2.0", id: body.id, result: "0x2a" }), { headers: { "content-type": "application/json" } });
+    }) as unknown as typeof fetch,
+  });
+  await rpc.getCode("0xabc", 16);
+  await rpc.getCode("0xabc", 16);
+  assert.equal(sent, 2, "memory that outlives one read would answer the next paste off the last one's chain");
+});

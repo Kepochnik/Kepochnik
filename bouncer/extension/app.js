@@ -1263,6 +1263,8 @@
      */
     counters = /* @__PURE__ */ new Map();
     nextId = 1;
+    /** See RpcOptions.memo. Null when off, which is the default. */
+    memo;
     verifiedChain = false;
     lastRequestAt = 0;
     constructor(options) {
@@ -1273,7 +1275,10 @@
       this.fetchImpl = options.fetchImpl ?? ((input, init) => fetch(input, init));
       this.minSpacingMs = options.minSpacingMs ?? (options.fetchImpl ? 0 : 120);
       this.rateLimitRetries = options.rateLimitRetries ?? 3;
+      this.memo = options.memo ? /* @__PURE__ */ new Map() : null;
     }
+    /** How many reads the memo answered without asking anybody. */
+    memoHits = 0;
     get activeUrl() {
       return this.urls[this.activeIndex];
     }
@@ -1399,7 +1404,43 @@
         this.counters.set(method, entry);
       }
     }
+    /**
+     * The memo sits in front of the wire, not behind it: a batch of ten where
+     * seven are already known sends three, and a batch where all ten are known
+     * sends nothing at all and costs no round trip.
+     */
     async dispatch(requests, settled) {
+      if (!this.memo) return this.fetchAll(requests, settled);
+      const keys = requests.map((request) => memoKey(request));
+      const answers = new Array(requests.length);
+      const missing = [];
+      for (let i = 0; i < requests.length; i++) {
+        const key = keys[i];
+        const hit = key === null ? void 0 : this.memo.get(key);
+        if (!hit) {
+          missing.push(i);
+          continue;
+        }
+        this.memoHits++;
+        if (hit.ok) answers[i] = hit.value;
+        else if (settled) answers[i] = hit.error;
+        else throw hit.error;
+      }
+      if (missing.length) {
+        const fresh = await this.fetchAll(
+          missing.map((i) => requests[i]),
+          settled
+        );
+        missing.forEach((target, j) => {
+          const value = fresh[j];
+          answers[target] = value;
+          const key = keys[target];
+          if (key !== null) this.memo.set(key, value instanceof RpcError ? { ok: false, error: value } : { ok: true, value });
+        });
+      }
+      return answers;
+    }
+    async fetchAll(requests, settled) {
       for (const request of requests) {
         if (!READ_ONLY_METHODS.has(request.method)) {
           throw new RpcError(`refusing non-read method ${request.method}`);
@@ -1469,6 +1510,12 @@
       this.lastRequestAt = Date.now();
     }
   };
+  var MOVING_TAGS = ['"latest"', '"pending"', '"safe"', '"finalized"', '"earliest"'];
+  function memoKey(request) {
+    const params = JSON.stringify(request.params);
+    for (const tag of MOVING_TAGS) if (params.includes(tag)) return null;
+    return `${request.method}|${params}`;
+  }
   function toHeader(raw, tag) {
     const block = raw;
     if (!block) throw new RpcError(`block ${tag} not found`);
@@ -3703,8 +3750,8 @@
     /** A dispatcher: PUSH4 <selector> EQ PUSH2 <dest> JUMPI for each function the plain token has. */
     plain: `0x6080604052${DEMO_PLAIN.powers.map((sig) => `63${selector(sig).slice(2)}1461${"0000"}57`).join("")}${"5b".repeat(60)}00${CBOR_TRAILER}`
   };
-  function demoRpc() {
-    return new RpcClient({ urls: ["demo://robinhood-chain"], expectedChainId: ROBINHOOD_CHAIN_ID, fetchImpl: demoFetch(), minSpacingMs: 0 });
+  function demoRpc(memo = false) {
+    return new RpcClient({ urls: ["demo://robinhood-chain"], expectedChainId: ROBINHOOD_CHAIN_ID, fetchImpl: demoFetch(), minSpacingMs: 0, memo });
   }
 
   // src/bouncer/door.ts
@@ -5461,7 +5508,7 @@
     const chain2 = options.chain ?? DEFAULT_CHAIN;
     const factory = (options.factory ?? chain2.factory ?? "").toLowerCase();
     const launchpadKnown = Boolean(factory);
-    const head = await rpc.head();
+    const head = options.at ?? await rpc.head();
     const searchBlocks = options.launchSearchBlocks ?? Math.round(7 * 86400 * chain2.blocksPerSecond);
     const v4ManagerP = resolveV4Manager(rpc, chain2, options.factory, head.number).catch(() => void 0);
     const lockersP = resolveLockers(rpc, chain2, factory, void 0, head.number).catch(() => chain2.lockers);
@@ -6362,13 +6409,13 @@
   function proxyBase() {
     return (proxyInput.value.trim() || DEFAULT_PROXY).replace(/\/$/, "");
   }
-  function rpcFor() {
-    if (mode === "demo") return demoRpc();
+  function rpcFor(memo = false) {
+    if (mode === "demo") return demoRpc(memo);
     const c = chain();
     const url = rpcInput.value.trim();
     const proxy = proxyBase();
     const urls = url ? [url] : proxy ? [`${proxy}/rpc/${c.key}`, ...c.rpc] : c.rpc;
-    return new RpcClient({ urls, expectedChainId: c.chainId, minSpacingMs: 120 });
+    return new RpcClient({ urls, expectedChainId: c.chainId, minSpacingMs: 120, memo });
   }
   function blockscoutFor() {
     if (mode === "demo") return new BlockscoutClient({ baseUrl: DEMO_BLOCKSCOUT, fetchImpl: demoBlockscoutFetch() });
@@ -6480,6 +6527,8 @@
     const run = ++doorRun;
     busy("reading the chain at the door\u2026");
     const options = mode === "demo" ? { chain: CHAINS.robinhood, factory: factoryFor(), blockscout: blockscoutFor(), devHours: 8, chunkSize: 1e5, launchSearchBlocks: 4e5 } : { chain: chain(), factory: factoryFor(), blockscout: blockscoutFor(), devHours: 24 };
+    const rpc = rpcFor(true);
+    let at;
     let drawn = null;
     const draw = (slip, stage) => {
       if (run !== doorRun) return false;
@@ -6490,18 +6539,19 @@
       return true;
     };
     try {
-      const opening = await readDoor(rpcFor(), address, { ...options, ...OPENING_SECTIONS });
+      at = await rpc.head();
+      const opening = await readDoor(rpc, address, { ...options, ...OPENING_SECTIONS, at });
       if (!draw(opening, "opening")) return;
     } catch {
     }
     try {
-      const fast = await readDoor(rpcFor(), address, { ...options, ...SLOW_SECTIONS });
+      const fast = await readDoor(rpc, address, { ...options, ...SLOW_SECTIONS, at });
       if (!draw(fast, "fast")) return;
     } catch {
     }
     const quick = drawn !== null;
     try {
-      const slip = await readDoor(rpcFor(), address, options);
+      const slip = await readDoor(rpc, address, { ...options, at });
       if (run !== doorRun) return;
       if (quick) keepPlace(() => renderSlip(slip));
       else renderSlip(slip);

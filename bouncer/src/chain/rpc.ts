@@ -14,6 +14,23 @@ export interface RpcOptions {
   minSpacingMs?: number;
   /** Retries on 429 / -32005 style rate limits, with backoff. */
   rateLimitRetries?: number;
+  /**
+   * Remember answers to reads pinned to a block, for the life of this client.
+   *
+   * The page reads the same token three times — the chain only, then with
+   * the market and the explorer, then everything — so a reader sees
+   * something true before the slowest server has answered. Pinned to one
+   * block, the second and third passes ask most of the same questions and
+   * must get the same answers, so asking again is pure waste: 54 requests
+   * where 26 would do.
+   *
+   * Only reads with an explicit block number are remembered. Anything
+   * against "latest", "pending", "safe" or "finalized" is asked every time,
+   * because the whole point of those tags is that the answer moves. Give
+   * each read its own client; a client that outlives one read would start
+   * serving yesterday's chain.
+   */
+  memo?: boolean;
 }
 
 export interface RpcRequest {
@@ -92,6 +109,8 @@ export class RpcClient {
    */
   private readonly counters = new Map<string, { calls: number; ms: number; failures: number }>();
   private nextId = 1;
+  /** See RpcOptions.memo. Null when off, which is the default. */
+  private readonly memo: Map<string, { ok: true; value: unknown } | { ok: false; error: RpcError }> | null;
   private verifiedChain = false;
   private lastRequestAt = 0;
 
@@ -103,7 +122,11 @@ export class RpcClient {
     this.fetchImpl = options.fetchImpl ?? ((input: RequestInfo | URL, init?: RequestInit) => fetch(input, init));
     this.minSpacingMs = options.minSpacingMs ?? (options.fetchImpl ? 0 : 120);
     this.rateLimitRetries = options.rateLimitRetries ?? 3;
+    this.memo = options.memo ? new Map() : null;
   }
+
+  /** How many reads the memo answered without asking anybody. */
+  memoHits = 0;
 
   get activeUrl(): string {
     return this.urls[this.activeIndex];
@@ -250,7 +273,46 @@ export class RpcClient {
     }
   }
 
+  /**
+   * The memo sits in front of the wire, not behind it: a batch of ten where
+   * seven are already known sends three, and a batch where all ten are known
+   * sends nothing at all and costs no round trip.
+   */
   private async dispatch(requests: RpcRequest[], settled: boolean): Promise<unknown[]> {
+    if (!this.memo) return this.fetchAll(requests, settled);
+    const keys = requests.map((request) => memoKey(request));
+    const answers: unknown[] = new Array(requests.length);
+    const missing: number[] = [];
+    for (let i = 0; i < requests.length; i++) {
+      const key = keys[i];
+      const hit = key === null ? undefined : this.memo.get(key);
+      if (!hit) {
+        missing.push(i);
+        continue;
+      }
+      this.memoHits++;
+      if (hit.ok) answers[i] = hit.value;
+      // A revert at a pinned block is deterministic, so it is remembered too
+      // — and handed back the way this caller asked for it.
+      else if (settled) answers[i] = hit.error;
+      else throw hit.error;
+    }
+    if (missing.length) {
+      const fresh = await this.fetchAll(
+        missing.map((i) => requests[i]),
+        settled,
+      );
+      missing.forEach((target, j) => {
+        const value = fresh[j];
+        answers[target] = value;
+        const key = keys[target];
+        if (key !== null) this.memo!.set(key, value instanceof RpcError ? { ok: false, error: value } : { ok: true, value });
+      });
+    }
+    return answers;
+  }
+
+  private async fetchAll(requests: RpcRequest[], settled: boolean): Promise<unknown[]> {
     for (const request of requests) {
       if (!READ_ONLY_METHODS.has(request.method)) {
         throw new RpcError(`refusing non-read method ${request.method}`);
@@ -332,6 +394,20 @@ export class RpcClient {
     if (wait > 0) await new Promise((resolve) => setTimeout(resolve, wait));
     this.lastRequestAt = Date.now();
   }
+}
+
+/**
+ * The key a read is remembered under, or null for a read that must not be.
+ *
+ * A block tag that moves makes the answer move with it, and there is no
+ * version of this cache that can be right about "latest".
+ */
+const MOVING_TAGS = ['"latest"', '"pending"', '"safe"', '"finalized"', '"earliest"'];
+
+function memoKey(request: RpcRequest): string | null {
+  const params = JSON.stringify(request.params);
+  for (const tag of MOVING_TAGS) if (params.includes(tag)) return null;
+  return `${request.method}|${params}`;
 }
 
 function toHeader(raw: unknown, tag: string): BlockHeader {

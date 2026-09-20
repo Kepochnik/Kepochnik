@@ -13,7 +13,7 @@ import type { BlockscoutClient } from "../chain/blockscout.js";
 import { DEFAULT_CHAIN, type ChainConfig } from "../chain/chains.js";
 import { decodeOutputs, encodeCall } from "../chain/abi.js";
 import { FACTORY_EVENTS, FACTORY_FUNCTIONS, GraduationPhase, PHASE_LABEL, V1_FACTORY_FUNCTIONS, ZERO_ADDRESS, type LaunchedToken } from "../chain/pons.js";
-import type { RpcClient } from "../chain/rpc.js";
+import type { BlockHeader, RpcClient } from "../chain/rpc.js";
 import { addressTopic, findBlockByTimestamp, readTapeAdaptive } from "../chain/tape.js";
 import { formatBps, formatDuration, formatUnits, isoUtc, shortAddress } from "../format.js";
 import type { Receipt } from "../receipt.js";
@@ -96,6 +96,16 @@ export interface DoorOptions {
   liquidityBlocks?: number;
   /** Token amount the exit door prices; default 1% of supply. */
   position?: bigint;
+  /**
+   * Read at this block instead of the head.
+   *
+   * The page reads the same token three times, and without this each pass
+   * picks its own head — so the slip on screen can jump a block mid-read,
+   * and no answer from the first pass can be reused by the second. Pinned,
+   * the three renders are three views of one moment, and the client's memo
+   * can hand back what it already knows instead of asking again.
+   */
+  at?: BlockHeader;
 }
 
 export async function readDoor(rpc: RpcClient, input: string, options: DoorOptions = {}): Promise<DoorSlip> {
@@ -106,8 +116,10 @@ export async function readDoor(rpc: RpcClient, input: string, options: DoorOptio
   // sections do, so the slip says the launch question could not be asked
   // rather than refusing to answer any question.
   const launchpadKnown = Boolean(factory);
-  // Chain identity and the head block, one round trip. See rpc.head().
-  const head = await rpc.head();
+  // Chain identity and the head block, one round trip. See rpc.head(). A
+  // caller that already has a head reuses it, which is what keeps the page's
+  // three renders on one block.
+  const head = options.at ?? (await rpc.head());
   const searchBlocks = options.launchSearchBlocks ?? Math.round(7 * 86_400 * chain.blocksPerSecond);
 
   // Both factory resolvers ask a factory about itself, not about this token,
