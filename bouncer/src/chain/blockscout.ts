@@ -97,6 +97,15 @@ export class BlockscoutClient {
    */
   private readonly counters = new Map<string, { calls: number; ms: number; failures: number }>();
 
+  /**
+   * How old the stalest answer this client was given is, in seconds.
+   *
+   * Zero for a direct read, and for a proxied one that missed the cache.
+   * The slip reports it when it is not zero rather than presenting a cached
+   * reading as a live one.
+   */
+  oldestSeconds = 0;
+
   stats(): { path: string; calls: number; ms: number; failures: number }[] {
     return [...this.counters.entries()].map(([path, v]) => ({ path, ...v })).sort((a, b) => b.ms - a.ms);
   }
@@ -125,6 +134,12 @@ export class BlockscoutClient {
       if (!response.ok) throw new Error(`blockscout ${response.status} for ${path}`);
       const body = (await response.json()) as T;
       this.record(path, Date.now() - startedAt, false);
+      // The proxy caches these for a few seconds, because one of them cost
+      // three and a half against a chain that answered in under two hundred
+      // milliseconds. A reading that is seconds old is fine for what these
+      // numbers are for — and saying nothing about it would not be.
+      const age = Number(response.headers?.get?.("x-bouncer-age") ?? 0);
+      if (Number.isFinite(age) && age > this.oldestSeconds) this.oldestSeconds = age;
       return body;
     } catch (error) {
       // Recorded after the body, not before the request: a call that failed

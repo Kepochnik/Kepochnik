@@ -407,6 +407,14 @@
      * on has to be countable.
      */
     counters = /* @__PURE__ */ new Map();
+    /**
+     * How old the stalest answer this client was given is, in seconds.
+     *
+     * Zero for a direct read, and for a proxied one that missed the cache.
+     * The slip reports it when it is not zero rather than presenting a cached
+     * reading as a live one.
+     */
+    oldestSeconds = 0;
     stats() {
       return [...this.counters.entries()].map(([path, v]) => ({ path, ...v })).sort((a, b) => b.ms - a.ms);
     }
@@ -429,6 +437,8 @@
         if (!response.ok) throw new Error(`blockscout ${response.status} for ${path}`);
         const body = await response.json();
         this.record(path, Date.now() - startedAt, false);
+        const age = Number(response.headers?.get?.("x-bouncer-age") ?? 0);
+        if (Number.isFinite(age) && age > this.oldestSeconds) this.oldestSeconds = age;
         return body;
       } catch (error) {
         this.record(path, Date.now() - startedAt, true);
@@ -644,6 +654,9 @@
     // ---- what could not be read
     "explorer-scam": "unread",
     "explorer-unread": "unread",
+    // A cached reading is not a missing one, but it belongs in the same strip:
+    // this is where the page says how sure it is of what it just told you.
+    "explorer-age": "unread",
     "liquidity-unread": "unread",
     "no-metadata": "unread",
     "no-probe": "unread",
@@ -5201,7 +5214,8 @@
           priceUsd: tokenInfo.priceUsd,
           volume24hUsd: tokenInfo.volume24hUsd,
           marketCapUsd: tokenInfo.marketCapUsd,
-          tokenType: tokenInfo.type
+          tokenType: tokenInfo.type,
+          ageSeconds: bs.oldestSeconds
         };
         const top = list.map((h) => ({
           address: h.address,
@@ -5230,7 +5244,7 @@
         note(error);
         holders = null;
       }
-      if (explorer === null && info) explorer = { isScam: info.isScam, priceUsd: null, volume24hUsd: null, marketCapUsd: null, tokenType: null };
+      if (explorer === null && info) explorer = { isScam: info.isScam, priceUsd: null, volume24hUsd: null, marketCapUsd: null, tokenType: null, ageSeconds: bs.oldestSeconds };
       try {
         activity = summariseActivity(await unwrap(transfersP, () => bs.tokenTransfers(address)));
       } catch (error) {
@@ -5857,6 +5871,13 @@
       notes.push({ level: "info", code: "not-erc20", text: `The explorer indexes this as ${o.explorer.tokenType}, not ERC-20. The questions below are asked of fungible tokens; read them with that in mind.` });
     }
     if (o.explorerError) notes.push({ level: "info", code: "explorer-unread", text: `The explorer could not be read, so holders, the deployer and recent trades are missing: ${o.explorerError}` });
+    if (o.explorer && o.explorer.ageSeconds >= 3) {
+      notes.push({
+        level: "info",
+        code: "explorer-age",
+        text: `The explorer's figures \u2014 holders, the deployer, recent trades, the price \u2014 are ${o.explorer.ageSeconds} seconds old: the proxy served them from its cache. The chain readings beside them are from this block.`
+      });
+    }
     const kinds = powerKinds(o).filter((k) => k !== "exempt" && k !== "sweep");
     const owner = o.owner;
     const movesWork = o.probes.length > 0 && o.probes.every((p) => p.status === "ok");

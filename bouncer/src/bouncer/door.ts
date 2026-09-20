@@ -537,6 +537,16 @@ function openDoorFactNotes(slip: DoorSlip, o: OpenDoor): DoorNote[] {
     notes.push({ level: "info", code: "not-erc20", text: `The explorer indexes this as ${o.explorer.tokenType}, not ERC-20. The questions below are asked of fungible tokens; read them with that in mind.` });
   }
   if (o.explorerError) notes.push({ level: "info", code: "explorer-unread", text: `The explorer could not be read, so holders, the deployer and recent trades are missing: ${o.explorerError}` });
+  // A cached reading is fine for what these numbers are for and not fine to
+  // present as live. Three seconds is the threshold because below it the
+  // explorer's own index lag is the bigger number anyway.
+  if (o.explorer && o.explorer.ageSeconds >= 3) {
+    notes.push({
+      level: "info",
+      code: "explorer-age",
+      text: `The explorer's figures — holders, the deployer, recent trades, the price — are ${o.explorer.ageSeconds} seconds old: the proxy served them from its cache. The chain readings beside them are from this block.`,
+    });
+  }
 
   // ---- control. A selector in the dispatcher is a function name, not a
   // permission: who may call it is not readable from bytes, and saying "the

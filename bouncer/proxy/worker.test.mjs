@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { handle } from "./worker.mjs";
+import { UPSTREAMS, handle } from "./worker.mjs";
 
 const upstreams = { demo: { rpc: "https://rpc.demo.invalid", api: "https://api.demo.invalid" } };
 const seen = [];
@@ -123,4 +123,77 @@ test("a single-string rpc still works, so one endpoint needs no list", async () 
   const upstreams = { base: { rpc: "https://only.invalid", api: null } };
   const res = await handle(new Request("https://p.invalid/rpc/base", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "eth_chainId", params: [] }) }), upstreams, async () => new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, result: "0x2105" }), { status: 200 }));
   assert.equal(res.status, 200);
+});
+
+test("the explorer is cached for a few seconds, and says how old the answer is", async () => {
+  // The measured reason this exists: on Robinhood Chain the chain answered
+  // every request in under 160 ms while one /api/v2/addresses read took 3.2
+  // seconds. Caching it is the difference between a three-second wait and
+  // none — but a cache that hides its age would be lying, so it does not.
+  let upstreamCalls = 0;
+  const fetchImpl = async () => {
+    upstreamCalls++;
+    return new Response(JSON.stringify({ creator_address_hash: "0xdead" }), { status: 200, headers: { "content-type": "application/json" } });
+  };
+  const store = new Map();
+  const cacheImpl = {
+    match: async (request) => {
+      const hit = store.get(request.url);
+      return hit ? new Response(hit.body, { status: hit.status, headers: new Headers(hit.headers) }) : undefined;
+    },
+    put: async (request, response) => {
+      store.set(request.url, { body: await response.text(), status: response.status, headers: [...response.headers] });
+    },
+  };
+
+  const url = "https://proxy.invalid/api/robinhood/api/v2/addresses/0x39dbed3a2bd333467115de45665cc57f813c4571";
+  const first = await handle(new Request(url), UPSTREAMS, fetchImpl, cacheImpl);
+  assert.equal(first.status, 200);
+  assert.equal(upstreamCalls, 1);
+  assert.equal(first.headers.get("x-bouncer-age"), "0");
+  assert.match(first.headers.get("cache-control") ?? "", /max-age=\d+/);
+
+  const second = await handle(new Request(url), UPSTREAMS, fetchImpl, cacheImpl);
+  assert.equal(upstreamCalls, 1, "the second read must not reach the explorer");
+  assert.equal(JSON.parse(await second.text()).creator_address_hash, "0xdead");
+  assert.ok(second.headers.has("x-bouncer-age"), "a cached answer has to say how old it is");
+});
+
+test("a refused explorer answer is never cached", async () => {
+  // One 429 kept for ten seconds turns a single refusal into a wave of them,
+  // and a cached 404 would tell everybody a token does not exist.
+  let upstreamCalls = 0;
+  const fetchImpl = async () => {
+    upstreamCalls++;
+    return new Response("{}", { status: 429, headers: { "content-type": "application/json" } });
+  };
+  const store = new Map();
+  const cacheImpl = {
+    match: async (request) => {
+      const hit = store.get(request.url);
+      return hit ? new Response(hit.body, { status: hit.status, headers: new Headers(hit.headers) }) : undefined;
+    },
+    put: async (request, response) => {
+      store.set(request.url, { body: await response.text(), status: response.status, headers: [...response.headers] });
+    },
+  };
+  const url = "https://proxy.invalid/api/robinhood/api/v2/tokens/0x39dbed3a2bd333467115de45665cc57f813c4571/holders";
+  await handle(new Request(url), UPSTREAMS, fetchImpl, cacheImpl);
+  await handle(new Request(url), UPSTREAMS, fetchImpl, cacheImpl);
+  assert.equal(upstreamCalls, 2, "a refusal is asked again, not remembered");
+  assert.equal(store.size, 0);
+});
+
+test("the proxy works with no cache at all, which is how the tests and Node run it", async () => {
+  let upstreamCalls = 0;
+  const fetchImpl = async () => {
+    upstreamCalls++;
+    return new Response(JSON.stringify({ ok: true }), { status: 200, headers: { "content-type": "application/json" } });
+  };
+  const url = "https://proxy.invalid/api/robinhood/api/v2/tokens/0x39dbed3a2bd333467115de45665cc57f813c4571";
+  const a = await handle(new Request(url), UPSTREAMS, fetchImpl, null);
+  const b = await handle(new Request(url), UPSTREAMS, fetchImpl, null);
+  assert.equal(a.status, 200);
+  assert.equal(b.status, 200);
+  assert.equal(upstreamCalls, 2);
 });

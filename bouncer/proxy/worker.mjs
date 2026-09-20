@@ -59,6 +59,17 @@ export const SOLANA_READ_ONLY_METHODS = new Set([
 ]);
 
 const MAX_BATCH = 50;
+/**
+ * How long an explorer answer may be reused.
+ *
+ * Ten seconds is chosen against what the numbers are FOR: holder
+ * concentration, whether the source is verified, who deployed it. None of
+ * those changes meaningfully inside ten seconds, and the explorer's own
+ * index lags the chain by more than that anyway. Price and the transfer
+ * count do move, and the slip says how old the reading is when it is not
+ * fresh.
+ */
+export const API_CACHE_SECONDS = 10;
 const MAX_BODY = 256 * 1024;
 const ALLOWED_API = /^\/api\/v2\/(addresses\/0x[0-9a-fA-F]{40}(\/transactions)?|search|smart-contracts\/0x[0-9a-fA-F]{40}|tokens\/0x[0-9a-fA-F]{40}(\/holders|\/counters|\/transfers)?)$/;
 
@@ -77,7 +88,37 @@ function json(body, status = 200) {
 }
 
 /** Handles one request against the given upstream table (injected for tests). */
-export async function handle(request, upstreams = UPSTREAMS, fetchImpl = (i, o) => fetch(i, o)) {
+/**
+ * The edge cache, if the runtime has one. Node and the tests do not, and a
+ * proxy that only works on Cloudflare would be a proxy nobody can test.
+ */
+async function cacheLookup(request, cacheImpl) {
+  if (!cacheImpl) return null;
+  try {
+    const hit = await cacheImpl.match(request);
+    if (!hit) return null;
+    const stored = Number(hit.headers.get("x-bouncer-stored-at") ?? 0);
+    const age = stored ? Math.max(0, Math.round((Date.now() - stored) / 1000)) : 0;
+    const headers = new Headers(hit.headers);
+    headers.set("x-bouncer-age", String(age));
+    return new Response(await hit.text(), { status: hit.status, headers });
+  } catch {
+    return null;
+  }
+}
+
+async function cacheStore(request, response, cacheImpl) {
+  if (!cacheImpl) return;
+  try {
+    const copy = new Response(await response.clone().text(), { status: response.status, headers: new Headers(response.headers) });
+    copy.headers.set("x-bouncer-stored-at", String(Date.now()));
+    await cacheImpl.put(request, copy);
+  } catch {
+    // A cache that will not take it is not a reason to fail the request.
+  }
+}
+
+export async function handle(request, upstreams = UPSTREAMS, fetchImpl = (i, o) => fetch(i, o), cacheImpl = globalThis.caches?.default ?? null) {
   const url = new URL(request.url);
   if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: cors() });
   if (url.pathname === "/" || url.pathname === "") {
@@ -133,9 +174,35 @@ export async function handle(request, upstreams = UPSTREAMS, fetchImpl = (i, o) 
     if (!up || !up.api) return json({ error: `no explorer for ${api[1]}` }, 404);
     if (request.method !== "GET") return json({ error: "GET only" }, 405);
     if (!ALLOWED_API.test(api[2])) return json({ error: "path not allowed through bouncer-proxy" }, 403);
-    const upstream = await fetchImpl(`${up.api}${api[2]}${url.search}`, { headers: { accept: "application/json", "user-agent": "Mozilla/5.0 (compatible; bouncer-proxy/0.3; +https://github.com/Kepochnik/bouncer)" } });
+    const target = `${up.api}${api[2]}${url.search}`;
+
+    // The explorer is the slowest thing in a door read by a wide margin.
+    // Measured on Robinhood Chain, one fast pass: the chain answered every
+    // request in under 160 ms, and /api/v2/addresses/{address} took 3.2
+    // seconds on its own — more than the rest of the read put together.
+    //
+    // So it is cached here, at the edge, for a few seconds. This is not a
+    // decision to serve stale data: the explorer is an index and was always
+    // behind the chain, which is why the door re-reads balances on chain
+    // before it simulates a sale rather than trusting the holder list. What
+    // the cache changes is how far behind, by a handful of seconds, and it
+    // says so in a header rather than hiding it.
+    const cached = await cacheLookup(request, cacheImpl);
+    if (cached) return cached;
+    const upstream = await fetchImpl(target, { headers: { accept: "application/json", "user-agent": "Mozilla/5.0 (compatible; bouncer-proxy/0.3; +https://github.com/Kepochnik/bouncer)" } });
     const body = await upstream.text();
-    return new Response(body, { status: upstream.status, headers: cors({ "content-type": "application/json" }) });
+    const response = new Response(body, {
+      status: upstream.status,
+      headers: cors({
+        "content-type": "application/json",
+        // Only a good answer is worth keeping. A 404 or a rate limit cached
+        // for ten seconds would turn one refusal into a wave of them.
+        ...(upstream.status === 200 ? { "cache-control": `public, max-age=${API_CACHE_SECONDS}` } : { "cache-control": "no-store" }),
+        "x-bouncer-age": "0",
+      }),
+    });
+    if (upstream.status === 200) await cacheStore(request, response, cacheImpl);
+    return response;
   }
 
   return json({ error: "not found" }, 404);

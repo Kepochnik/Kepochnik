@@ -150,7 +150,21 @@ export interface OpenDoor {
   deployer: { address: string; creationTx: string | null; createdAtBlock: number | null; createdAt: number | null; balance: bigint; bps: number | null } | null;
   ownerBalance: { balance: bigint; bps: number | null } | null;
   /** Explorer flags and price feed. isScam is null when the flag could not be read, never a cheerful false. */
-  explorer: { isScam: boolean | null; priceUsd: number | null; volume24hUsd: number | null; marketCapUsd: number | null; tokenType: string | null } | null;
+  explorer: {
+    isScam: boolean | null;
+    priceUsd: number | null;
+    volume24hUsd: number | null;
+    marketCapUsd: number | null;
+    tokenType: string | null;
+    /**
+     * How many seconds old the explorer's answers were. The proxy caches
+     * them for a few seconds — one of them cost three and a half against a
+     * chain answering in under two hundred milliseconds — and a cached
+     * reading presented as a live one would be a small lie told often.
+     * Zero for a direct read, or a proxied one that missed the cache.
+     */
+    ageSeconds: number;
+  } | null;
   /** Why the explorer could not be read, when it could not. */
   explorerError: string | null;
   /** Pools on the chain's known DEX factories, paired with the wrapped native coin; null when the chain lists none. */
@@ -540,6 +554,7 @@ export async function readOpenDoor(rpc: RpcClient, token: ContractId, meta: Toke
         volume24hUsd: tokenInfo.volume24hUsd,
         marketCapUsd: tokenInfo.marketCapUsd,
         tokenType: tokenInfo.type,
+        ageSeconds: bs.oldestSeconds,
       };
       const top: HolderShare[] = list.map((h) => ({
         address: h.address,
@@ -568,7 +583,7 @@ export async function readOpenDoor(rpc: RpcClient, token: ContractId, meta: Toke
       note(error);
       holders = null;
     }
-    if (explorer === null && info) explorer = { isScam: info.isScam, priceUsd: null, volume24hUsd: null, marketCapUsd: null, tokenType: null };
+    if (explorer === null && info) explorer = { isScam: info.isScam, priceUsd: null, volume24hUsd: null, marketCapUsd: null, tokenType: null, ageSeconds: bs.oldestSeconds };
     try {
       activity = summariseActivity(await unwrap(transfersP, () => bs.tokenTransfers(address)));
     } catch (error) {
