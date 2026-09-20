@@ -1247,7 +1247,41 @@ function download(blob: Blob, filename: string): void {
 declare global {
   interface Window {
     __bouncerRenders?: { stage: Stage; at: number; word: string }[];
+    __bouncerWire?: { url: string; at: number; ms: number; ok: boolean }[];
   }
+}
+
+/**
+ * Every request the page makes, with when it left and how long it took.
+ *
+ * Twice now a slow read has been explained by reading the code, and twice
+ * the explanation was wrong — once the log scan, once the eth_call count,
+ * both confidently, both nowhere near it. The number that settled it each
+ * time came from a per-request log, and the one in RpcClient stops at the
+ * chain: the explorer is a different client on a different server, and on
+ * the runs that hurt it is the one holding things up. A wrapper around
+ * fetch sees both, in one clock, in the order they actually went out.
+ *
+ * It records and returns; it never changes an answer, a header or a
+ * failure. Bounded, and read by scripts/speed-check.mjs to say WHERE a
+ * cold read spent its seconds instead of only how many there were.
+ */
+{
+  const inner = globalThis.fetch.bind(globalThis);
+  globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+    const log = (window.__bouncerWire ??= []);
+    const at = Math.round(performance.now());
+    const url = String(input instanceof Request ? input.url : input);
+    const started = performance.now();
+    try {
+      const response = await inner(input, init);
+      if (log.length < 400) log.push({ url, at, ms: Math.round(performance.now() - started), ok: response.ok });
+      return response;
+    } catch (error) {
+      if (log.length < 400) log.push({ url, at, ms: Math.round(performance.now() - started), ok: false });
+      throw error;
+    }
+  };
 }
 
 function noteRender(stage: Stage, word: string): void {

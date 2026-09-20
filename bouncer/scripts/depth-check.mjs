@@ -9,11 +9,13 @@
  * minute round trip through CI. So: the demo chain, with an artificial cost
  * bolted onto every HTTP request.
  *
- * Give each request a fixed delay. Then simulated wall time divided by that
- * delay IS the depth of the longest chain of requests that had to wait for
- * each other. Requests that run in parallel cost one delay between them; two
- * that run one after the other cost two. No network, no flakes, and the
- * number moves the moment the code does.
+ * Give each request a fixed delay and note when each one left and came
+ * back. Then the depth is the longest chain of requests that had to wait for
+ * each other: a request sits one level below the deepest request that had
+ * already finished when it started. Requests that run together share a
+ * level; two that run one after the other cost two. No network, no flakes,
+ * and the number moves the moment the code does — see waves() for why it is
+ * counted this way and not by the clock.
  *
  *   node scripts/depth-check.mjs [delayMs]
  *
@@ -48,10 +50,46 @@ function slow(inner, tally, kind) {
     } else {
       label = String(url).replace(/^https?:\/\/[^/]+/, "").split("?")[0];
     }
-    tally.timeline.push({ at, kind, label });
+    const entry = { at, kind, label, done: 0 };
+    tally.timeline.push(entry);
     await new Promise((resolve) => setTimeout(resolve, DELAY));
+    entry.done = Date.now() - tally.started;
     return inner(url, init);
   };
+}
+
+/**
+ * Depth, counted causally rather than by the clock.
+ *
+ * Dividing wall time by the delay was the first version and it is a biased
+ * estimator: every request carries a little parsing and scheduling on top of
+ * its artificial delay, that overhead accumulates down the chain, and the
+ * fraction it adds is not depth. It showed: the same read measured 5.5 deep
+ * at a 100 ms delay and 4.6 at 250 ms — a number that moves when you change
+ * the ruler is measuring the ruler. Worse, under CPU load it reached 7.0 and
+ * tripped a ceiling that no code change had gone near.
+ *
+ * So ask the question directly. A request is one level deeper than the
+ * deepest request that had already FINISHED when it started — that is what
+ * "had to wait for" means. Comparisons are local, so nothing accumulates,
+ * and the answer is a whole number that only moves when an await does.
+ */
+function waves(items) {
+  // A little slack: a request released by another's response starts a tick
+  // or two after it, and a scheduler hiccup should not invent a level.
+  const SLACK = Math.max(5, DELAY * 0.15);
+  const sorted = [...items].sort((a, b) => a.at - b.at);
+  let deepest = 0;
+  for (const r of sorted) {
+    let parent = 0;
+    for (const p of sorted) {
+      if (p === r) continue;
+      if (p.done > 0 && p.done <= r.at + SLACK && p.wave > parent) parent = p.wave;
+    }
+    r.wave = parent + 1;
+    if (r.wave > deepest) deepest = r.wave;
+  }
+  return deepest;
 }
 
 const SLOW_SECTIONS = { skipLiquidity: true, skipDev: true, skipRoom: true, skipCrew: true, skipLookalikes: true };
@@ -84,10 +122,11 @@ async function pass(label, extra, spacingMs = 0, shared = null) {
     ...(shared?.at ? { at: shared.at } : {}),
   });
   const ms = Date.now() - started;
-  // Depth is what the number is for; the fraction is scheduler noise.
-  const depth = ms / DELAY;
+  // Only this pass's own requests: with a shared client the tally holds the
+  // other passes' too, and those are a different chain.
+  const depth = waves(tally.timeline.slice(before));
   console.log(
-    `${label.padEnd(34)} ${(tally.requests - before).toString().padStart(4)} requests · ${(tally.calls - beforeCalls).toString().padStart(4)} calls · depth ${depth.toFixed(1)} · ${ms} ms at ${DELAY} ms/request`,
+    `${label.padEnd(34)} ${(tally.requests - before).toString().padStart(4)} requests · ${(tally.calls - beforeCalls).toString().padStart(4)} calls · ${String(depth).padStart(2)} deep · ${ms} ms at ${DELAY} ms/request`,
   );
   if (process.env.CALLS) {
     for (const [method, n] of [...tally.byMethod].map(([m, n]) => [m, n - (beforeByMethod.get(m) ?? 0)]).filter(([, n]) => n > 0).sort((a, b) => b[1] - a[1])) {
@@ -99,7 +138,7 @@ async function pass(label, extra, spacingMs = 0, shared = null) {
     // once, and the number of groups is the depth.
     const groups = new Map();
     for (const item of tally.timeline) {
-      const step = Math.round(item.at / DELAY);
+      const step = item.wave ?? Math.round(item.at / DELAY);
       if (!groups.has(step)) groups.set(step, []);
       groups.get(step).push(`${item.kind === "explorer" ? "explorer " : ""}${item.label}`);
     }
@@ -115,7 +154,11 @@ async function pass(label, extra, spacingMs = 0, shared = null) {
  * puts an await back in front of a batch is caught here and not by a reader
  * three weeks from now watching a spinner.
  */
-const CEILING = { opening: 6, fast: 10, full: 14, staged: 9, perLookalike: 0.25 };
+// One level of headroom each, no more. The old ceilings were slack because
+// the old estimator was inflated and noisy and had to be given room for
+// both; a whole number that does not move under load can be held to the
+// thing it measures. One re-serialised await shows up here.
+const CEILING = { opening: 5, fast: 8, full: 9, staged: 8, perLookalike: 0.25 };
 
 /** Pads the explorer's token search with decoys carrying the queried ticker. */
 function crowdedSearch(inner, extra) {
@@ -171,16 +214,18 @@ if (process.env.SPACING) await pass(`fast pass, ${process.env.SPACING} ms spacin
       ["the whole slip", { skipDev: true }],
     ].map(async ([label, extra]) => {
       await pass(`  ${label}`, extra, 0, shared);
-      marks[label] = (Date.now() - started) / DELAY;
+      // Everything the shared client had FINISHED by the moment this render
+      // landed: the causal chain a reader actually waited through.
+      marks[label] = waves(tally.timeline.filter((r) => r.done > 0 && r.done <= Date.now() - tally.started));
     }),
   );
-  const total = (Date.now() - tally.started) / DELAY;
+  const total = waves(tally.timeline);
   console.log(
-    `  cumulative depth: ${marks["something on screen"].toFixed(1)} to the first render, ${marks["a verdict"].toFixed(1)} to the verdict, ${marks["the whole slip"].toFixed(1)} to the end`,
+    `  cumulative depth: ${marks["something on screen"]} to the first render, ${marks["a verdict"]} to the verdict, ${total} to the end`,
   );
   console.log(`  ${tally.requests} requests in all · ${rpc.memoHits} chain reads and ${blockscout.memoHits} explorer reads shared instead of asked again`);
   if (total > CEILING.staged) {
-    console.error(`depth: the staged read is ${total.toFixed(1)} round trips deep, over its ceiling of ${CEILING.staged}.`);
+    console.error(`depth: the staged read is ${total} round trips deep, over its ceiling of ${CEILING.staged}.`);
     process.exit(1);
   }
   console.log(`depth: the staged read is under its ceiling of ${CEILING.staged}`);
@@ -221,7 +266,7 @@ if (process.env.SPACING) await pass(`fast pass, ${process.env.SPACING} ms spacin
 let failed = false;
 for (const [label, depth, ceiling] of [["opening pass", opening, CEILING.opening], ["fast pass", fast, CEILING.fast], ["full pass", full, CEILING.full]]) {
   if (depth > ceiling) {
-    console.error(`depth: ${label} is ${depth.toFixed(1)} round trips deep, over its ceiling of ${ceiling}. Something that could share a batch is waiting its turn.`);
+    console.error(`depth: ${label} is ${depth} round trips deep, over its ceiling of ${ceiling}. Something that could share a batch is waiting its turn.`);
     failed = true;
   }
 }

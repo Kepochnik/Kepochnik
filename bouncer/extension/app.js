@@ -7464,6 +7464,23 @@
     a.click();
     setTimeout(() => URL.revokeObjectURL(url), 1e3);
   }
+  {
+    const inner = globalThis.fetch.bind(globalThis);
+    globalThis.fetch = async (input, init) => {
+      const log = window.__bouncerWire ??= [];
+      const at = Math.round(performance.now());
+      const url = String(input instanceof Request ? input.url : input);
+      const started = performance.now();
+      try {
+        const response = await inner(input, init);
+        if (log.length < 400) log.push({ url, at, ms: Math.round(performance.now() - started), ok: response.ok });
+        return response;
+      } catch (error) {
+        if (log.length < 400) log.push({ url, at, ms: Math.round(performance.now() - started), ok: false });
+        throw error;
+      }
+    };
+  }
   function noteRender(stage, word) {
     const log = window.__bouncerRenders ??= [];
     if (log.length < 200) log.push({ stage, at: Math.round(performance.now()), word });

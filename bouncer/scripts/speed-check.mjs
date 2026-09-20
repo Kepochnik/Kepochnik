@@ -93,8 +93,24 @@ if (!executablePath) {
  * is the honest part — when it is wide, the median is worth less, and
  * whoever reads the run should be able to see that rather than take the
  * middle number on faith.
+ *
+ * And a gap between them, which matters more than the count.
+ *
+ * Run one after another, the runs came back 9.5 s, 5.2 s, 5.1 s, and the
+ * median called that 5.2. It was measuring its own cache: the proxy holds
+ * explorer answers at the edge for ten seconds, so runs two and three read
+ * what run one had just fetched. Nobody pasting a contract into this box
+ * gets that. They get run one. A median over a warm cache is a number about
+ * the check, not about the tool — the same self-flattery as timing a page
+ * load with the browser cache on.
+ *
+ * So the runs are spaced past the cache, and every one of them is cold.
+ * Slower to run, and the only version of the number a reader would
+ * recognise.
  */
 const RUNS = Number(process.env.SPEED_RUNS ?? 3);
+/** Longer than the proxy's edge cache, so no run is served another run's reads. */
+const COLD_GAP_MS = Number(process.env.SPEED_GAP_MS ?? 12_000);
 
 const browser = await chromium.launch({ executablePath });
 
@@ -131,7 +147,10 @@ async function measure() {
       }
       await page.waitForTimeout(100);
     }
-    return { firstPaint, firstAnswer, complete: complete ?? DEADLINE };
+    // Where the seconds went, from the page's own clock. Only worth printing
+    // when a run was slow; on a fast one it is noise.
+    const wire = await page.evaluate(() => (window.__bouncerWire ?? []).map((w) => ({ ...w, url: w.url.replace(/^https?:\/\/[^/]+/, "").split("?")[0] })));
+    return { firstPaint, firstAnswer, complete: complete ?? DEADLINE, wire };
   } finally {
     await page.close();
   }
@@ -139,6 +158,7 @@ async function measure() {
 
 const samples = [];
 for (let i = 0; i < RUNS; i++) {
+  if (i > 0) await new Promise((resolve) => setTimeout(resolve, COLD_GAP_MS));
   const one = await measure();
   if (one.unreadable) {
     console.log(`::warning title=speed on ${chain}::the site could not read this chain from the runner, so nothing was timed`);
@@ -152,6 +172,14 @@ for (let i = 0; i < RUNS; i++) {
   }
   samples.push(one);
   console.log(`  run ${i + 1}: painted ${(one.firstPaint / 1000).toFixed(1)} s · verdict ${(one.firstAnswer / 1000).toFixed(1)} s · complete ${(one.complete / 1000).toFixed(1)} s`);
+  // The runs that miss a budget are the ones worth explaining, and the page
+  // is the only thing that knows. Guessing from here is what got this wrong
+  // twice.
+  if (one.complete > BUDGET.complete) {
+    for (const w of [...(one.wire ?? [])].sort((a, b) => b.ms - a.ms).slice(0, 5)) {
+      console.log(`        ${String(w.ms).padStart(5)} ms  at ${String(w.at).padStart(5)} ms  ${w.ok ? " " : "!"} ${w.url}`);
+    }
+  }
 }
 await browser.close();
 
