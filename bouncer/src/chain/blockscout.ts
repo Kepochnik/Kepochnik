@@ -87,11 +87,19 @@ export class BlockscoutClient {
   private readonly fetchImpl: typeof fetch;
   private readonly timeoutMs: number;
   /**
-   * Answers already given, for the life of this client. See `memo` below.
-   * Failures are remembered too: a path that just timed out will time out
-   * again, and paying for that twice is the worst version of this.
+   * Reads already in flight or already answered, for the life of this
+   * client. See `memo` below.
+   *
+   * The promise, not the value. Two callers asking for the same path before
+   * either answer arrives is the ordinary case here — the page starts these
+   * reads the moment an address is pasted and the pass that needs them
+   * begins a second later — and a memo of values would let both requests
+   * go out, which is the thing it exists to prevent.
+   *
+   * Failures are kept too: a path that just timed out will time out again,
+   * and paying six seconds for that twice is the worst version of this.
    */
-  private readonly memo: Map<string, { ok: true; value: unknown } | { ok: false; error: unknown }> | null;
+  private readonly memo: Map<string, Promise<unknown>> | null;
 
   constructor(options: BlockscoutOptions) {
     this.baseUrl = options.baseUrl.replace(/\/$/, "");
@@ -150,9 +158,45 @@ export class BlockscoutClient {
     const remembered = this.memo?.get(path);
     if (remembered) {
       this.memoHits++;
-      if (remembered.ok) return remembered.value as T;
-      throw remembered.error;
+      return remembered as Promise<T>;
     }
+    if (this.memo) {
+      const started = this.fetchOnce<T>(path);
+      this.memo.set(path, started);
+      return started;
+    }
+    return this.fetchOnce<T>(path);
+  }
+
+  /**
+   * Warms the memo without waiting for it.
+   *
+   * The explorer is the slowest thing in a door read — measured on
+   * Robinhood Chain, one /addresses call is about three seconds against a
+   * chain answering every request in under two hundred milliseconds — and
+   * the pass that needs it does not start until the chain-only render is on
+   * screen. Started here, it runs under that render instead of after it.
+   * Nothing waits on these; whoever asks for the path later gets this
+   * request, finished or still in flight.
+   */
+  /** The four reads a door opens with, for prewarm(). Kept here so the paths have one home. */
+  static doorPaths(token: string): string[] {
+    return [`/api/v2/addresses/${token}`, `/api/v2/tokens/${token}/holders`, `/api/v2/tokens/${token}`, `/api/v2/tokens/${token}/transfers`];
+  }
+
+  prewarm(paths: string[]): void {
+    if (!this.memo) return;
+    for (const path of paths) {
+      if (this.memo.has(path)) continue;
+      const started = this.fetchOnce<unknown>(path);
+      // Nobody is awaiting it yet, and a rejection with no handler is an
+      // unhandled rejection, which the browser reports as a page crash.
+      started.catch(() => {});
+      this.memo.set(path, started);
+    }
+  }
+
+  private async fetchOnce<T>(path: string): Promise<T> {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.timeoutMs);
     const startedAt = Date.now();
@@ -171,14 +215,12 @@ export class BlockscoutClient {
       // numbers are for — and saying nothing about it would not be.
       const age = Number(response.headers?.get?.("x-bouncer-age") ?? 0);
       if (Number.isFinite(age) && age > this.oldestSeconds) this.oldestSeconds = age;
-      this.memo?.set(path, { ok: true, value: body });
       return body;
     } catch (error) {
       // Recorded after the body, not before the request: a call that failed
       // parsing is a failure, and counting it as a success was exactly the
       // bug that made the EVM profiler lie about retries earlier today.
       this.record(path, Date.now() - startedAt, true);
-      this.memo?.set(path, { ok: false, error });
       throw error;
     } finally {
       clearTimeout(timer);

@@ -169,12 +169,13 @@ function factoryFor(): string | undefined {
   return f ? f.toLowerCase() : undefined;
 }
 
-function solanaRpcFor(): SolanaRpc {
+/** One client per read, memoizing, for the reason given on rpcFor. */
+function solanaRpcFor(memo = false): SolanaRpc {
   const c = chain();
   const url = rpcInput.value.trim();
   const proxy = proxyBase();
   const urls = url ? [url] : proxy ? [`${proxy}/rpc/${c.key}`, ...c.rpc] : c.rpc;
-  return new SolanaRpc({ urls, minSpacingMs: 120 });
+  return new SolanaRpc({ urls, minSpacingMs: 120, memo });
 }
 
 const EXAMPLES: { label: string; hint: string; hash: string }[] = [
@@ -353,6 +354,16 @@ async function runDoor(address: string): Promise<void> {
   // one's answers for free, and one block for all three, so they are three
   // views of the same moment rather than three different ones.
   const rpc = rpcFor(true);
+  // The explorer starts now, not when the pass that needs it starts.
+  //
+  // It is the slowest thing in the read — about three seconds for one
+  // /addresses call on Robinhood Chain, against a chain answering every
+  // request in under two hundred milliseconds — and the opening render
+  // deliberately does not wait for it. That left it starting a second and a
+  // half late for no reason. Started here it runs UNDER the opening render
+  // instead of after it, and the memo hands the same request to whoever
+  // asks next, finished or still in flight.
+  if (options.blockscout) options.blockscout.prewarm(BlockscoutClient.doorPaths(address.toLowerCase()));
   let at: BlockHeader | undefined;
   let drawn: Stage | null = null;
   const draw = (slip: DoorSlip, stage: Stage) => {
@@ -786,9 +797,12 @@ async function runSolanaDoor(address: string): Promise<void> {
   // freeze you, what does a transfer cost. The holder list and the pools are
   // several reads each, and getTokenLargestAccounts is both the slowest of
   // them and the one free endpoints refuse most often.
+  // One client for both passes, so the second gets the first one's answers
+  // for nothing — the mint account and its metadata are read once.
+  const rpc = solanaRpcFor(true);
   let opened = false;
   try {
-    const first = await readSplDoor(solanaRpcFor(), address, chain(), { skipHolders: true, skipMarket: true });
+    const first = await readSplDoor(rpc, address, chain(), { skipHolders: true, skipMarket: true });
     if (run !== doorRun) return;
     renderSplSlip(first, { stage: "opening" });
     opened = true;
@@ -798,7 +812,7 @@ async function runSolanaDoor(address: string): Promise<void> {
   }
 
   try {
-    const slip = await readSplDoor(solanaRpcFor(), address, chain());
+    const slip = await readSplDoor(rpc, address, chain());
     if (run !== doorRun) return;
     if (opened) keepPlace(() => renderSplSlip(slip));
     else renderSplSlip(slip);

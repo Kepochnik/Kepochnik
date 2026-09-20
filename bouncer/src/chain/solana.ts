@@ -49,6 +49,16 @@ export interface SolanaRpcOptions {
   timeoutMs?: number;
   fetchImpl?: typeof fetch;
   minSpacingMs?: number;
+  /**
+   * Remember each read's answer for the life of this client.
+   *
+   * The page reads a mint twice — the account and its metadata first, so
+   * something true is on screen, then the holders and the pools — and
+   * without this the second pass asks for the mint again. Give each read
+   * its own client: one that outlived the read would answer the next paste
+   * with the last one's chain.
+   */
+  memo?: boolean;
   retries?: number;
 }
 
@@ -65,6 +75,11 @@ export class SolanaRpc {
   private readonly timeoutMs: number;
   private readonly fetchImpl: typeof fetch;
   private readonly minSpacingMs: number;
+  /** See SolanaRpcOptions.memo. Null when off, which is the default. */
+  private readonly memo: Map<string, unknown> | null;
+
+  /** How many reads the memo answered without asking an endpoint. */
+  memoHits = 0;
   private readonly retries: number;
   private activeIndex = 0;
   private nextId = 1;
@@ -87,6 +102,7 @@ export class SolanaRpc {
     this.timeoutMs = options.timeoutMs ?? 7_000;
     this.fetchImpl = options.fetchImpl ?? ((input: RequestInfo | URL, init?: RequestInit) => fetch(input, init));
     this.minSpacingMs = options.minSpacingMs ?? (options.fetchImpl ? 0 : 120);
+    this.memo = options.memo ? new Map() : null;
     // One pass over the endpoints, not two. A method a public endpoint does not
     // serve — getTokenLargestAccounts is the one that bites — fails on every
     // url, and the old default turned that into seven attempts and
@@ -114,6 +130,13 @@ export class SolanaRpc {
 
   async send(method: string, params: unknown[]): Promise<unknown> {
     if (!READ_ONLY_METHODS.has(method)) throw new SolanaRpcError(`refusing non-read method ${method}`);
+    // getSlot moves by design, so it is never remembered; everything else is
+    // a question about a named account and has one answer for this read.
+    const key = this.memo && method !== "getSlot" ? `${method}|${JSON.stringify(params)}` : null;
+    if (key !== null && this.memo!.has(key)) {
+      this.memoHits++;
+      return this.memo!.get(key);
+    }
     let lastError: unknown;
     const startedAt = Date.now();
     const maxAttempts = this.urls.length * Math.max(1, this.retries);
@@ -136,6 +159,7 @@ export class SolanaRpc {
         const body = (await response.json()) as { result?: unknown; error?: { code: number; message: string } };
         if (body.error) throw new SolanaRpcError(body.error.message, body.error.code);
         this.record(method, Date.now() - startedAt, false);
+        if (key !== null) this.memo!.set(key, body.result);
         return body.result;
       } catch (error) {
         lastError = error;

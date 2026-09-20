@@ -443,3 +443,36 @@ test("the Solana door opens in two round trips, not four", async () => {
   );
   assert.equal(asked.filter((a) => a.method === "getAccountInfo").length, 0, "no single-account read is needed when the batch answered");
 });
+
+test("the Solana door's two passes share one set of reads", async () => {
+  // The mint account and its metadata are read to put something on screen;
+  // the pass after it, which adds the holders and the pools, must not ask
+  // for them again. getSlot is the exception: it moves by design.
+  const asked: string[] = [];
+  const account = mintAccount({ supply: 1_000n, decimals: 6, mintAuthority: null, freezeAuthority: null });
+  const b64 = (a: AccountInfo) => ({ owner: a.owner, lamports: a.lamports, executable: a.executable, data: [Buffer.from(a.data).toString("base64"), "base64"] });
+  const mint = base58Encode(key(11));
+  const rpc = new SolanaRpc({
+    urls: ["https://node.invalid"],
+    minSpacingMs: 0,
+    memo: true,
+    fetchImpl: (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body)) as { id: number; method: string; params: unknown[] };
+      asked.push(body.method);
+      const answer = (result: unknown) => new Response(JSON.stringify({ jsonrpc: "2.0", id: body.id, result }), { status: 200, headers: { "content-type": "application/json" } });
+      if (body.method === "getSlot") return answer(99);
+      if (body.method === "getBlockTime") return answer(1_700_000_000);
+      if (body.method === "getMultipleAccounts") return answer({ value: (body.params[0] as string[]).map((a) => (a === mint ? b64(account) : null)) });
+      return new Response(JSON.stringify({ jsonrpc: "2.0", id: body.id, error: { code: -32601, message: "not served here" } }), { status: 200, headers: { "content-type": "application/json" } });
+    }) as unknown as typeof fetch,
+  });
+
+  await readSplDoor(rpc, mint, CHAINS.solana, { skipHolders: true, skipMarket: true, deadlineMs: 2_000 });
+  const firstPass = asked.filter((m) => m === "getMultipleAccounts").length;
+  assert.equal(firstPass, 1);
+
+  await readSplDoor(rpc, mint, CHAINS.solana, { skipHolders: true, skipMarket: true, deadlineMs: 2_000 });
+  assert.equal(asked.filter((m) => m === "getMultipleAccounts").length, 1, "the second pass must reuse the accounts the first one read");
+  assert.ok(rpc.memoHits > 0);
+  assert.ok(asked.filter((m) => m === "getSlot").length >= 2, "the slot is not remembered: it moves");
+});

@@ -414,9 +414,17 @@
     fetchImpl;
     timeoutMs;
     /**
-     * Answers already given, for the life of this client. See `memo` below.
-     * Failures are remembered too: a path that just timed out will time out
-     * again, and paying for that twice is the worst version of this.
+     * Reads already in flight or already answered, for the life of this
+     * client. See `memo` below.
+     *
+     * The promise, not the value. Two callers asking for the same path before
+     * either answer arrives is the ordinary case here — the page starts these
+     * reads the moment an address is pasted and the pass that needs them
+     * begins a second later — and a memo of values would let both requests
+     * go out, which is the thing it exists to prevent.
+     *
+     * Failures are kept too: a path that just timed out will time out again,
+     * and paying six seconds for that twice is the worst version of this.
      */
     memo;
     constructor(options) {
@@ -462,9 +470,41 @@
       const remembered = this.memo?.get(path);
       if (remembered) {
         this.memoHits++;
-        if (remembered.ok) return remembered.value;
-        throw remembered.error;
+        return remembered;
       }
+      if (this.memo) {
+        const started = this.fetchOnce(path);
+        this.memo.set(path, started);
+        return started;
+      }
+      return this.fetchOnce(path);
+    }
+    /**
+     * Warms the memo without waiting for it.
+     *
+     * The explorer is the slowest thing in a door read — measured on
+     * Robinhood Chain, one /addresses call is about three seconds against a
+     * chain answering every request in under two hundred milliseconds — and
+     * the pass that needs it does not start until the chain-only render is on
+     * screen. Started here, it runs under that render instead of after it.
+     * Nothing waits on these; whoever asks for the path later gets this
+     * request, finished or still in flight.
+     */
+    /** The four reads a door opens with, for prewarm(). Kept here so the paths have one home. */
+    static doorPaths(token) {
+      return [`/api/v2/addresses/${token}`, `/api/v2/tokens/${token}/holders`, `/api/v2/tokens/${token}`, `/api/v2/tokens/${token}/transfers`];
+    }
+    prewarm(paths) {
+      if (!this.memo) return;
+      for (const path of paths) {
+        if (this.memo.has(path)) continue;
+        const started = this.fetchOnce(path);
+        started.catch(() => {
+        });
+        this.memo.set(path, started);
+      }
+    }
+    async fetchOnce(path) {
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), this.timeoutMs);
       const startedAt = Date.now();
@@ -477,11 +517,9 @@
         this.record(path, Date.now() - startedAt, false);
         const age = Number(response.headers?.get?.("x-bouncer-age") ?? 0);
         if (Number.isFinite(age) && age > this.oldestSeconds) this.oldestSeconds = age;
-        this.memo?.set(path, { ok: true, value: body });
         return body;
       } catch (error) {
         this.record(path, Date.now() - startedAt, true);
-        this.memo?.set(path, { ok: false, error });
         throw error;
       } finally {
         clearTimeout(timer);
@@ -1874,6 +1912,10 @@
     timeoutMs;
     fetchImpl;
     minSpacingMs;
+    /** See SolanaRpcOptions.memo. Null when off, which is the default. */
+    memo;
+    /** How many reads the memo answered without asking an endpoint. */
+    memoHits = 0;
     retries;
     activeIndex = 0;
     nextId = 1;
@@ -1890,6 +1932,7 @@
       this.timeoutMs = options.timeoutMs ?? 7e3;
       this.fetchImpl = options.fetchImpl ?? ((input, init) => fetch(input, init));
       this.minSpacingMs = options.minSpacingMs ?? (options.fetchImpl ? 0 : 120);
+      this.memo = options.memo ? /* @__PURE__ */ new Map() : null;
       this.retries = options.retries ?? 1;
     }
     get activeUrl() {
@@ -1908,6 +1951,11 @@
     }
     async send(method, params) {
       if (!READ_ONLY_METHODS2.has(method)) throw new SolanaRpcError(`refusing non-read method ${method}`);
+      const key = this.memo && method !== "getSlot" ? `${method}|${JSON.stringify(params)}` : null;
+      if (key !== null && this.memo.has(key)) {
+        this.memoHits++;
+        return this.memo.get(key);
+      }
       let lastError;
       const startedAt = Date.now();
       const maxAttempts = this.urls.length * Math.max(1, this.retries);
@@ -1930,6 +1978,7 @@
           const body = await response.json();
           if (body.error) throw new SolanaRpcError(body.error.message, body.error.code);
           this.record(method, Date.now() - startedAt, false);
+          if (key !== null) this.memo.set(key, body.result);
           return body.result;
         } catch (error) {
           lastError = error;
@@ -6549,12 +6598,12 @@
     const f = (mode === "live" ? factoryInput.value.trim() : "") || c.factory || "";
     return f ? f.toLowerCase() : void 0;
   }
-  function solanaRpcFor() {
+  function solanaRpcFor(memo = false) {
     const c = chain();
     const url = rpcInput.value.trim();
     const proxy = proxyBase();
     const urls = url ? [url] : proxy ? [`${proxy}/rpc/${c.key}`, ...c.rpc] : c.rpc;
-    return new SolanaRpc({ urls, minSpacingMs: 120 });
+    return new SolanaRpc({ urls, minSpacingMs: 120, memo });
   }
   var EXAMPLES = [
     { label: "A fresh launch", hint: "9 s old, door tax still open", hash: `#/demo/${DEMO.tokens.fresh.token}` },
@@ -6648,6 +6697,7 @@
     busy("reading the chain at the door\u2026");
     const options = mode === "demo" ? { chain: CHAINS.robinhood, factory: factoryFor(), blockscout: blockscoutFor(true), devHours: 8, chunkSize: 1e5, launchSearchBlocks: 4e5 } : { chain: chain(), factory: factoryFor(), blockscout: blockscoutFor(true), devHours: 24 };
     const rpc = rpcFor(true);
+    if (options.blockscout) options.blockscout.prewarm(BlockscoutClient.doorPaths(address.toLowerCase()));
     let at;
     let drawn = null;
     const draw = (slip, stage) => {
@@ -6957,9 +7007,10 @@
     if (!isSolanaAddress(address)) return bad("Paste a Solana mint address: 32 bytes written in base58, which looks like EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v.");
     const run = ++doorRun;
     busy("reading the mint account\u2026");
+    const rpc = solanaRpcFor(true);
     let opened = false;
     try {
-      const first = await readSplDoor(solanaRpcFor(), address, chain(), { skipHolders: true, skipMarket: true });
+      const first = await readSplDoor(rpc, address, chain(), { skipHolders: true, skipMarket: true });
       if (run !== doorRun) return;
       renderSplSlip(first, { stage: "opening" });
       opened = true;
@@ -6967,7 +7018,7 @@
     } catch {
     }
     try {
-      const slip = await readSplDoor(solanaRpcFor(), address, chain());
+      const slip = await readSplDoor(rpc, address, chain());
       if (run !== doorRun) return;
       if (opened) keepPlace(() => renderSplSlip(slip));
       else renderSplSlip(slip);

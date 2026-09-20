@@ -259,3 +259,41 @@ test("the opening pass reads nothing it has not asked for as zero", async () => 
   assert.equal(o.owner?.address, DEMO_PLAIN.owner);
   assert.equal(o.paused, false);
 });
+
+test("the explorer is asked once for a path, however many readers want it", async () => {
+  // The page starts these reads the moment an address is pasted and the
+  // pass that needs them begins a second later, so two callers wanting the
+  // same path before either answer arrives is the ordinary case — not an
+  // edge one. A memo of values would let both requests go out, which is
+  // exactly what it exists to prevent.
+  let calls = 0;
+  const slow = (async (input: RequestInfo | URL) => {
+    calls++;
+    await new Promise((r) => setTimeout(r, 40));
+    return demoBlockscoutFetch()(input as string);
+  }) as unknown as typeof fetch;
+  const bs = new BlockscoutClient({ baseUrl: DEMO_BLOCKSCOUT, fetchImpl: slow, memo: true });
+
+  bs.prewarm(BlockscoutClient.doorPaths(DEMO_PLAIN.token));
+  const started = calls;
+  assert.equal(started, 4, "prewarm asks for each path once, without being awaited");
+
+  const [a, b] = await Promise.all([bs.addressInfo(DEMO_PLAIN.token), bs.addressInfo(DEMO_PLAIN.token)]);
+  assert.deepEqual(a, b);
+  assert.equal(calls, started, "a path already in flight is not asked for again");
+  await bs.tokenHolders(DEMO_PLAIN.token);
+  assert.equal(calls, started, "nor one already answered");
+  assert.ok(bs.memoHits >= 3);
+});
+
+test("an explorer path that failed is not retried into the same wall twice", async () => {
+  let calls = 0;
+  const dead = (async () => {
+    calls++;
+    return new Response("nope", { status: 504 });
+  }) as unknown as typeof fetch;
+  const bs = new BlockscoutClient({ baseUrl: DEMO_BLOCKSCOUT, fetchImpl: dead, memo: true });
+  await assert.rejects(() => bs.addressInfo(DEMO_PLAIN.token));
+  await assert.rejects(() => bs.addressInfo(DEMO_PLAIN.token));
+  assert.equal(calls, 1, "six seconds of timeout is not worth paying for twice in one read");
+});
