@@ -1926,7 +1926,7 @@
   var TOKEN_PROGRAM = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA";
   var TOKEN_2022_PROGRAM = "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb";
   var METADATA_PROGRAM = "metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s";
-  var READ_ONLY_METHODS2 = /* @__PURE__ */ new Set([
+  var SOLANA_READ_ONLY_METHODS = /* @__PURE__ */ new Set([
     "getAccountInfo",
     "getMultipleAccounts",
     "getTokenSupply",
@@ -1990,7 +1990,7 @@
       this.counters.set(method, entry);
     }
     async send(method, params) {
-      if (!READ_ONLY_METHODS2.has(method)) throw new SolanaRpcError(`refusing non-read method ${method}`);
+      if (!SOLANA_READ_ONLY_METHODS.has(method)) throw new SolanaRpcError(`refusing non-read method ${method}`);
       const key = this.memo && method !== "getSlot" ? `${method}|${JSON.stringify(params)}` : null;
       if (key !== null && this.memo.has(key)) {
         this.memoHits++;
@@ -7650,16 +7650,18 @@
       const log = window.__bouncerWire ??= [];
       const url = String(input instanceof Request ? input.url : input);
       const started = performance.now();
-      const entry = { url, at: Math.round(started), ms: 0, ok: false, done: false };
+      const entry = { url, at: Math.round(started), ms: 0, ok: false, done: false, status: 0, why: "" };
       if (log.length < 400) log.push(entry);
       try {
         const response = await inner(input, init);
         entry.ms = Math.round(performance.now() - started);
         entry.ok = response.ok;
+        entry.status = response.status;
         entry.done = true;
         return response;
       } catch (error) {
         entry.ms = Math.round(performance.now() - started);
+        entry.why = error instanceof Error ? error.message : String(error);
         entry.done = true;
         throw error;
       }

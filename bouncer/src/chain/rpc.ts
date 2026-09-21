@@ -57,7 +57,17 @@ export interface LogFilter {
   toBlock: number;
 }
 
-const READ_ONLY_METHODS = new Set([
+/**
+ * Exported so the proxy's own allow-list can be held against it.
+ *
+ * They are two lists in two languages and neither can widen the other,
+ * which is the point — but nothing checked that the narrower one is not
+ * narrower than what this client actually sends. A method allowed here and
+ * refused there comes back as a 403 the client reads as a dead endpoint,
+ * so it rotates to a public node and every read pays a wasted round trip,
+ * quietly, forever. See test/proxy.test.mjs.
+ */
+export const READ_ONLY_METHODS = new Set([
   "eth_chainId",
   "eth_blockNumber",
   "eth_call",

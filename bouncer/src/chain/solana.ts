@@ -20,7 +20,8 @@ export const TOKEN_PROGRAM = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA";
 export const TOKEN_2022_PROGRAM = "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb";
 export const METADATA_PROGRAM = "metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s";
 
-const READ_ONLY_METHODS = new Set([
+/** Exported so the proxy's Solana allow-list can be held against it; see test/../proxy/worker.test.mjs. */
+export const SOLANA_READ_ONLY_METHODS = new Set([
   "getAccountInfo",
   "getMultipleAccounts",
   "getTokenSupply",
@@ -129,7 +130,7 @@ export class SolanaRpc {
   }
 
   async send(method: string, params: unknown[]): Promise<unknown> {
-    if (!READ_ONLY_METHODS.has(method)) throw new SolanaRpcError(`refusing non-read method ${method}`);
+    if (!SOLANA_READ_ONLY_METHODS.has(method)) throw new SolanaRpcError(`refusing non-read method ${method}`);
     // getSlot moves by design, so it is never remembered; everything else is
     // a question about a named account and has one answer for this read.
     const key = this.memo && method !== "getSlot" ? `${method}|${JSON.stringify(params)}` : null;

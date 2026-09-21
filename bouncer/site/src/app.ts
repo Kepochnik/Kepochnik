@@ -1472,7 +1472,7 @@ function download(blob: Blob, filename: string): void {
 declare global {
   interface Window {
     __bouncerRenders?: { stage: Stage; at: number; word: string }[];
-    __bouncerWire?: { url: string; at: number; ms: number; ok: boolean; done: boolean }[];
+    __bouncerWire?: { url: string; at: number; ms: number; ok: boolean; done: boolean; status: number; why: string }[];
   }
 }
 
@@ -1505,16 +1505,26 @@ declare global {
     // milliseconds each and nothing else, because whatever was holding it up
     // was still in the air when the log was read. `done: false` is the
     // entry that matters.
-    const entry = { url, at: Math.round(started), ms: 0, ok: false, done: false };
+    const entry = { url, at: Math.round(started), ms: 0, ok: false, done: false, status: 0, why: "" };
     if (log.length < 400) log.push(entry);
     try {
       const response = await inner(input, init);
       entry.ms = Math.round(performance.now() - started);
       entry.ok = response.ok;
+      // WHY it failed, not just that it did.
+      //
+      // A bare "!" next to /rpc/base had me reading the proxy's source
+      // guessing between a blocked method, an oversized batch and an
+      // upstream rate limit — three different fixes, and the log knew the
+      // answer all along. A status is one number and it ends the argument.
+      entry.status = response.status;
       entry.done = true;
       return response;
     } catch (error) {
       entry.ms = Math.round(performance.now() - started);
+      // A throw is the network, not the server: no status exists, so say so
+      // rather than leave a zero that reads like one.
+      entry.why = error instanceof Error ? error.message : String(error);
       entry.done = true;
       throw error;
     }

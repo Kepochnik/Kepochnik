@@ -197,7 +197,9 @@ for (let i = 0; i < RUNS; i++) {
     const wire = [...(one.wire ?? [])].sort((a, b) => Number(a.done) - Number(b.done) || b.ms - a.ms);
     for (const w of wire.slice(0, 6)) {
       const took = w.done ? `${String(w.ms).padStart(5)} ms` : "  still in the air";
-      console.log(`        ${took}  at ${String(w.at).padStart(5)} ms  ${!w.done ? "?" : w.ok ? " " : "!"} ${w.url}`);
+      const mark = !w.done ? "?" : w.ok ? " " : "!";
+      const why = w.ok || !w.done ? "" : `  [${w.status ? `HTTP ${w.status}` : w.why || "no answer"}]`;
+      console.log(`        ${took}  at ${String(w.at).padStart(5)} ms  ${mark} ${w.url}${why}`);
     }
   }
 }

@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { UPSTREAMS, handle } from "./worker.mjs";
+import { READ_ONLY_METHODS, SOLANA_READ_ONLY_METHODS, UPSTREAMS, handle } from "./worker.mjs";
+import { READ_ONLY_METHODS as CLIENT_METHODS } from "../dist/src/chain/rpc.js";
+import { SOLANA_READ_ONLY_METHODS as CLIENT_SOLANA_METHODS } from "../dist/src/chain/solana.js";
 
 const upstreams = { demo: { rpc: "https://rpc.demo.invalid", api: "https://api.demo.invalid" } };
 const seen = [];
@@ -196,4 +198,25 @@ test("the proxy works with no cache at all, which is how the tests and Node run 
   assert.equal(a.status, 200);
   assert.equal(b.status, 200);
   assert.equal(upstreamCalls, 2);
+});
+
+test("the proxy allows everything the client can send", async () => {
+  // Two lists in two languages, and neither may widen the other — that is
+  // the point of keeping them apart. But nothing held the narrow one
+  // against what the client actually sends, and a method allowed by the
+  // client and refused here comes back as a 403 the client reads as a dead
+  // endpoint: it rotates to a public node and every read after that pays a
+  // wasted round trip, quietly, for as long as the drift lasts.
+  const missing = [...CLIENT_METHODS].filter((m) => !READ_ONLY_METHODS.has(m));
+  assert.deepEqual(missing, [], `the client sends these and the proxy refuses them: ${missing.join(", ")}`);
+  const missingSol = [...CLIENT_SOLANA_METHODS].filter((m) => !SOLANA_READ_ONLY_METHODS.has(m));
+  assert.deepEqual(missingSol, [], `the Solana client sends these and the proxy refuses them: ${missingSol.join(", ")}`);
+});
+
+test("the proxy is no wider than the client: it forwards nothing extra", async () => {
+  // The other direction, which matters more. A method the proxy allows and
+  // the client never sends is a hole somebody else can reach through — the
+  // proxy is public, and its allow-list is the whole of its safety.
+  const extra = [...READ_ONLY_METHODS].filter((m) => !CLIENT_METHODS.has(m));
+  assert.deepEqual(extra, [], `the proxy allows these and nothing in BOUNCER needs them: ${extra.join(", ")}`);
 });
