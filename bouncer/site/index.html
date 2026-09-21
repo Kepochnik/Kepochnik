@@ -14,89 +14,96 @@
 <link rel="preconnect" href="https://bouncer-proxy.tarasenkosanja12.workers.dev" crossorigin>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Big+Shoulders+Display:wght@700;900&family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&display=swap">
 <style>
 /* ============================================================
-   BOUNCER — three registers, one page.
+   BOUNCER — one register: an instrument.
 
-   The verdict is a poster: one word, the size of a headline, because a
-   reader who takes nothing else away should take that. The data under it
-   is a terminal: dense, quiet, tabular, one accent, nothing decorative
-   competing with a number. The frame around both is the club: brass,
-   rope, the stamp, the mascot — what makes this tool this tool and not
-   the tenth scanner.
+   Every earlier version mixed three. A poster verdict, a terminal
+   underneath, a "club" frame of brass and rope around both — and mixing
+   registers inside one page is how it ended up loud and cheap at the same
+   time. The poster shouted the word that says least; the frame was
+   decoration on a tool whose whole claim is that it decorates nothing.
 
-   Each register owns a zone. Mixing them inside a zone is how a page ends
-   up loud and unreadable at the same time.
+   So: one typeface, one grid, hairlines, right angles. Everything is a
+   cell in a table, because everything on this page IS a reading taken off
+   a chain at one block. Colour is never decoration — amber means look,
+   red means this can cost you, green means checked and fine, and nothing
+   else is coloured at all.
    ============================================================ */
 :root{
-  /* Surfaces, darkest first. Four steps is enough to build depth without
-     a single border being needed to separate two of them. */
-  --bg:#08080a; --surface:#0f0f12; --surface-2:#16161b; --surface-3:#1e1e25;
-  --line:#22222a; --line-2:#31313c;
+  /* Cool near-black, three steps. A terminal does not need depth; it
+     needs cells you can tell apart by a one-pixel line. */
+  --bg:#07090a; --surface:#0b0e10; --surface-2:#0f1315; --surface-3:#141a1c;
+  --line:#1a2220; --line-2:#23302d;
 
-  --text:#f2eee6; --muted:#9b95a4; --dim:#65626f;
+  --text:#eef3f1; --muted:#cfd6d3; --dim:#6d7a76; --dimmer:#4e5a57;
 
-  /* One accent. Brass is the brand; everything else earns its colour by
-     meaning, never by decoration. */
-  --brass:#d4a94a; --brass-2:#f2cd6e; --brass-ink:#1a1405;
+  /* Amber is the brand and it is also WATCH — the same signal, which is
+     the point: this tool's job is to make you look. */
+  --brass:#e8b84b; --brass-2:#f5d488; --brass-ink:#0b0e10;
   --rope:#c0122e;
 
-  --stop:#ff5065; --stop-bg:#2a1016; --stop-edge:#5e1c28;
-  --watch:#ffab2e; --watch-bg:#2a1f0c; --watch-edge:#5c4212;
-  --ok:#4ade80;   --ok-bg:#0f2418;   --ok-edge:#1d4a30;
-  --info:#8aa6d4; --info-bg:#151a24; --info-edge:#283245;
+  --stop:#ff6b5e; --stop-bg:rgba(255,107,94,.07); --stop-edge:#5c2420;
+  --watch:#e8b84b; --watch-bg:rgba(232,184,75,.05); --watch-edge:#5c4a1e;
+  --ok:#7fd6a9;   --ok-bg:rgba(127,214,169,.06); --ok-edge:#245043;
+  --info:#7d9aa8; --info-bg:rgba(125,154,168,.05); --info-edge:#2a3a42;
 
-  --display:"Big Shoulders Display","Arial Narrow",Impact,sans-serif;
-  --sans:"IBM Plex Sans",system-ui,-apple-system,"Segoe UI",sans-serif;
-  --mono:"IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  --display:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  --sans:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  --mono:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
 
-  --r-sm:8px; --r:12px; --r-lg:18px; --r-xl:24px;
-  --gut:20px; --max:1080px;
+  /* Right angles. A 24px radius on a readout is a costume. */
+  --r-sm:0px; --r:0px; --r-lg:0px; --r-xl:0px;
+  --gut:0px; --max:1180px;
 }
 *{box-sizing:border-box}
 html{color-scheme:dark;scroll-behavior:smooth}
 @media (prefers-reduced-motion:reduce){html{scroll-behavior:auto}*{animation-duration:.001ms!important;transition-duration:.001ms!important}}
 body{
-  margin:0;background:var(--bg);color:var(--text);
-  font:15px/1.6 var(--sans);-webkit-font-smoothing:antialiased;
-  padding:0 0 80px;
-  /* A single soft brass wash behind the fold. It reads as light spilling
-     out of a doorway, and it is the only gradient on the page. */
-  background-image:radial-gradient(900px 420px at 50% -220px,rgba(212,169,74,.10),transparent 70%);
-  background-repeat:no-repeat;
+  margin:0;background:var(--bg);color:var(--muted);
+  font:13.5px/1.6 var(--sans);-webkit-font-smoothing:antialiased;
+  padding:0 0 0;
+  /* The brass wash is gone. A glow behind the fold is a mood, and a
+     readout does not have moods. */
 }
 a{color:var(--brass-2);text-underline-offset:3px}
-.wrap{max-width:var(--max);margin:0 auto;padding-inline:var(--gut)}
+.wrap{max-width:var(--max);margin:0 auto;border-inline:1px solid var(--line)}
+/* Everything lives inside one ruled column: the page is a frame, and
+   nothing floats in the dark beside it. */
 .num{font-variant-numeric:tabular-nums}
 .sr{position:absolute;left:-9999px}
 
 /* ---- the rope: the one piece of pure identity, and it is two pixels */
-.rope{height:3px;background:linear-gradient(90deg,var(--rope),#f0304f 45%,var(--rope));box-shadow:0 0 24px rgba(192,18,46,.45)}
+/* The rope was a glowing red bar across the top. One pixel of it is
+   enough to be the same mark without being a decoration. */
+.rope{height:2px;background:var(--rope)}
 
 /* ---- header ------------------------------------------------ */
-header{position:sticky;top:0;z-index:40;background:rgba(8,8,10,.82);backdrop-filter:blur(14px);border-bottom:1px solid var(--line)}
-.hbar{display:flex;align-items:center;gap:14px;flex-wrap:wrap;padding-block:12px;max-width:var(--max);margin:0 auto;padding-inline:var(--gut)}
-.mark{width:36px;height:36px;image-rendering:pixelated;flex:none;border-radius:8px}
-.wordmark{font:900 30px/1 var(--display);letter-spacing:.07em;margin:0;white-space:nowrap}
+/* The header is the status bar of an instrument: cells, divided by
+   hairlines, each holding one fact. Nothing is rounded and nothing floats. */
+header{position:sticky;top:0;z-index:40;background:var(--surface);border-bottom:1px solid var(--line)}
+.hbar{display:flex;align-items:stretch;gap:0;flex-wrap:wrap;max-width:var(--max);margin:0 auto;border-inline:1px solid var(--line)}
+.mark{width:22px;height:22px;image-rendering:pixelated;flex:none;align-self:center;margin:0 0 0 14px}
+.wordmark{font:700 14px/1 var(--display);letter-spacing:.2em;margin:0;white-space:nowrap;align-self:center;padding:0 16px 0 10px;color:var(--text)}
 .wordmark span{color:var(--brass)}
-.hspace{flex:1}
-.toolbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:flex-end}
+.hspace{flex:1;border-left:1px solid var(--line)}
+.toolbar{display:flex;align-items:stretch;gap:0;flex-wrap:wrap;justify-content:flex-end}
 
 /* Segmented control: demo | live. One shape, two states, no ambiguity. */
-.seg{display:inline-flex;border:1px solid var(--line-2);border-radius:999px;overflow:hidden;background:var(--surface)}
-.seg button{background:transparent;border:0;color:var(--muted);padding:8px 15px;cursor:pointer;font:600 11px/1 var(--mono);letter-spacing:.12em;text-transform:uppercase}
-.seg button[aria-pressed="true"]{background:var(--brass);color:var(--brass-ink)}
-.seg button:not([aria-pressed="true"]):hover{color:var(--text)}
-.seg button[disabled]{opacity:.4;cursor:not-allowed}
-.seg button:focus-visible{outline:2px solid var(--brass-2);outline-offset:-2px}
+.seg{display:inline-flex;gap:0;background:none;border-left:1px solid var(--line)}
+.seg button{background:transparent;border:0;border-right:1px solid var(--line);color:var(--dim);padding:0 15px;cursor:pointer;font:500 11px/1 var(--mono);letter-spacing:.14em;text-transform:uppercase}
+.seg button[aria-pressed="true"]{background:var(--brass);color:var(--brass-ink);font-weight:700}
+.seg button:not([aria-pressed="true"]):hover{color:var(--text);background:var(--surface-2)}
+.seg button[disabled]{opacity:.35;cursor:not-allowed}
+.seg button:focus-visible{outline:2px solid var(--brass);outline-offset:-2px}
 
-select,.ext,.link{font:600 11px/1 var(--mono);letter-spacing:.09em;text-transform:uppercase}
-select{background:var(--surface);border:1px solid var(--line-2);border-radius:999px;color:var(--text);padding:9px 12px;cursor:pointer}
-select:hover{border-color:var(--line-2)}
-select:focus-visible,.ext:focus-visible,.link:focus-visible{outline:2px solid var(--brass-2);outline-offset:2px}
-.ext{display:inline-flex;align-items:center;gap:7px;border:1px solid var(--line-2);border-radius:999px;color:var(--text);text-decoration:none;padding:9px 13px;white-space:nowrap;background:var(--surface)}
-.ext:hover{border-color:var(--brass);color:var(--brass-2)}
+select,.ext,.link{font:500 11px/1 var(--mono);letter-spacing:.1em;text-transform:uppercase}
+select{background:var(--surface);border:0;border-right:1px solid var(--line);color:var(--muted);padding:0 12px;cursor:pointer;align-self:stretch}
+select:hover{color:var(--text);background:var(--surface-2)}
+select:focus-visible,.ext:focus-visible,.link:focus-visible{outline:2px solid var(--brass);outline-offset:-2px}
+.ext{display:inline-flex;align-items:center;gap:7px;border:0;border-right:1px solid var(--line);color:var(--dim);text-decoration:none;padding:0 14px;white-space:nowrap;background:none}
+.ext:hover{color:var(--brass);background:var(--surface-2)}
 .link{background:none;border:0;color:var(--muted);cursor:pointer;padding:9px 6px;text-transform:none;letter-spacing:0;font:13px var(--sans);text-decoration:underline}
 .link:hover{color:var(--brass-2)}
 @media (max-width:860px){.wordmark{font-size:26px}.hbar{gap:10px}}
@@ -115,41 +122,52 @@ select:focus-visible,.ext:focus-visible,.link:focus-visible{outline:2px solid va
 }
 
 /* ---- the door: the input ------------------------------------ */
-.hero{padding-block:22px 6px;text-align:center;transition:padding .2s}
-/* Once there is an answer on the page, the invitation gets out of its way. */
-body.answered .hero{padding-block:22px 0}
-body.answered .hero h1{font-size:clamp(26px,3.4vw,34px);margin-bottom:0}
+/* The door is a prompt, not a hero. It used to open with a 56px headline
+   across the middle of the screen and a sentence under it, which is a
+   landing page's job — this page is opened to type an address into. */
+.hero{padding:0;text-align:left;transition:none}
+.hero h1{font:500 11px/1 var(--display);letter-spacing:.22em;text-transform:uppercase;color:var(--dim);margin:0;padding:11px 16px;border-bottom:1px solid var(--line)}
+.hero p{margin:0;padding:11px 16px;color:var(--dim);font-size:12.5px;border-bottom:1px solid var(--line)}
 body.answered .hero p{display:none}
 body.answered .chips{display:none}
-.hero h1{font:900 clamp(34px,5.6vw,56px)/0.94 var(--display);letter-spacing:.045em;margin:0 0 10px}
-.hero p{margin:0 auto;max-width:56ch;color:var(--muted);font-size:16px}
-.door{margin:26px auto 0;max-width:760px}
-.door form{display:flex;gap:10px;background:var(--surface);border:1px solid var(--line-2);border-radius:var(--r-lg);padding:8px;box-shadow:0 18px 50px -24px rgba(0,0,0,.9)}
-.door form:focus-within{border-color:var(--brass);box-shadow:0 0 0 3px rgba(212,169,74,.14),0 18px 50px -24px rgba(0,0,0,.9)}
-.door input{flex:1 1 auto;min-width:0;background:transparent;border:0;color:var(--text);font:15px var(--mono);padding:14px 14px}
-.door input::placeholder{color:var(--dim)}
+.door{margin:0;max-width:none}
+/* The prompt line: a caret cell, the field, the key. One row, full bleed,
+   divided like everything else. */
+.door form{display:flex;gap:0;background:var(--surface);border:0;border-bottom:1px solid var(--line);border-radius:0;padding:0;box-shadow:none}
+.door form::before{content:"›";align-self:center;padding:0 12px 0 16px;color:var(--brass);font:16px/1 var(--mono)}
+.door form:focus-within{box-shadow:inset 0 0 0 1px var(--brass)}
+.door input{flex:1 1 auto;min-width:0;background:transparent;border:0;color:var(--text);font:14px var(--mono);padding:15px 8px 15px 0}
+.door input::placeholder{color:var(--dimmer)}
 .door input:focus{outline:none}
-.btn{background:var(--brass);color:var(--brass-ink);border:0;border-radius:var(--r);font:900 17px/1 var(--display);letter-spacing:.1em;padding:0 24px;min-height:50px;cursor:pointer;text-transform:uppercase;white-space:nowrap}
+.btn{background:var(--brass);color:var(--brass-ink);border:0;border-radius:0;font:700 11px/1 var(--display);letter-spacing:.16em;padding:0 26px;min-height:48px;cursor:pointer;text-transform:uppercase;white-space:nowrap}
 .btn:hover{background:var(--brass-2)}
 .btn:focus-visible{outline:2px solid var(--text);outline-offset:2px}
 .btn[disabled]{opacity:.55;cursor:wait}
-.chips{display:flex;gap:8px;flex-wrap:wrap;margin-top:14px;align-items:center;justify-content:center}
-.chips span{color:var(--dim);font-size:12px;font-family:var(--mono);text-transform:uppercase;letter-spacing:.1em}
-.chip{background:var(--surface-2);border:1px solid var(--line);color:var(--text);border-radius:999px;padding:7px 13px;font:13px var(--mono);cursor:pointer}
-.chip:hover{border-color:var(--brass);color:var(--brass-2)}
-.chip:focus-visible{outline:2px solid var(--brass-2)}
-.chip em{font-style:normal;color:var(--dim);margin-left:7px}
+.chips{display:flex;gap:0;flex-wrap:wrap;margin:0;align-items:stretch;justify-content:flex-start;border-bottom:1px solid var(--line)}
+.chips span{color:var(--dimmer);font-size:10.5px;font-family:var(--mono);text-transform:uppercase;letter-spacing:.14em;align-self:center;padding:0 14px 0 16px}
+.chip{background:none;border:0;border-left:1px solid var(--line);color:var(--muted);border-radius:0;padding:10px 14px;font:12px var(--mono);cursor:pointer}
+.chip:hover{color:var(--brass);background:var(--surface-2)}
+.chip:focus-visible{outline:2px solid var(--brass);outline-offset:-2px}
+.chip em{font-style:normal;color:var(--dimmer);margin-left:7px}
 /* The row under the examples: secondary routes and one hint. Flex with a real
    gap, because without it the links run together into one word — which is
    exactly what happened the first time this stylesheet was rewritten. */
-.more{display:flex;gap:6px 18px;flex-wrap:wrap;justify-content:center;align-items:baseline;width:100%;margin-top:4px;font-size:13px;color:var(--dim)}
+.more{display:flex;gap:6px 18px;flex-wrap:wrap;justify-content:flex-start;align-items:baseline;width:100%;margin:0;padding:10px 16px;font-size:12px;color:var(--dimmer);border-top:1px solid var(--line)}
 .more a{color:var(--muted);text-decoration:none;border-bottom:1px solid var(--line-2)}
 .more a:hover{color:var(--brass-2);border-color:var(--brass)}
-.source{display:flex;align-items:center;gap:10px;flex-wrap:wrap;justify-content:center;margin-top:16px;color:var(--muted);font-size:13px}
+.source{display:flex;align-items:center;gap:10px;flex-wrap:wrap;justify-content:flex-start;margin:0;padding:10px 16px;color:var(--dim);font-size:12.5px;border-bottom:1px solid var(--line)}
 .source b{color:var(--text);font-weight:600}
 /* On a phone this was three stacked lines of chrome — a pill, a sentence
    and a link, each claiming its own row — before anything a reader came
    for. One line, smaller, centred. */
+/* On a phone the field and the key fight over 390 pixels and the address
+   loses: it is the one string on the page nobody can guess the rest of.
+   The key takes its own row. */
+@media (max-width:560px){
+  .door form{flex-wrap:wrap}
+  .door input{flex:1 1 100%;padding-right:16px}
+  .btn{width:100%;min-height:44px;border-top:1px solid var(--line)}
+}
 @media (max-width:560px){
   .source{gap:6px;margin-top:11px;font-size:12px;line-height:1.35}
   .source .pill{font-size:9px;padding:3px 7px}
@@ -157,19 +175,19 @@ body.answered .chips{display:none}
   .hero h1{margin-bottom:8px}
   .door{margin-top:18px}
 }
-.pill{font:600 10px var(--mono);letter-spacing:.12em;text-transform:uppercase;padding:5px 10px;border-radius:999px;background:var(--watch-bg);color:var(--watch);border:1px solid var(--watch-edge)}
+.pill{font:500 10px var(--mono);letter-spacing:.14em;text-transform:uppercase;padding:3px 8px;border-radius:0;background:none;color:var(--watch);border:1px solid var(--watch-edge)}
 .pill.live{background:var(--ok-bg);color:var(--ok);border-color:var(--ok-edge)}
-.settings{margin:14px auto 0;max-width:760px;display:none;grid-template-columns:auto 1fr;gap:10px 14px;align-items:center;color:var(--muted);font-size:13px;background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:16px}
+.settings{margin:0;max-width:none;display:none;grid-template-columns:auto 1fr;gap:10px 14px;align-items:center;color:var(--muted);font-size:12.5px;background:var(--surface);border:0;border-bottom:1px solid var(--line);border-radius:0;padding:16px}
 .settings.open{display:grid}
 .settings label{margin:0;color:var(--muted);font:13px var(--sans)}
-.settings input{min-width:0;background:var(--bg);border:1px solid var(--line-2);border-radius:var(--r-sm);color:var(--text);font:13px var(--mono);padding:10px 12px}
+.settings input{min-width:0;background:var(--bg);border:1px solid var(--line);border-radius:0;color:var(--text);font:12.5px var(--mono);padding:9px 11px}
 .settings input:focus-visible{outline:2px solid var(--brass);border-color:var(--brass)}
 .settings .hint{grid-column:1/-1;color:var(--dim);line-height:1.6}
 /* No min-height: when the slip carries the chain, block and timestamp in
    its own footer this line is emptied, and an empty line should take no
    room rather than reserve twenty pixels for nothing. */
-.status{color:var(--muted);font:13px var(--mono);display:flex;gap:10px;align-items:center;justify-content:center}
-.status:not(:empty){margin-top:16px;min-height:20px}
+.status{color:var(--dim);font:12px var(--mono);display:flex;gap:10px;align-items:center;justify-content:flex-start}
+.status:not(:empty){margin:0;padding:11px 16px;border-bottom:1px solid var(--line);min-height:0}
 .status .dot{width:8px;height:8px;border-radius:50%;background:var(--brass);animation:pulse 1s infinite alternate}
 @keyframes pulse{from{opacity:.25}to{opacity:1}}
 .error{margin-top:22px;border:1px solid var(--stop-edge);background:var(--stop-bg);border-radius:var(--r);padding:16px 18px}
@@ -177,7 +195,9 @@ body.answered .chips{display:none}
 .error p{margin:6px 0 0;color:var(--muted);font-size:14px}
 
 /* ---- THE VERDICT: the poster ------------------------------- */
-.slip{margin-top:22px;display:grid;gap:12px}
+/* No gaps: every block shares its neighbour's hairline, so the slip
+   reads as one continuous readout instead of a stack of floating cards. */
+.slip{margin:0;display:grid;gap:0}
 /* A grid item's min-width defaults to auto, which is its min-content, so a
    child can be wider than the column it sits in and take the page with it.
    This is defence, not a fix for anything measured: removing it changed no
@@ -185,51 +205,30 @@ body.answered .chips{display:none}
    unbreakable strings in prose and a header that would not wrap. Kept
    because the failure mode is real and invisible in the source. */
 .slip>*{min-width:0}
-.verdict{border:1px solid var(--line-2);border-radius:var(--r-xl);overflow:hidden;background:var(--surface)}
-.verdict.v-stop{border-color:var(--stop-edge);background:linear-gradient(180deg,var(--stop-bg),var(--surface) 62%)}
-.verdict.v-watch{border-color:var(--watch-edge);background:linear-gradient(180deg,var(--watch-bg),var(--surface) 62%)}
-.verdict.v-clear{border-color:var(--ok-edge);background:linear-gradient(180deg,var(--ok-bg),var(--surface) 62%)}
-/* Identity and verdict are one idea, so they sit on one band: the word on
-   a coloured rail, and beside it who this is and what it means. They used
-   to be two stacked rows, which read as two announcements and cost fifty
-   pixels to say so. */
-.vtop{display:grid;grid-template-columns:auto 1fr;gap:22px;align-items:start;padding:18px 22px}
-.vwho{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;min-width:0;margin-bottom:7px}
-.vsym{font:900 clamp(22px,3vw,30px)/1 var(--display);letter-spacing:.03em;word-break:break-word}
-.vname{color:var(--muted);font-size:14px}
-.vstamp{font:700 10px/1 var(--mono);letter-spacing:.16em;border:1px solid var(--brass);color:var(--brass);border-radius:999px;padding:6px 11px;white-space:nowrap}
-.vstamp.no{border-color:var(--stop-edge);color:var(--stop);background:var(--stop-bg)}
-.vstamp.mid{border-color:var(--watch-edge);color:var(--watch);background:var(--watch-bg)}
-.vstamp.yes{background:rgba(212,169,74,.12)}
-/* min-width:0 is the whole fix, and it is not optional. A nowrap flex item
-   has a min-content width of the entire string, so a 42-character address
-   stretched the verdict, the tiles, the cards and the page with them: 238
-   pixels of horizontal scroll on a phone, from one chip. overflow:hidden
-   does nothing about it on its own. */
-/* The address moved down here. It is reference, not headline: a reader
-   checks it against what they were sent, and that is provenance — the
-   same job as the chain and the block it now sits beside. */
-.vaddr{min-width:0;background:none;border:0;color:var(--dim);font:12px var(--mono);padding:0;cursor:pointer;
-  max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:left}
-.vaddr:hover{color:var(--text);border-color:var(--line-2)}
-.vaddr:focus-visible{outline:2px solid var(--brass-2)}
-
+/* The verdict is a band of cells, not a card. No gradient: a wash of the
+   verdict's own colour behind the whole block says the same thing three
+   times over and leaves nothing for the finding that actually earned it. */
+.verdict{border:0;border-bottom:1px solid var(--line);border-radius:0;overflow:hidden;background:var(--surface)}
+/* The reading and the record, side by side: the word in a hatched cell of
+   its own, the sentence in the plain one next to it. */
+.vtop{display:grid;grid-template-columns:288px 1fr;gap:0;align-items:stretch;padding:0}
+.vcell{padding:24px 18px;border-right:1px solid var(--line);display:flex;flex-direction:column;justify-content:center;
+  background:repeating-linear-gradient(45deg,var(--surface),var(--surface) 6px,var(--surface-2) 6px,var(--surface-2) 12px)}
+.vlevel{font:11px/1 var(--mono);letter-spacing:.2em;color:var(--dimmer);margin-bottom:12px}
+.vcounts{margin-top:14px;color:var(--dim);font-size:11.5px;line-height:1.65}
 .vword{
-  /* It used to run to 104px and carry a 60px glow, which made the loudest
-     thing on the page the word that says least: "WATCH" is a label, and
-     the sentence beside it and the red rows below are what a reader
-     actually needs. Still the largest type in the answer, no longer three
-     times the size of the finding that could cost them money. */
-  font:900 clamp(34px,4.4vw,52px)/0.9 var(--display);letter-spacing:.015em;
-  padding-left:14px;border-left:4px solid currentColor;
+  /* Big, but not a poster: this is the label on the reading. It sits in
+     its own hatched cell, so it needs no glow and no rail to be found. */
+  font:700 clamp(32px,4vw,48px)/0.95 var(--display);letter-spacing:-.02em;color:var(--text);
 }
+/* Colour lives in the word and nowhere else. */
 .verdict.v-stop .vword{color:var(--stop)}
 .verdict.v-watch .vword{color:var(--watch)}
 .verdict.v-clear .vword{color:var(--ok)}
 /* The opening render: the code and the keys are on screen, the verdict is
    not in yet. Deliberately the quietest of the four — a reader should be
    able to tell at a glance that this one is not an answer. */
-.verdict.v-reading{border-color:var(--line-2);background:var(--surface)}
+.verdict.v-reading .vcell{background:var(--surface)}
 .verdict.v-reading .vword{
   color:var(--dim);text-shadow:none;
   font-size:clamp(34px,7vw,64px);letter-spacing:.06em;
@@ -237,16 +236,30 @@ body.answered .chips{display:none}
 }
 @media (prefers-reduced-motion:reduce){.verdict.v-reading .vword{animation:none}}
 @keyframes breathe{from{opacity:.45}to{opacity:1}}
-.vsay{min-width:0}
-.vlead{margin:0;font-size:clamp(15px,1.6vw,17px);line-height:1.5;max-width:62ch}
-.vsub{margin:6px 0 0;color:var(--dim);font-size:13px}
-.vfoot{display:flex;align-items:center;gap:6px 14px;flex-wrap:wrap;border-top:1px solid var(--line);padding:9px 22px;min-width:0}
+/* The record line: what this is, above the sentence about it. */
+.vwho{display:flex;align-items:baseline;gap:11px;flex-wrap:wrap;min-width:0;margin-bottom:12px}
+.vsym{font:700 17px/1 var(--display);letter-spacing:.06em;word-break:break-word;color:var(--text)}
+.vname{color:var(--dim);font-size:13px}
+.vstamp{font:500 10px/1 var(--mono);letter-spacing:.16em;border:1px solid var(--watch-edge);color:var(--brass);border-radius:0;padding:4px 8px;white-space:nowrap;background:none}
+.vstamp.no{border-color:var(--stop-edge);color:var(--stop)}
+.vstamp.mid{border-color:var(--watch-edge);color:var(--watch)}
+.vstamp.yes{border-color:var(--ok-edge);color:var(--ok)}
+/* The address is a copy button that must not look like one: it is the
+   reference line at the bottom of a reading, not a control. */
+.vaddr{min-width:0;background:none;border:0;color:var(--dimmer);font:11.5px var(--mono);padding:0;cursor:pointer;
+  max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:left}
+.vaddr:hover{color:var(--brass)}
+.vaddr:focus-visible{outline:2px solid var(--brass);outline-offset:2px}
+.vsay{min-width:0;padding:26px 22px}
+.vlead{margin:0;font-size:15px;line-height:1.62;max-width:68ch;color:var(--text)}
+.vsub{margin:10px 0 0;color:var(--dim);font-size:12.5px}
+.vfoot{display:flex;align-items:center;gap:6px 14px;flex-wrap:wrap;border-top:1px solid var(--line);padding:9px 16px;min-width:0;background:var(--surface-2)}
 .vfoot::before{content:"";width:0}
 .vpend{margin-left:10px;color:var(--brass-2);font:11px var(--mono);letter-spacing:.08em;text-transform:uppercase}
 .vat{min-width:0;overflow-wrap:anywhere}
 /* The level tallies are gone from the verdict footer — see the note in
    verdictBlock. Their rules went with them. */
-.vat{color:var(--dim);font:12px var(--mono)}
+.vat{color:var(--dimmer);font:11.5px var(--mono)}
 .vacts{margin-left:auto;display:flex;gap:6px;flex-wrap:wrap}
 /* One button people press and three they might. They were four identical
    buttons, which asks a reader to choose between things that are not
@@ -264,8 +277,9 @@ body.answered .chips{display:none}
 .vfoot .vaddr{flex:1 0 100%}
 @media (min-width:1100px){.vfoot .vaddr{flex:0 1 auto}}
 @media (max-width:760px){
-  .vtop{grid-template-columns:1fr;gap:12px;padding:16px 18px}
-  .vword{padding-left:11px;border-left-width:3px}
+  .vtop{grid-template-columns:1fr}
+  .vcell{border-right:0;border-bottom:1px solid var(--line);padding:18px 16px}
+  .vsay{padding:18px 16px}
   .vfoot{padding:9px 18px;gap:8px}
   /* An even 2x2 rather than three across and one orphan underneath, which
      is what equal flex widths produce when the labels are unequal. */
@@ -306,41 +320,41 @@ body.answered .chips{display:none}
 
 /* The line between the answer and the evidence. Everything above it is
    what a reader came for; everything below is where it was read from. */
-.stack-head{margin:20px 0 -2px;font:600 12px/1 var(--mono);letter-spacing:.14em;text-transform:uppercase;color:var(--dim)}
+.stack-head{margin:0;padding:11px 16px;font:400 10.5px/1 var(--mono);letter-spacing:.2em;text-transform:uppercase;color:var(--dimmer);background:var(--surface-2);border-top:1px solid var(--line)}
 .stack-head span{font:400 13px/1.4 var(--sans);color:var(--dim)}
-/* The findings, as one ledger sorted worst-first.
-   Five cards meant five headings and five paragraphs explaining what each
-   heading meant, and a STOP that carried exactly the visual weight of a
-   note about a ticker. A list says which line to read first by putting it
-   first, and the severity rail says it again in colour. */
-.findings{background:var(--surface);border:1px solid var(--line);border-radius:var(--r-lg);overflow:hidden}
+/* The findings, as log lines.
+   A level column you scan straight down, and the line itself. Cells, one
+   hairline apart, like everything else on this page — the earlier version
+   used a coloured rail down the left edge of each row, which is the most
+   common card pattern on the web and reads as a template wherever it
+   appears. */
+.findings{background:var(--surface);border:0;border-bottom:1px solid var(--line);overflow:hidden}
 .finds{list-style:none;margin:0;padding:0}
-.find{display:grid;grid-template-columns:3px 108px 1fr;align-items:start;gap:0 14px;
-  padding:13px 18px 13px 0;border-top:1px solid var(--line);font-size:14px;line-height:1.5}
+.find{display:grid;grid-template-columns:92px 1fr;align-items:stretch;gap:0;
+  border-top:1px solid var(--line);font-size:13.5px;line-height:1.65}
 .find:first-child{border-top:0}
-.find-dot{align-self:stretch;border-radius:0 2px 2px 0;background:var(--line-2)}
-.find-topic{font:11px/1.55 var(--mono);letter-spacing:.11em;text-transform:uppercase;color:var(--dim);padding-top:1px}
-.find-text{min-width:0;overflow-wrap:anywhere;color:var(--muted)}
+.find-level{padding:13px 16px;border-right:1px solid var(--line);font:11px/1.65 var(--mono);letter-spacing:.12em;color:var(--dimmer)}
+.find-text{padding:13px 18px;min-width:0;overflow-wrap:anywhere;color:var(--muted)}
+.find-topic{color:var(--dimmer)}
 .gloss{color:var(--dim)}
-.find.lv-stop .gloss,.find.lv-watch .gloss{color:var(--muted);font-weight:400}
-.find.lv-stop{background:color-mix(in srgb,var(--stop) 7%,transparent)}
-.find.lv-stop .find-dot{background:var(--stop)}
-.find.lv-stop .find-topic{color:var(--stop)}
-.find.lv-stop .find-text{color:var(--text);font-weight:500}
-.find.lv-watch .find-dot{background:var(--watch)}
-.find.lv-watch .find-topic{color:var(--watch)}
+.find.lv-stop{background:var(--stop-bg)}
+.find.lv-stop .find-level{color:var(--stop)}
+.find.lv-stop .find-text{color:var(--text)}
+.find.lv-watch{background:var(--watch-bg)}
+.find.lv-watch .find-level{color:var(--watch)}
 .find.lv-watch .find-text{color:var(--text)}
 .find-rest{border-top:1px solid var(--line)}
-.find-rest>summary{list-style:none;cursor:pointer;padding:12px 18px;color:var(--dim);font-size:13px;display:flex;gap:8px;align-items:center}
+.find-rest>summary{list-style:none;cursor:pointer;padding:12px 16px;color:var(--dim);font-size:12.5px;display:flex;gap:9px;align-items:center}
 .find-rest>summary::-webkit-details-marker{display:none}
-.find-rest>summary::before{content:"+";font:13px var(--mono);color:var(--brass);width:12px}
-.find-rest[open]>summary::before{content:"–"}
+.find-rest>summary::before{content:"\25B8";font:11px var(--mono);color:var(--brass);width:12px}
+.find-rest[open]>summary::before{content:"\25BE"}
 .find-rest>summary:hover{background:var(--surface-2);color:var(--muted)}
-.find-rest>summary:focus-visible{outline:2px solid var(--brass-2);outline-offset:-2px}
-.find-rest .find{border-top:1px solid var(--line)}
+.find-rest>summary:focus-visible{outline:2px solid var(--brass);outline-offset:-2px}
 @media (max-width:640px){
-  .find{grid-template-columns:3px 1fr;gap:0 12px;padding:11px 16px 11px 0}
-  .find-topic{grid-column:2;margin-bottom:2px}
+  .find{grid-template-columns:1fr}
+  .find-level{padding:10px 16px 0;border-right:0}
+  .find-text{padding:6px 16px 13px}
+}
   .find-text{grid-column:2}
 }
 
@@ -348,17 +362,17 @@ body.answered .chips{display:none}
 /* Always announced, never loud. The dashed edge keeps it visibly a
    different kind of thing from a finding; the count in the summary makes
    the claim without spending a paragraph and four sentences on it. */
-.unread{border:1px dashed var(--line-2);border-radius:var(--r-lg);background:var(--surface)}
-.unread>summary{list-style:none;cursor:pointer;padding:11px 18px;display:flex;align-items:center;gap:9px;
-  color:var(--muted);font-size:13.5px;border-radius:var(--r-lg)}
+.unread{border:0;border-top:1px dashed var(--line-2);border-bottom:1px dashed var(--line-2);border-radius:0;background:var(--surface)}
+.unread>summary{list-style:none;cursor:pointer;padding:11px 16px;display:flex;align-items:center;gap:10px;
+  color:var(--dim);font-size:12.5px;border-radius:0}
 .unread>summary::-webkit-details-marker{display:none}
 .unread>summary:hover{background:var(--surface-2);color:var(--text)}
 .unread>summary:focus-visible{outline:2px solid var(--brass-2);outline-offset:-2px}
-.unread .unread-n{font:700 12px/1 var(--mono);color:var(--bg);background:var(--dim);border-radius:4px;padding:4px 7px}
+.unread .unread-n{font:500 11px/1 var(--mono);color:var(--watch);background:none;border:1px solid var(--watch-edge);border-radius:0;padding:3px 7px}
 .unread>summary .chev{margin-left:auto;width:7px;height:7px;flex:none;
   border-right:1.5px solid var(--dim);border-bottom:1.5px solid var(--dim);transform:rotate(-45deg);transition:transform .15s}
 .unread[open]>summary .chev{transform:rotate(45deg)}
-.unread-body{padding:0 18px 16px}
+.unread-body{padding:0 16px 16px}
 .unread-body .what{margin:0 0 10px;color:var(--dim);font-size:12.5px;line-height:1.5}
 .unread ul{margin:0;padding-left:17px;display:grid;gap:6px;color:var(--muted);font-size:13px;line-height:1.5}
 .unread li::marker{color:var(--dim)}
@@ -389,34 +403,36 @@ body.answered .chips{display:none}
 .tiles{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}
 /* Inside the verdict block: no second border, no second background, just
    dividers. Four boxes inside a box is a frame around a frame. */
-.verdict .tiles{gap:0;border-top:1px solid var(--line);background:rgba(0,0,0,.18)}
-.verdict .tiles .tile{border:0;border-left:1px solid var(--line);border-radius:0;background:none;padding:13px 18px}
+.verdict .tiles{gap:0;border-top:1px solid var(--line);background:none}
+.verdict .tiles .tile{border:0;border-left:1px solid var(--line);border-radius:0;background:none;padding:14px 16px}
 .verdict .tiles .tile:first-child{border-left:0}
-.verdict .tiles .tile .v{font-size:27px;margin-top:6px}
-.verdict .tiles .tile .s{margin-top:5px}
+.verdict .tiles .tile .v{font-size:24px;margin-top:7px}
+.verdict .tiles .tile .s{margin-top:6px}
 .tile{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:16px;min-width:0}
-.tile .l{font:600 10px var(--mono);letter-spacing:.13em;text-transform:uppercase;color:var(--dim)}
-.tile .v{font:900 36px/1 var(--display);letter-spacing:.02em;margin-top:10px;font-variant-numeric:tabular-nums;word-break:break-word}
+.tile .l{font:400 10px var(--mono);letter-spacing:.16em;text-transform:uppercase;color:var(--dimmer)}
+.tile .v{font:700 30px/1 var(--display);letter-spacing:-.02em;margin-top:10px;font-variant-numeric:tabular-nums;word-break:break-word;color:var(--text)}
 .tile .v.open{color:var(--watch)}.tile .v.closed{color:var(--ok)}.tile .v.bad{color:var(--stop)}
 .tile .s{color:var(--muted);font-size:12px;margin-top:7px;line-height:1.45}
 @media (max-width:820px){.tiles{grid-template-columns:repeat(2,minmax(0,1fr))}}
 
 /* ---- deep sections: the terminal --------------------------- */
 .stack{display:grid;gap:10px}
-details.sec,.sec{background:var(--surface);border:1px solid var(--line);border-radius:var(--r-lg);min-width:0}
+details.sec,.sec{background:var(--surface);border:0;border-top:1px solid var(--line);border-radius:0;min-width:0}
 details.sec{padding:0}
-.sec{padding:20px 22px}
-details.sec>summary{list-style:none;cursor:pointer;padding:12px 18px;display:flex;align-items:center;gap:12px;border-radius:var(--r-lg)}
+.sec{padding:16px}
+details.sec>summary{list-style:none;cursor:pointer;padding:12px 16px;display:flex;align-items:center;gap:12px;border-radius:0}
 details.sec>summary::-webkit-details-marker{display:none}
 details.sec>summary:hover{background:var(--surface-2)}
+details.sec[open]>summary{background:var(--surface-2);border-bottom:1px solid var(--line)}
 details.sec>summary h2{margin:0}
 details.sec>summary .chev{margin-left:auto;width:7px;height:7px;flex:none;
   border-right:1.5px solid var(--dim);border-bottom:1.5px solid var(--dim);transform:rotate(-45deg);transition:transform .15s}
 details.sec[open]>summary .chev{transform:rotate(45deg)}
 details.sec>.body .what{margin:0 0 14px;color:var(--dim);font-size:12.5px;line-height:1.5;max-width:70ch}
 details.sec>summary:focus-visible{outline:2px solid var(--brass-2)}
-details.sec>.body{padding:0 18px 18px}
-.sec h2{font:600 11px/1 var(--mono);letter-spacing:.15em;text-transform:uppercase;color:var(--brass);margin:0 0 10px}
+details.sec>.body{padding:16px}
+.sec h2{font:500 11px/1 var(--mono);letter-spacing:.16em;text-transform:uppercase;color:var(--dim);margin:0}
+details.sec>summary:hover h2{color:var(--brass)}
 .sec.wide{grid-column:1/-1}
 .grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}
 @media (max-width:820px){.grid{grid-template-columns:1fr}}

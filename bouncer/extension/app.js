@@ -7321,9 +7321,19 @@
     const v = verdictOf(opts.notes, stage);
     const stampClass = opts.stamp === "ON THE LIST" ? "yes" : opts.stamp === "NOT A LAUNCH" ? "mid" : "no";
     const pending = stage === "done" ? "" : `<span class="vpend">${esc2(opts.stillReading ?? STILL_READING[stage])}</span>`;
+    const findings = opts.notes.filter((n) => topicOf(n.code) !== "unread").length;
+    const unread = opts.notes.length - findings;
+    const counts = [
+      findings ? `${findings} finding${findings === 1 ? "" : "s"}` : "nothing to flag",
+      unread ? `${unread} unreadable` : ""
+    ].filter(Boolean).join("<br>");
     return `<section class="verdict v-${v.kind}"${stage === "done" ? "" : ' data-pending="1"'}>
     <div class="vtop">
-      <div class="vword" aria-label="Verdict">${v.word}</div>
+      <div class="vcell">
+        <div class="vlevel">VERDICT</div>
+        <div class="vword" aria-label="Verdict">${v.word}</div>
+        <div class="vcounts">${counts}</div>
+      </div>
       <div class="vsay">
         <div class="vwho">
           <span class="vsym">${opts.sym}</span>
@@ -7353,9 +7363,8 @@
     const mine = notes.filter((n) => topicOf(n.code) !== "unread").map((n, i) => ({ n, i, topic: topicOf(n.code) })).sort((a, b) => RANKED[a.n.level] - RANKED[b.n.level] || TOPIC_ORDER.indexOf(a.topic) - TOPIC_ORDER.indexOf(b.topic) || a.i - b.i);
     if (!mine.length) return "";
     const row = (x) => `<li class="find lv-${x.n.level}">
-    <span class="find-dot" aria-hidden="true"></span>
-    <span class="find-topic">${esc2(TOPIC_TAG[x.topic] ?? x.topic)}</span>
-    <span class="find-text">${glossed(x.n.text)}</span>
+    <span class="find-level">${x.n.level.toUpperCase()}</span>
+    <span class="find-text"><span class="find-topic">[${esc2(TOPIC_TAG[x.topic] ?? x.topic)}]</span> ${glossed(x.n.text)}</span>
   </li>`;
     const loud = mine.filter((x) => x.n.level !== "info");
     const quiet = mine.filter((x) => x.n.level === "info");
