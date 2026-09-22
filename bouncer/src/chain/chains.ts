@@ -300,3 +300,52 @@ export function explorerAddress(chain: ChainConfig, address: string): string | n
   if (chain.explorerUrl) return chain.family === "solana" ? `${chain.explorerUrl}/token/${address}` : `${chain.explorerUrl}/address/${address}`;
   return null;
 }
+
+/**
+ * WHAT CAN BOUNCER ACTUALLY DO ON THIS CHAIN?
+ *
+ * Two features were offered on every chain and worked on some of them.
+ * Picking Solana and then "Tonight's board" produced `Method not found`,
+ * because the board reads a launchpad's event log with eth_getLogs and
+ * Solana has neither. So did "Plan a launch". A raw JSON-RPC error is the
+ * worst possible answer: it reads as "BOUNCER is broken" when the truth is
+ * "this question does not exist here", and the reader cannot tell which.
+ *
+ * DERIVED, never declared. A hand-kept table of which chain supports what
+ * is a second source of truth, and the moment a chain is added or a
+ * factory address is published the table is wrong and nothing says so.
+ * These read the config that already decides the answer.
+ */
+export type Feature = "door" | "board" | "plan" | "wallet" | "tx" | "dev";
+
+/** Why a feature is not available here, or null when it is. */
+export function featureBlocker(chain: ChainConfig, feature: Feature): string | null {
+  switch (feature) {
+    case "door":
+      // The whole point of the tool. Every chain BOUNCER lists can be read
+      // for a token, whichever family it belongs to.
+      return null;
+    case "board":
+    case "plan":
+      // Both walk a launchpad factory's events with eth_getLogs.
+      if (chain.family !== "evm") {
+        return `${chain.name} is not an EVM chain, and this reads a launchpad factory's event log — there is no equivalent to walk here`;
+      }
+      if (!chain.factory || !chain.launchpad) {
+        return `BOUNCER knows no launchpad on ${chain.name}, so there is no factory whose launches it could list`;
+      }
+      return null;
+    case "wallet":
+    case "tx":
+    case "dev":
+      if (chain.family !== "evm") {
+        return `${chain.name} is not an EVM chain, and this read is built on EVM logs and receipts`;
+      }
+      return null;
+  }
+}
+
+/** Shorthand for the common case. */
+export function canDo(chain: ChainConfig, feature: Feature): boolean {
+  return featureBlocker(chain, feature) === null;
+}

@@ -1153,6 +1153,31 @@
     if (!found) throw new Error(`unknown chain ${key}; known: ${Object.keys(CHAINS).join(", ")}`);
     return found;
   }
+  function featureBlocker(chain2, feature) {
+    switch (feature) {
+      case "door":
+        return null;
+      case "board":
+      case "plan":
+        if (chain2.family !== "evm") {
+          return `${chain2.name} is not an EVM chain, and this reads a launchpad factory's event log \u2014 there is no equivalent to walk here`;
+        }
+        if (!chain2.factory || !chain2.launchpad) {
+          return `BOUNCER knows no launchpad on ${chain2.name}, so there is no factory whose launches it could list`;
+        }
+        return null;
+      case "wallet":
+      case "tx":
+      case "dev":
+        if (chain2.family !== "evm") {
+          return `${chain2.name} is not an EVM chain, and this read is built on EVM logs and receipts`;
+        }
+        return null;
+    }
+  }
+  function canDo(chain2, feature) {
+    return featureBlocker(chain2, feature) === null;
+  }
 
   // src/chain/pons.ts
   var ROBINHOOD_CHAIN_ID = 4663;
@@ -7330,7 +7355,9 @@
     const more = document.createElement("div");
     more.className = "more";
     const c = mode === "demo" ? "demo" : chainSelect.value === "auto" ? chainOrNull()?.key ?? "auto" : chain().key;
-    more.innerHTML = `<span>More:</span><a href="#/board?chain=${c}">Tonight's board</a><a href="#/plan?tax=100&chain=${c}">Plan a launch</a><span>Paste "token wallet" (two addresses) to see one wallet's bag.</span>`;
+    const here = mode === "demo" ? CHAINS.robinhood : chainOrNull();
+    const offer = (feature, href, label) => !here || canDo(here, feature) ? `<a href="${href}">${label}</a>` : "";
+    more.innerHTML = `<span>More:</span>${offer("board", `#/board?chain=${c}`, "Tonight's board")}${offer("plan", `#/plan?tax=100&chain=${c}`, "Plan a launch")}<span>Paste "token wallet" (two addresses) to see one wallet's bag.</span>`;
     chips.appendChild(more);
   }
   new MutationObserver(() => {
@@ -7367,6 +7394,20 @@
     const network = /fetch|network|failed|CORS|load|abort/i.test(message) && mode === "live";
     status.textContent = "";
     out.innerHTML = `<div class="error"><strong>Could not read the chain.</strong><p>${esc2(message)}</p>${SANDBOXED ? `<p>This is the claude.ai preview: the sandbox blocks every request a page makes, so no RPC can be reached from here, whatever its settings. Real tokens work on the <a href="${HOSTED}">hosted site</a>, in the <a href="https://github.com/Kepochnik/bouncer#browser-extension">Chrome extension</a> (it can call any RPC), or in the CLI: <code>npx bouncer door ${esc2(input)} --chain ${esc2(chain().key)}</code>.</p>` : network ? `<p>The browser could not reach the RPC. Public endpoints often refuse requests from websites. Three ways out: deploy the read-only <a href="https://github.com/Kepochnik/bouncer/tree/main/proxy">proxy</a> (3 minutes, free) and paste its URL under Settings \u2192 Proxy URL; the <a href="https://github.com/Kepochnik/bouncer#browser-extension">Chrome extension</a> (it can call any RPC); or the CLI: <code>npx bouncer door ${esc2(input)} --chain ${esc2(chain().key)}</code>. Demo mode works offline.</p>` : ""}</div>`;
+  }
+  function refuseFeature(feature, title) {
+    const c = mode === "demo" ? CHAINS.robinhood : chainOrNull();
+    if (!c) return false;
+    const why = featureBlocker(c, feature);
+    if (!why) return false;
+    status.textContent = "";
+    go.disabled = false;
+    out.innerHTML = `<div class="error"><strong>${esc2(title)} is not something BOUNCER can read on ${esc2(c.name)}.</strong>
+    <p>${esc2(why)}.</p>
+    <p>What does work here: paste a token address and BOUNCER reads it${canDo(c, "wallet") ? ", or paste a token and a wallet to see one wallet's bag" : ""}.${Object.values(CHAINS).some((x) => canDo(x, feature)) ? ` ${esc2(title)} works on ${esc2(
+      Object.values(CHAINS).filter((x) => canDo(x, feature)).map((x) => x.name).join(", ")
+    )}.` : ""}</p></div>`;
+    return true;
   }
   function done(text) {
     go.disabled = false;
@@ -7570,6 +7611,7 @@
     go.disabled = false;
   }
   async function runDev(address) {
+    if (refuseFeature("dev", "The deployer's history")) return;
     if (!ADDR.test(address)) return bad("Paste the deployer's address.");
     busy("reading the deployer's launches\u2026");
     try {
@@ -7586,6 +7628,7 @@
     }
   }
   async function runWallet(token, wallet) {
+    if (refuseFeature("wallet", "A wallet's bag")) return;
     if (!ADDR.test(token) || !ADDR.test(wallet)) return bad("Paste the token address and the wallet address.");
     busy("reading the wallet's trades\u2026");
     try {
@@ -7604,6 +7647,7 @@
     }
   }
   async function runTx(hash) {
+    if (refuseFeature("tx", "A transaction receipt")) return;
     if (!hash.startsWith("0x")) return bad("Paste a transaction hash.");
     busy("decoding the trade\u2026");
     try {
@@ -7617,6 +7661,7 @@
     }
   }
   async function runPlan(taxBps, params) {
+    if (refuseFeature("plan", "Plan a launch")) return;
     busy("reading the factory's terms\u2026");
     try {
       const rpc = rpcFor();
@@ -7640,6 +7685,7 @@
     }
   }
   async function runBoard(hours) {
+    if (refuseFeature("board", "Tonight's board")) return;
     busy("reading the window\u2026");
     try {
       const rpc = rpcFor();

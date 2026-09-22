@@ -385,6 +385,33 @@ await walk("a clean-sounding word never sits over an unread check", async (page)
     if (!["STOP", "WATCH", "CLEAR", "INCOMPLETE"].includes(word)) throw new Error(`unknown verdict "${word}"`);
   }
 });
+await walk("a feature a chain cannot serve says why, not Method not found", async (page) => {
+  // Picking Solana and then "Tonight's board" answered `Method not found`
+  // inside "Could not read the chain" — which says BOUNCER is broken, when
+  // the truth is that the board walks a launchpad factory's event log and
+  // Solana has neither. A reader cannot tell those two apart.
+  await page.goto(`${url}#/board?chain=solana`, { waitUntil: "load" });
+  await page.waitForSelector(".error, .slip", { timeout: 20_000 });
+  const said = await page.$eval(".error, .slip", (el) => el.textContent.replace(/\s+/g, " ").trim());
+  if (/method not found|-32601|eth_getlogs/i.test(said)) throw new Error(`still an RPC error: ${said.slice(0, 160)}`);
+  if (!/not an EVM chain|no launchpad/i.test(said)) throw new Error(`the refusal does not say why: ${said.slice(0, 160)}`);
+  if (!/Solana/.test(said)) throw new Error("the refusal does not name the chain it is about");
+
+  // And the link is not offered in the first place, so nobody has to
+  // discover the refusal by pressing it.
+  await page.goto(`${url}#/`, { waitUntil: "load" });
+  await page.selectOption("#chain", "solana");
+  await page.waitForTimeout(800);
+  const links = await page.$$eval(".more a", (els) => els.map((e) => e.textContent.trim()));
+  if (links.some((l) => /board|plan a launch/i.test(l))) throw new Error(`Solana is still offered ${JSON.stringify(links)}`);
+
+  // But a chain that CAN serve them still gets them: a guard that hides
+  // everything everywhere passes the check above and breaks the product.
+  await page.selectOption("#chain", "robinhood");
+  await page.waitForTimeout(800);
+  const ok = await page.$$eval(".more a", (els) => els.map((e) => e.textContent.trim()));
+  if (!ok.some((l) => /board/i.test(l))) throw new Error(`Robinhood Chain lost its board too: ${JSON.stringify(ok)}`);
+});
 await browser.close();
 if (failures) {
   console.error(`\nflows: ${failures} journey${failures === 1 ? "" : "s"} broken.`);

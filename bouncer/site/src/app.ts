@@ -11,7 +11,7 @@ import { BlockscoutClient } from "../../src/chain/blockscout.js";
 import { TOPIC_TAG,TOPIC_BLURB, TOPIC_ORDER, TOPIC_QUESTION, topicOf } from "../../src/bouncer/topics.js";
 import { doorCoverage, splCoverage, qualify, type Coverage } from "../../src/bouncer/coverage.js";
 import { missingVenues, tradeVenues } from "../../src/bouncer/trade.js";
-import { CHAINS, chainByKey, type ChainConfig } from "../../src/chain/chains.js";
+import { CHAINS, canDo, chainByKey, featureBlocker, type ChainConfig, type Feature } from "../../src/chain/chains.js";
 import { PHASE_LABEL } from "../../src/chain/pons.js";
 import { PonsReader } from "../../src/chain/reader.js";
 import { RpcClient, type BlockHeader } from "../../src/chain/rpc.js";
@@ -385,7 +385,19 @@ function renderChips(): void {
   // With "auto" and no search run yet there is no chain to name, and
   // writing one into the link would be picking for the reader.
   const c = mode === "demo" ? "demo" : chainSelect.value === "auto" ? (chainOrNull()?.key ?? "auto") : chain().key;
-  more.innerHTML = `<span>More:</span><a href="#/board?chain=${c}">Tonight's board</a><a href="#/plan?tax=100&chain=${c}">Plan a launch</a><span>Paste "token wallet" (two addresses) to see one wallet's bag.</span>`;
+  // Only the features this chain can actually serve.
+  //
+  // Both of these walk a launchpad factory's event log with eth_getLogs.
+  // Offered on Solana they answered `Method not found`, which reads as
+  // "BOUNCER is broken" when the truth is "this question does not exist
+  // here" — and the reader has no way to tell those apart. A link that
+  // cannot work is worse than no link; when the chain is not yet known
+  // they are offered, because the chain the search settles on may well
+  // support them and hiding them pre-emptively is its own wrong guess.
+  const here = mode === "demo" ? CHAINS.robinhood : chainOrNull();
+  const offer = (feature: Feature, href: string, label: string) =>
+    !here || canDo(here, feature) ? `<a href="${href}">${label}</a>` : "";
+  more.innerHTML = `<span>More:</span>${offer("board", `#/board?chain=${c}`, "Tonight's board")}${offer("plan", `#/plan?tax=100&chain=${c}`, "Plan a launch")}<span>Paste "token wallet" (two addresses) to see one wallet's bag.</span>`;
   chips.appendChild(more);
 }
 
@@ -443,6 +455,42 @@ function failed(error: unknown, input: string): void {
       ? `<p>This is the claude.ai preview: the sandbox blocks every request a page makes, so no RPC can be reached from here, whatever its settings. Real tokens work on the <a href="${HOSTED}">hosted site</a>, in the <a href="https://github.com/Kepochnik/bouncer#browser-extension">Chrome extension</a> (it can call any RPC), or in the CLI: <code>npx bouncer door ${esc(input)} --chain ${esc(chain().key)}</code>.</p>`
       : network ? `<p>The browser could not reach the RPC. Public endpoints often refuse requests from websites. Three ways out: deploy the read-only <a href="https://github.com/Kepochnik/bouncer/tree/main/proxy">proxy</a> (3 minutes, free) and paste its URL under Settings → Proxy URL; the <a href="https://github.com/Kepochnik/bouncer#browser-extension">Chrome extension</a> (it can call any RPC); or the CLI: <code>npx bouncer door ${esc(input)} --chain ${esc(chain().key)}</code>. Demo mode works offline.</p>` : ""
   }</div>`;
+}
+
+/**
+ * A feature this chain cannot serve, answered as a fact rather than a fault.
+ *
+ * Reached by a pasted link, a bookmark, or a back button — the missing
+ * link in the More strip stops it being offered, not being reached. What
+ * came back before was `Method not found` inside "Could not read the
+ * chain", which says BOUNCER is broken. It is not: the board walks a
+ * launchpad factory's event log and Solana has neither, so the honest
+ * answer names the reason and offers the thing that does work here.
+ *
+ * Returns true when it handled the route, so the caller stops.
+ */
+function refuseFeature(feature: Feature, title: string): boolean {
+  const c = mode === "demo" ? CHAINS.robinhood : chainOrNull();
+  if (!c) return false;
+  const why = featureBlocker(c, feature);
+  if (!why) return false;
+  status.textContent = "";
+  go.disabled = false;
+  out.innerHTML = `<div class="error"><strong>${esc(title)} is not something BOUNCER can read on ${esc(c.name)}.</strong>
+    <p>${esc(why)}.</p>
+    <p>What does work here: paste a token address and BOUNCER reads it${
+      canDo(c, "wallet") ? ", or paste a token and a wallet to see one wallet's bag" : ""
+    }.${
+      Object.values(CHAINS).some((x) => canDo(x, feature))
+        ? ` ${esc(title)} works on ${esc(
+            Object.values(CHAINS)
+              .filter((x) => canDo(x, feature))
+              .map((x) => x.name)
+              .join(", "),
+          )}.`
+        : ""
+    }</p></div>`;
+  return true;
 }
 
 function done(text: string): void {
@@ -836,6 +884,7 @@ async function runDoor(address: string): Promise<void> {
 }
 
 async function runDev(address: string): Promise<void> {
+  if (refuseFeature("dev", "The deployer's history")) return;
   if (!ADDR.test(address)) return bad("Paste the deployer's address.");
   busy("reading the deployer's launches…");
   try {
@@ -853,6 +902,7 @@ async function runDev(address: string): Promise<void> {
 }
 
 async function runWallet(token: string, wallet: string): Promise<void> {
+  if (refuseFeature("wallet", "A wallet's bag")) return;
   if (!ADDR.test(token) || !ADDR.test(wallet)) return bad("Paste the token address and the wallet address.");
   busy("reading the wallet's trades…");
   try {
@@ -872,6 +922,7 @@ async function runWallet(token: string, wallet: string): Promise<void> {
 }
 
 async function runTx(hash: string): Promise<void> {
+  if (refuseFeature("tx", "A transaction receipt")) return;
   if (!hash.startsWith("0x")) return bad("Paste a transaction hash.");
   busy("decoding the trade…");
   try {
@@ -886,6 +937,7 @@ async function runTx(hash: string): Promise<void> {
 }
 
 async function runPlan(taxBps: number, params: URLSearchParams): Promise<void> {
+  if (refuseFeature("plan", "Plan a launch")) return;
   busy("reading the factory's terms…");
   try {
     const rpc = rpcFor();
@@ -910,6 +962,7 @@ async function runPlan(taxBps: number, params: URLSearchParams): Promise<void> {
 }
 
 async function runBoard(hours: number): Promise<void> {
+  if (refuseFeature("board", "Tonight's board")) return;
   busy("reading the window…");
   try {
     const rpc = rpcFor();
