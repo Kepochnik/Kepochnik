@@ -345,9 +345,9 @@
       const width = proven ? Math.min(lanes, Math.ceil(remaining / chunk), Math.max(1, maxRequests - requests)) : 1;
       const spans = [];
       for (let i = 0; i < width; i++) {
-        const start = from + i * chunk;
-        if (start > request.toBlock) break;
-        spans.push({ fromBlock: start, toBlock: Math.min(start + chunk - 1, request.toBlock) });
+        const start2 = from + i * chunk;
+        if (start2 > request.toBlock) break;
+        spans.push({ fromBlock: start2, toBlock: Math.min(start2 + chunk - 1, request.toBlock) });
       }
       requests += spans.length;
       const answers = await Promise.all(
@@ -2176,11 +2176,11 @@
     while (offset + 4 <= tlv.length) {
       const type = view2.getUint16(offset, true);
       const length = view2.getUint16(offset + 2, true);
-      const start = offset + 4;
-      if (type === 0 || start + length > tlv.length) break;
-      const value = tlv.slice(start, start + length);
+      const start2 = offset + 4;
+      if (type === 0 || start2 + length > tlv.length) break;
+      const value = tlv.slice(start2, start2 + length);
       out2.push(parseExtension(type, value));
-      offset = start + length;
+      offset = start2 + length;
     }
     return out2;
   }
@@ -2378,6 +2378,29 @@
     if (search.hits.length === 1) return { kind: "one", chain: search.hits[0].chain, search };
     if (search.hits.length > 1) return { kind: "several", search };
     return { kind: "none", search };
+  }
+  async function searchTicker(query, clientFor, chains, deadlineMs = 4e3) {
+    const late = () => new Promise((resolve) => {
+      const timer = setTimeout(() => resolve(null), deadlineMs);
+      timer.unref?.();
+    });
+    const results = await Promise.all(
+      chains.map(async (chain2) => {
+        const client = clientFor(chain2);
+        if (!client) return { chain: chain2, hits: null, reason: "no explorer BOUNCER can search on this chain" };
+        try {
+          const found = await Promise.race([client.searchTokens(query), late()]);
+          if (found === null) return { chain: chain2, hits: null, reason: `the explorer did not answer within ${deadlineMs} ms` };
+          return { chain: chain2, hits: found.map((h) => ({ ...h, chain: chain2 })), reason: null };
+        } catch (error) {
+          return { chain: chain2, hits: null, reason: error instanceof Error ? error.message : String(error) };
+        }
+      })
+    );
+    return {
+      hits: results.flatMap((r) => r.hits ?? []),
+      unsearched: results.filter((r) => r.hits === null).map((r) => ({ chain: r.chain, reason: r.reason }))
+    };
   }
 
   // src/chain/solanaDerived.ts
@@ -3497,14 +3520,14 @@
     if (bytes.length < 4) return 0;
     const length = bytes[bytes.length - 2] << 8 | bytes[bytes.length - 1];
     if (length === 0 || length + 2 > bytes.length) return 0;
-    const start = bytes.length - 2 - length;
-    const first = bytes[start];
+    const start2 = bytes.length - 2 - length;
+    const first = bytes[start2];
     if (first < 161 || first > 163) return 0;
-    const keyHeader = bytes[start + 1];
+    const keyHeader = bytes[start2 + 1];
     if (keyHeader === void 0 || keyHeader < 97 || keyHeader > 111) return 0;
     const keyLength = keyHeader - 96;
     for (let i = 0; i < keyLength; i++) {
-      const c = bytes[start + 2 + i];
+      const c = bytes[start2 + 2 + i];
       if (c === void 0 || !(c >= 97 && c <= 122 || c >= 48 && c <= 57)) return 0;
     }
     return length + 2;
@@ -7019,6 +7042,11 @@
     if (mode === "demo") return demoRpc(memo);
     return rpcForChain(chain(), memo);
   }
+  function blockscoutForChain(c, memo = false) {
+    if (!c.blockscout) return null;
+    const proxy = proxyBase();
+    return new BlockscoutClient({ baseUrl: proxy ? `${proxy}/api/${c.key}` : c.blockscout, memo });
+  }
   function blockscoutFor(memo = false) {
     if (mode === "demo") return new BlockscoutClient({ baseUrl: DEMO_BLOCKSCOUT, fetchImpl: demoBlockscoutFetch(), memo });
     const c = chain();
@@ -7122,40 +7150,38 @@
   var SLOW_SECTIONS = { skipLiquidity: true, skipDev: true, skipRoom: true, skipCrew: true, skipLookalikes: true };
   var OPENING_SECTIONS = { ...SLOW_SECTIONS, skipMarket: true, skipExplorer: true, skipProbes: true, skipOwnerWallet: true };
   async function runSearch(query) {
-    const bs = blockscoutFor();
-    if (!bs) {
-      return bad(
-        `"${query}" is not an address, and ${chain().name} has no explorer BOUNCER can search. Paste the contract address: 0x followed by 40 hex characters.`
-      );
-    }
-    busy(`looking for "${query}" on ${chain().name}\u2026`);
-    let hits;
-    try {
-      hits = (await bs.searchTokens(query)).slice(0, 12);
-    } catch (error) {
-      return bad(`Could not search ${chain().name} for "${esc2(query)}": ${error instanceof Error ? error.message : String(error)}. Paste the contract address instead.`);
-    }
+    const pinned = chainSelect.value === "auto" ? null : chain();
+    const asked = pinned ? [pinned] : Object.values(CHAINS);
+    busy(pinned ? `looking for "${query}" on ${pinned.name}\u2026` : `looking for "${query}" on every chain with an explorer\u2026`);
+    const found = await searchTicker(query, (c) => blockscoutForChain(c), asked);
+    const hits = found.hits.slice(0, 18);
     status.textContent = "";
     if (!hits.length) {
-      out.innerHTML = `<div class="error"><strong>Nothing on ${esc2(chain().name)} called "${esc2(query)}".</strong>
-      <p>The explorer's index has no token by that name here. It may be on another chain \u2014 try the chain picker \u2014 or too new to be indexed, in which case only its contract address will find it.</p></div>`;
+      const asked_ = asked.filter((c) => !found.unsearched.some((u) => u.chain.key === c.key));
+      out.innerHTML = `<div class="error"><strong>Nothing called "${esc2(query)}" on the chains BOUNCER could search.</strong>
+      <p>${asked_.length ? `Searched and found nothing: ${esc2(asked_.map((c) => c.name).join(", "))}.` : ""}
+      ${found.unsearched.length ? `<b>Not searched, so it could still be on one of these:</b> ${esc2(found.unsearched.map((u) => `${u.chain.name} (${u.reason})`).join("; "))}.` : ""}
+      A token too new to be indexed is only found by its contract address.</p></div>`;
       return;
     }
     const rows = hits.map(
-      (h) => `<li><button class="hit" type="button" data-go="${esc2(h.address)}">
+      (h) => `<li><button class="hit" type="button" data-go="${esc2(h.address)}" data-chain="${esc2(h.chain.key)}">
         <span class="hit-sym">${esc2(h.symbol || "\u2014")}</span>
+        <span class="hit-chain" style="color:${esc2(h.chain.tint)}">${chainMark(h.chain.key)}${esc2(h.chain.name)}</span>
         <span class="hit-name">${esc2(h.name || "no name")}</span>
         <span class="hit-addr mono">${esc2(h.address)}</span>
       </button></li>`
     ).join("");
+    const gaps = found.unsearched.length ? `<p class="buy-gap"><b>Not searched:</b> ${esc2(found.unsearched.map((u) => `${u.chain.name} (${u.reason})`).join("; "))}. A match there would not be in this list.</p>` : "";
     out.innerHTML = `<section class="found">
-    <h2>${hits.length} token${hits.length === 1 ? "" : "s"} on ${esc2(chain().name)} called something like "${esc2(query)}"</h2>
-    <p class="qblurb">BOUNCER will not pick for you. A ticker is not unique and anyone can deploy one \u2014 which is the whole reason this tool exists. Check the address against the one the team posted, then open it.</p>
+    <h2>${hits.length} token${hits.length === 1 ? "" : "s"} called something like "${esc2(query)}"</h2>
+    <p class="qblurb">BOUNCER will not pick for you. A ticker is not unique and anyone can deploy one \u2014 which is the whole reason this tool exists. Check the address and the chain against what the team posted, then open it.</p>
     <ul class="hits">${rows}</ul>
+    ${gaps}
   </section>`;
     for (const button of out.querySelectorAll("[data-go]")) {
       button.addEventListener("click", () => {
-        location.hash = `#/t/${button.dataset.go}?chain=${chain().key}`;
+        location.hash = `#/t/${button.dataset.go}?chain=${button.dataset.chain}`;
       });
     }
   }
@@ -8251,6 +8277,14 @@
   function routeChain() {
     return mode === "demo" ? "" : `?chain=${chain().key}`;
   }
+  function start(begin) {
+    doorRun++;
+    void begin().catch((error) => {
+      failed(error, q.value.trim());
+    }).finally(() => {
+      go.disabled = false;
+    });
+  }
   function route() {
     const raw = location.hash.replace(/^#/, "");
     const [path, query = ""] = raw.split("?");
@@ -8269,32 +8303,32 @@
       case "demo":
         setView("door");
         q.value = parts[1] ?? "";
-        void runDoor(parts[1] ?? "");
+        start(() => runDoor(parts[1] ?? ""));
         break;
       case "dev":
         setView("dev");
         q.value = parts[1] ?? "";
-        void runDev(parts[1] ?? "");
+        start(() => runDev(parts[1] ?? ""));
         break;
       case "wallet":
         setView("wallet");
         q.value = `${parts[1] ?? ""} ${parts[2] ?? ""}`.trim();
-        void runWallet(parts[1] ?? "", parts[2] ?? "");
+        start(() => runWallet(parts[1] ?? "", parts[2] ?? ""));
         break;
       case "tx":
         setView("tx");
         q.value = parts[1] ?? "";
-        void runTx(parts[1] ?? "");
+        start(() => runTx(parts[1] ?? ""));
         break;
       case "plan":
         setView("plan");
         q.value = params.get("tax") ?? "100";
-        void runPlan(Number(params.get("tax") ?? 100), params);
+        start(() => runPlan(Number(params.get("tax") ?? 100), params));
         break;
       case "board":
         setView("board");
         q.value = params.get("hours") ?? "1";
-        void runBoard(Number(params.get("hours") ?? 1) || 1);
+        start(() => runBoard(Number(params.get("hours") ?? 1) || 1));
         break;
     }
   }
@@ -8336,6 +8370,13 @@
       paintSelectedChain();
       if (mode === "live") setMode("live", true);
       renderChips();
+      const showing = q.value.trim();
+      if (view === "door" && showing && out.innerHTML.trim()) {
+        const to = chainSelect.value === "auto" ? "auto" : chainSelect.value;
+        const next = `#/t/${isSolanaAddress(showing) && !ADDR.test(showing) ? showing : showing.toLowerCase()}?chain=${to}`;
+        if (location.hash !== next) location.hash = next;
+        else void route();
+      }
     });
     settingsToggle.addEventListener("click", () => {
       const open = !settings.classList.contains("open");

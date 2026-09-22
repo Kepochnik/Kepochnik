@@ -192,3 +192,67 @@ export function readChainSearch(search: ChainSearch): ChainVerdict {
   if (search.hits.length > 1) return { kind: "several", search };
   return { kind: "none", search };
 }
+
+
+/** The one method a ticker search needs; BlockscoutClient satisfies it. */
+export interface TokenSearcher {
+  searchTokens(query: string): Promise<{ address: string; name: string; symbol: string }[]>;
+}
+
+export interface TickerHit {
+  chain: ChainConfig;
+  address: string;
+  name: string;
+  symbol: string;
+}
+
+export interface TickerSearch {
+  hits: TickerHit[];
+  /** Chains whose explorer refused, timed out, or does not exist. Never counted as "nothing there". */
+  unsearched: { chain: ChainConfig; reason: string }[];
+}
+
+/**
+ * A ticker, across every chain that has an explorer to ask.
+ *
+ * It used to search exactly one: whichever the menu happened to be on,
+ * which under "Find the chain" means the fallback — so typing BONK
+ * returned Robinhood Chain results and nothing else, while the token
+ * itself sat on Solana. A search that silently covers one network out of
+ * six is worse than no search, because the empty answer reads as "this
+ * does not exist".
+ *
+ * Same two rules as whichChains: a chain that could not be asked is
+ * reported rather than counted as empty, and nothing is auto-opened —
+ * a ticker is not an identity, which is the whole reason this tool
+ * exists.
+ */
+export async function searchTicker(
+  query: string,
+  clientFor: (chain: ChainConfig) => TokenSearcher | null,
+  chains: ChainConfig[],
+  deadlineMs = 4_000,
+): Promise<TickerSearch> {
+  const late = (): Promise<null> =>
+    new Promise<null>((resolve) => {
+      const timer = setTimeout(() => resolve(null), deadlineMs) as unknown as { unref?: () => void };
+      timer.unref?.();
+    });
+  const results = await Promise.all(
+    chains.map(async (chain): Promise<{ chain: ChainConfig; hits: TickerHit[] | null; reason: string | null }> => {
+      const client = clientFor(chain);
+      if (!client) return { chain, hits: null, reason: "no explorer BOUNCER can search on this chain" };
+      try {
+        const found = await Promise.race([client.searchTokens(query), late()]);
+        if (found === null) return { chain, hits: null, reason: `the explorer did not answer within ${deadlineMs} ms` };
+        return { chain, hits: found.map((h) => ({ ...h, chain })), reason: null };
+      } catch (error) {
+        return { chain, hits: null, reason: error instanceof Error ? error.message : String(error) };
+      }
+    }),
+  );
+  return {
+    hits: results.flatMap((r) => r.hits ?? []),
+    unsearched: results.filter((r) => r.hits === null).map((r) => ({ chain: r.chain, reason: r.reason! })),
+  };
+}

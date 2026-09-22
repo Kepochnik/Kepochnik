@@ -64,14 +64,23 @@ const browser = await chromium.launch({ executablePath });
 // Writing an image to the clipboard needs the permission granted up front;
 // without it the page falls back to a download and the walk below would be
 // testing the fallback rather than the thing.
-const context = await browser.newContext({ viewport: { width: 1280, height: 900 }, permissions: ["clipboard-read", "clipboard-write"] });
+const CONTEXT = { viewport: { width: 1280, height: 900 }, permissions: ["clipboard-read", "clipboard-write"] };
 let failures = 0;
 const fail = (what) => {
   failures++;
   console.error(`::error::flows: ${what}`);
 };
 
+/**
+ * A journey is a person arriving at the page, so each gets its own context.
+ *
+ * They shared one, which means they shared localStorage: a walk that picks
+ * a chain writes that choice, and the next walk starts on it. A journey
+ * that passes or fails depending on which journey ran before it is not a
+ * journey, and this bit me the first time a walk touched the chain menu.
+ */
 async function walk(name, fn) {
+  const context = await browser.newContext(CONTEXT);
   const page = await context.newPage();
   const errors = [];
   page.on("pageerror", (e) => errors.push(String(e)));
@@ -83,6 +92,7 @@ async function walk(name, fn) {
     fail(`${name}: ${error instanceof Error ? error.message : String(error)}`);
   } finally {
     await page.close();
+    await context.close();
   }
 }
 
@@ -142,6 +152,48 @@ await walk("press Copy card, get a PNG", async (page) => {
   await page.waitForSelector("#card svg", { timeout: 5_000 });
   const card = await page.$eval("#card svg", (el) => el.textContent ?? "");
   if (!card.includes(ticker)) throw new Error(`the card does not name ${ticker}; it says "${card.slice(0, 120).replace(/\s+/g, " ")}"`);
+});
+
+await walk("changing the chain does not leave the old report", async (page) => {
+  // The header said one chain and the report was read from another: pick
+  // Solana while a Robinhood slip is open and the slip stayed, every
+  // number in it from the other chain, under a header naming the new one.
+  await page.goto(`${url}#/demo/0x0000000000000000000000000000000000f1a1a1`, { waitUntil: "load" });
+  await page.waitForFunction(() => {
+    const w = document.querySelector(".vword")?.textContent?.trim();
+    return Boolean(w) && w !== "READING";
+  }, null, { timeout: 30_000 });
+  const before = await page.$eval(".vword", (el) => el.textContent.trim());
+
+  await page.selectOption("#chain", "solana");
+  await page.waitForTimeout(2_500);
+  const menu = await page.$eval("#chain", (el) => el.value);
+  if (menu !== "solana") throw new Error(`the menu did not take the change: "${menu}"`);
+  const label = await page.$eval("#picker-name", (el) => el.textContent.trim());
+  if (!/solana/i.test(label)) throw new Error(`the header still reads "${label}"`);
+  const word = await page.$eval(".vword", (el) => el.textContent.trim()).catch(() => null);
+  if (word !== null && word === before) throw new Error(`the ${before} report from the old chain is still on screen under a Solana header`);
+});
+
+await walk("the check button always comes back", async (page) => {
+  // busy() disables it and every view was trusted to re-enable it. Search
+  // forgot on both of its successful exits — candidates found, or none
+  // found — and the control stayed dead until reload. An audit found it;
+  // nothing in the code guaranteed it.
+  //
+  // Walked over the outcomes that can happen with no network: a ticker
+  // with no explorer to search, a malformed address, and an address whose
+  // chain search finds nothing. Each must end with the button usable.
+  await page.goto(url, { waitUntil: "load" });
+  await page.waitForTimeout(500);
+  const tries = ["bonk", "0xnothexatall", "0x6835dbf2d7d5852f84bf0a80de00cab3864f44b1"];
+  for (const input of tries) {
+    await page.fill("#q", input);
+    await page.click("#go");
+    await page.waitForTimeout(2_600);
+    const dead = await page.$eval("#go", (el) => el.disabled);
+    if (dead) throw new Error(`the button is still disabled after "${input}"`);
+  }
 });
 
 await walk("one chain does not capture the menu", async (page) => {

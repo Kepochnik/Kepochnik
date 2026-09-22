@@ -16,7 +16,7 @@ import { PonsReader } from "../../src/chain/reader.js";
 import { RpcClient, type BlockHeader } from "../../src/chain/rpc.js";
 import { SolanaRpc } from "../../src/chain/solana.js";
 import { isSolanaAddress } from "../../src/chain/base58.js";
-import { addressFamily, readChainSearch, searchableChains, whichChains, type ChainSearch } from "../../src/chain/whichChain.js";
+import { addressFamily, readChainSearch, searchTicker, searchableChains, whichChains, type ChainSearch } from "../../src/chain/whichChain.js";
 import { readSplDoor, type SplSlip } from "../../src/bouncer/spl.js";
 import { findBlockByTimestamp } from "../../src/chain/tape.js";
 import { doorCard, splCard } from "../../src/bouncer/card.js";
@@ -319,6 +319,12 @@ function rpcFor(memo = false): RpcClient {
  * ask the same four questions again — including, on Base, one that sat on
  * a timeout for the full six seconds and learned nothing.
  */
+function blockscoutForChain(c: ChainConfig, memo = false): BlockscoutClient | null {
+  if (!c.blockscout) return null;
+  const proxy = proxyBase();
+  return new BlockscoutClient({ baseUrl: proxy ? `${proxy}/api/${c.key}` : c.blockscout, memo });
+}
+
 function blockscoutFor(memo = false): BlockscoutClient | null {
   if (mode === "demo") return new BlockscoutClient({ baseUrl: DEMO_BLOCKSCOUT, fetchImpl: demoBlockscoutFetch(), memo });
   const c = chain();
@@ -519,42 +525,49 @@ const OPENING_SECTIONS = { ...SLOW_SECTIONS, skipMarket: true, skipExplorer: tru
  * question this tool exists to answer.
  */
 async function runSearch(query: string): Promise<void> {
-  const bs = blockscoutFor();
-  if (!bs) {
-    return bad(
-      `"${query}" is not an address, and ${chain().name} has no explorer BOUNCER can search. Paste the contract address: 0x followed by 40 hex characters.`,
-    );
-  }
-  busy(`looking for "${query}" on ${chain().name}…`);
-  let hits: { address: string; name: string; symbol: string }[];
-  try {
-    hits = (await bs.searchTokens(query)).slice(0, 12);
-  } catch (error) {
-    return bad(`Could not search ${chain().name} for "${esc(query)}": ${error instanceof Error ? error.message : String(error)}. Paste the contract address instead.`);
-  }
+  // Every chain with an explorer, not whichever one the menu fell back to.
+  //
+  // Under "Find the chain" this searched the fallback and nothing else, so
+  // typing BONK returned Robinhood Chain results while the token itself
+  // sat on Solana. A search that silently covers one network out of six is
+  // worse than none: the empty answer reads as "this does not exist".
+  const pinned = chainSelect.value === "auto" ? null : chain();
+  const asked = pinned ? [pinned] : Object.values(CHAINS);
+  busy(pinned ? `looking for "${query}" on ${pinned.name}…` : `looking for "${query}" on every chain with an explorer…`);
+  const found = await searchTicker(query, (c) => blockscoutForChain(c), asked);
+  const hits = found.hits.slice(0, 18);
   status.textContent = "";
   if (!hits.length) {
-    out.innerHTML = `<div class="error"><strong>Nothing on ${esc(chain().name)} called "${esc(query)}".</strong>
-      <p>The explorer's index has no token by that name here. It may be on another chain — try the chain picker — or too new to be indexed, in which case only its contract address will find it.</p></div>`;
+    const asked_ = asked.filter((c) => !found.unsearched.some((u) => u.chain.key === c.key));
+    out.innerHTML = `<div class="error"><strong>Nothing called "${esc(query)}" on the chains BOUNCER could search.</strong>
+      <p>${asked_.length ? `Searched and found nothing: ${esc(asked_.map((c) => c.name).join(", "))}.` : ""}
+      ${found.unsearched.length ? `<b>Not searched, so it could still be on one of these:</b> ${esc(found.unsearched.map((u) => `${u.chain.name} (${u.reason})`).join("; "))}.` : ""}
+      A token too new to be indexed is only found by its contract address.</p></div>`;
     return;
   }
   const rows = hits
     .map(
-      (h) => `<li><button class="hit" type="button" data-go="${esc(h.address)}">
+      (h) => `<li><button class="hit" type="button" data-go="${esc(h.address)}" data-chain="${esc(h.chain.key)}">
         <span class="hit-sym">${esc(h.symbol || "—")}</span>
+        <span class="hit-chain" style="color:${esc(h.chain.tint)}">${chainMark(h.chain.key)}${esc(h.chain.name)}</span>
         <span class="hit-name">${esc(h.name || "no name")}</span>
         <span class="hit-addr mono">${esc(h.address)}</span>
       </button></li>`,
     )
     .join("");
+  const gaps = found.unsearched.length
+    ? `<p class="buy-gap"><b>Not searched:</b> ${esc(found.unsearched.map((u) => `${u.chain.name} (${u.reason})`).join("; "))}. A match there would not be in this list.</p>`
+    : "";
   out.innerHTML = `<section class="found">
-    <h2>${hits.length} token${hits.length === 1 ? "" : "s"} on ${esc(chain().name)} called something like "${esc(query)}"</h2>
-    <p class="qblurb">BOUNCER will not pick for you. A ticker is not unique and anyone can deploy one — which is the whole reason this tool exists. Check the address against the one the team posted, then open it.</p>
+    <h2>${hits.length} token${hits.length === 1 ? "" : "s"} called something like "${esc(query)}"</h2>
+    <p class="qblurb">BOUNCER will not pick for you. A ticker is not unique and anyone can deploy one — which is the whole reason this tool exists. Check the address and the chain against what the team posted, then open it.</p>
     <ul class="hits">${rows}</ul>
+    ${gaps}
   </section>`;
   for (const button of out.querySelectorAll<HTMLButtonElement>("[data-go]")) {
     button.addEventListener("click", () => {
-      location.hash = `#/t/${button.dataset.go}?chain=${chain().key}`;
+      // The chain the hit was found on, never the one the menu is showing.
+      location.hash = `#/t/${button.dataset.go}?chain=${button.dataset.chain}`;
     });
   }
 }
@@ -2201,6 +2214,48 @@ function routeChain(): string {
 
 // ---------------------------------------------------------------- routing
 
+/**
+ * Start a view's read, and give the button back whatever happens.
+ *
+ * `busy()` is the only thing that disables Check it, and every view was
+ * expected to re-enable it on the way out — which works until one path
+ * forgets. runSearch forgot on BOTH of its successful exits: find some
+ * candidates, or find none, and the control stayed dead until the page
+ * was reloaded. An audit found it; nothing in the code guaranteed it.
+ *
+ * One `finally`, at the one place every view is started from, covers
+ * success, an empty result, a thrown error, a rejected promise and a
+ * path somebody adds next year without reading this comment.
+ *
+ * It is also where a read stops being current. Every view guards its own
+ * renders with `doorRun`, but a view that refuses an address answers and
+ * returns BEFORE taking a number — so switching the chain mid-read let
+ * the old chain's slow half finish and paint itself over the new page.
+ * The header read Solana and the report under it was the Robinhood one,
+ * and it stayed. Bumping here means a route change invalidates whatever
+ * was in flight, whichever view it belonged to and however it ends.
+ *
+ * It takes the work UNSTARTED, and that is the whole reason it is a
+ * function and not a promise. `start(runDoor(a))` evaluates runDoor
+ * first, so the bump lands AFTER the new view has taken its number and
+ * immediately makes the new view stale — every render discarded, the
+ * page stuck on its spinner. The bump has to happen between the old run
+ * and the new one, which means before the call, which means the call
+ * has to still be in our hands when we get here.
+ */
+function start(begin: () => Promise<void>): void {
+  doorRun++;
+  void begin()
+    .catch((error: unknown) => {
+      // A view that throws past its own handling still has to say so
+      // rather than leave a spinner and a dead button.
+      failed(error, q.value.trim());
+    })
+    .finally(() => {
+      go.disabled = false;
+    });
+}
+
 function route(): void {
   const raw = location.hash.replace(/^#/, "");
   const [path, query = ""] = raw.split("?");
@@ -2219,32 +2274,32 @@ function route(): void {
     case "demo":
       setView("door");
       q.value = parts[1] ?? "";
-      void runDoor(parts[1] ?? "");
+      start(() => runDoor(parts[1] ?? ""));
       break;
     case "dev":
       setView("dev");
       q.value = parts[1] ?? "";
-      void runDev(parts[1] ?? "");
+      start(() => runDev(parts[1] ?? ""));
       break;
     case "wallet":
       setView("wallet");
       q.value = `${parts[1] ?? ""} ${parts[2] ?? ""}`.trim();
-      void runWallet(parts[1] ?? "", parts[2] ?? "");
+      start(() => runWallet(parts[1] ?? "", parts[2] ?? ""));
       break;
     case "tx":
       setView("tx");
       q.value = parts[1] ?? "";
-      void runTx(parts[1] ?? "");
+      start(() => runTx(parts[1] ?? ""));
       break;
     case "plan":
       setView("plan");
       q.value = params.get("tax") ?? "100";
-      void runPlan(Number(params.get("tax") ?? 100), params);
+      start(() => runPlan(Number(params.get("tax") ?? 100), params));
       break;
     case "board":
       setView("board");
       q.value = params.get("hours") ?? "1";
-      void runBoard(Number(params.get("hours") ?? 1) || 1);
+      start(() => runBoard(Number(params.get("hours") ?? 1) || 1));
       break;
   }
 }
@@ -2304,6 +2359,21 @@ function boot(): void {
     paintSelectedChain();
     if (mode === "live") setMode("live", true);
     renderChips();
+    // A report on screen belongs to the chain it was read from.
+    //
+    // Changing the menu used to leave it there, so picking Solana while a
+    // Robinhood slip was open gave a header saying Solana above a report
+    // about Robinhood — with every number in it read from the other
+    // chain. Re-read the same subject on the chain now chosen; if it is
+    // not there, the slip says so, which is the honest answer and not the
+    // one the stale report was giving.
+    const showing = q.value.trim();
+    if (view === "door" && showing && out.innerHTML.trim()) {
+      const to = chainSelect.value === "auto" ? "auto" : chainSelect.value;
+      const next = `#/t/${isSolanaAddress(showing) && !ADDR.test(showing) ? showing : showing.toLowerCase()}?chain=${to}`;
+      if (location.hash !== next) location.hash = next;
+      else void route();
+    }
   });
   settingsToggle.addEventListener("click", () => {
     const open = !settings.classList.contains("open");

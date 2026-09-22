@@ -337,6 +337,13 @@ body.answered .chips{display:none}
 .hit-sym{font:800 16px var(--display);letter-spacing:.03em}
 .hit-name{color:var(--muted);font-size:13.5px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .hit-addr{color:var(--dim);font-size:11.5px;overflow-wrap:anywhere}
+/* Which chain a hit was found on. A ticker list without it asks somebody
+   to work out the network from the address shape, which is the one thing
+   an address does not tell you. */
+.hit-chain{display:inline-flex;align-items:center;gap:6px;font:10.5px var(--mono);letter-spacing:.12em;text-transform:uppercase;white-space:nowrap}
+.hit-chain svg{width:13px;height:13px;flex:none}
+.hit{grid-template-columns:auto auto 1fr auto}
+@media (max-width:680px){.hit{grid-template-columns:1fr}}
 @media (max-width:680px){.hit{grid-template-columns:1fr;gap:3px}.hit-name{white-space:normal}}
 .chain-hit{width:100%;display:grid;grid-template-columns:1fr auto;align-items:baseline;gap:14px;text-align:left}
 .chain-hit .hit-name{color:var(--ink);font-size:14.5px;font-weight:600}
