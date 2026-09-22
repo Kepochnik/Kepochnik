@@ -786,6 +786,171 @@
     return TOPIC_OF[code] ?? "unread";
   }
 
+  // src/bouncer/coverage.ts
+  function reasonOf(skipped, ...sections) {
+    for (const s of skipped) {
+      if (sections.some((name) => s.section.toLowerCase() === name.toLowerCase())) return s.reason;
+    }
+    return null;
+  }
+  function plainReason(reason) {
+    const r = reason.toLowerCase();
+    if (/\b403\b|forbidden/.test(r)) return "the public node refused the request (403) \u2014 these limit the heavier reads to paying keys";
+    if (/\b429\b|rate.?limit/.test(r)) return "the public node is rate-limiting (429) \u2014 too many reads from this address just now";
+    if (/timed? ?out|deadline|did not answer/.test(r)) return "the node did not answer in time";
+    if (/method not found|-32601|unsupported method/.test(r)) return "this node does not offer the method the check needs";
+    if (/\b5\d\d\b|internal error/.test(r)) return "the node returned a server error";
+    if (/fetch failed|network|econn|socket/.test(r)) return "the request never reached the node";
+    return reason;
+  }
+  function worthRetrying(c) {
+    return c.state === "unread";
+  }
+  function summarise(checks) {
+    const gaps = checks.filter((c) => c.state === "unread" || c.state === "unsupported");
+    const decisiveGaps = gaps.filter((c) => c.decisive);
+    const asked = checks.filter((c) => c.state !== "n/a").length;
+    const read = checks.filter((c) => c.state === "read").length;
+    const state = decisiveGaps.length ? "thin" : gaps.length ? "partial" : "complete";
+    const names = (list) => list.length === 1 ? list[0].label : `${list.slice(0, -1).map((c) => c.label).join(", ")} and ${list[list.length - 1].label}`;
+    const line = state === "complete" ? `All ${asked} checks answered.` : state === "thin" ? `${names(decisiveGaps)} could not be read, so this reading cannot tell you ${decisiveGaps.some((c) => c.topic === "sell" || c.topic === "exit") ? "whether you could get back out" : "the whole story"}.` : `${read} of ${asked} checks answered; ${names(gaps)} did not.`;
+    return { checks, gaps, decisiveGaps, read, asked, state, line, retryable: gaps.some(worthRetrying) };
+  }
+  function splCoverage(slip) {
+    const s = slip.skipped;
+    const mint = slip.mint;
+    const checks = [];
+    checks.push({ id: "mint", label: "the mint account", topic: "id", state: mint ? "read" : "unread", reason: mint ? void 0 : "the address is not an SPL mint", decisive: true });
+    if (!mint) return summarise(checks);
+    const metaReason = reasonOf(s, "metadata");
+    checks.push({
+      id: "metadata",
+      label: "the name and symbol",
+      topic: "id",
+      state: slip.metadata ? "read" : metaReason ? "unread" : "n/a",
+      reason: metaReason ? plainReason(metaReason) : slip.metadata ? void 0 : "this mint publishes no on-chain metadata",
+      // A token with no name is odd and worth a note; it does not make the
+      // authorities or the pool any less known.
+      decisive: false
+    });
+    checks.push({ id: "authorities", label: "the mint and freeze authorities", topic: "keep", state: "read", decisive: true });
+    checks.push({ id: "extensions", label: "the Token-2022 extensions", topic: "sell", state: "read", decisive: true });
+    const holdReason = reasonOf(s, "holders");
+    checks.push({
+      id: "holders",
+      label: "who holds it",
+      topic: "room",
+      state: slip.holders ? "read" : holdReason ? "unread" : "n/a",
+      reason: holdReason ? plainReason(holdReason) : void 0,
+      decisive: true
+    });
+    const ownerReason = reasonOf(s, "holder owners");
+    if (ownerReason) {
+      checks.push({ id: "holder-owners", label: "the wallets behind the top accounts", topic: "room", state: "unread", reason: plainReason(ownerReason), decisive: false });
+    }
+    const marketReason = reasonOf(s, "market", "pools") ?? slip.market?.unread ?? null;
+    checks.push({
+      id: "market",
+      label: "where it trades",
+      topic: "exit",
+      state: slip.market && !slip.market.unread ? "read" : marketReason ? "unread" : "n/a",
+      reason: marketReason ? plainReason(marketReason) : void 0,
+      decisive: true
+    });
+    checks.push({
+      id: "sale-probe",
+      label: "a simulated sale",
+      topic: "sell",
+      state: "unsupported",
+      reason: "BOUNCER does not simulate Solana transactions; the extension flags below are what it can say about transfers",
+      decisive: false
+    });
+    return summarise(checks);
+  }
+  function doorCoverage(slip) {
+    const s = slip.skipped;
+    const checks = [];
+    const isToken = !slip.id.token.code.empty;
+    checks.push({ id: "code", label: "the contract code", topic: "id", state: "read", decisive: true });
+    if (!isToken) return summarise(checks);
+    const launchReason = reasonOf(s, "launch record");
+    checks.push({
+      id: "launch",
+      label: "the launch record",
+      topic: "id",
+      // No launchpad on this chain is not a failed read, it is a question
+      // that does not apply — and it is the one that used to print on every
+      // ordinary token as though something had gone wrong.
+      state: slip.id.launch ? "read" : launchReason ? /not published|no launchpad/i.test(launchReason) ? "n/a" : "unread" : "n/a",
+      reason: launchReason && !/not published|no launchpad/i.test(launchReason) ? plainReason(launchReason) : void 0,
+      decisive: false
+    });
+    const rulesReason = reasonOf(s, "house rules", "open door");
+    const knowsPowers = Boolean(slip.rules || slip.open);
+    checks.push({
+      id: "powers",
+      label: "what the contract can do",
+      topic: "keep",
+      // There is no "n/a" here: every token has powers or the absence of
+      // them, so not knowing is always a hole. A read that produced neither
+      // a rules block nor an open-door block and left no reason behind is
+      // still a hole, and it says so rather than defaulting to read.
+      state: knowsPowers ? "read" : "unread",
+      reason: knowsPowers ? void 0 : plainReason(rulesReason ?? "the powers read did not run"),
+      decisive: true
+    });
+    const probes = slip.open?.probes ?? null;
+    checks.push({
+      id: "sale-probe",
+      label: "a simulated sale",
+      topic: "sell",
+      state: probes && probes.length ? "read" : slip.open?.probesSkipped ? "unread" : "n/a",
+      reason: slip.open?.probesSkipped ? plainReason(String(slip.open.probesSkipped)) : void 0,
+      decisive: true
+    });
+    const exitReason = reasonOf(s, "exit door");
+    checks.push({
+      id: "market",
+      label: "where it trades",
+      topic: "exit",
+      state: slip.exit ? "read" : exitReason ? "unread" : "n/a",
+      reason: exitReason ? plainReason(exitReason) : void 0,
+      decisive: true
+    });
+    const roomReason = reasonOf(s, "the room");
+    checks.push({
+      id: "holders",
+      label: "who holds it",
+      topic: "room",
+      state: slip.room ? "read" : roomReason ? "unread" : "n/a",
+      reason: roomReason ? plainReason(roomReason) : void 0,
+      decisive: true
+    });
+    const devReason = reasonOf(s, "dev report card");
+    checks.push({
+      id: "dev",
+      label: "the deployer's history",
+      topic: "room",
+      state: slip.dev ? "read" : devReason ? "unread" : "n/a",
+      reason: devReason ? plainReason(devReason) : void 0,
+      decisive: false
+    });
+    const lookReason = reasonOf(s, "lookalikes");
+    checks.push({
+      id: "lookalikes",
+      label: "tokens sharing the ticker",
+      topic: "id",
+      state: slip.lookalikes ? "read" : lookReason ? "unread" : "n/a",
+      reason: lookReason ? plainReason(lookReason) : void 0,
+      decisive: false
+    });
+    return summarise(checks);
+  }
+  function qualify(kind, coverage) {
+    if (kind === "clear" && coverage.state === "thin") return "incomplete";
+    return kind;
+  }
+
   // src/bouncer/trade.ts
   var REFERRAL = { gmgn: "save", basedbot: "bot" };
   var VENUE_NAMES = { gmgn: "GMGN", basedbot: "BasedBot" };
@@ -2705,7 +2870,7 @@
   }
   var SHARES = [1e3, 2500, 5e3, 1e4];
   async function readSolanaMarket(rpc, mint, position, tokenDecimals, scan) {
-    const empty = { curve: null, pools: [], best: null, spot: null, quoteSymbol: "SOL", quotes: [], locks: [], note: "" };
+    const empty = { curve: null, pools: [], best: null, spot: null, quoteSymbol: "SOL", quotes: [], locks: [], note: "", unread: null };
     let curve = null;
     const curveAddress = pumpCurveAddress(mint);
     if (curveAddress) {
@@ -2727,26 +2892,36 @@
         quoteSymbol: "SOL",
         quotes: quotes2,
         locks: [],
+        // The curve IS the market while it is live, so nothing is missing
+        // even though no pool was looked for.
+        unread: null,
         note: "Priced on the pump.fun bonding curve's own virtual reserves, with its 1% fee, and capped at the SOL the curve actually holds. It has not graduated, so there is no pool yet."
       };
     }
     let pools = [];
     let derivedFailed = false;
+    let derivedWhy = null;
+    let walkFailed = false;
+    let walkWhy = null;
     try {
       pools = await readDerivedPools(rpc, mint);
-    } catch {
+    } catch (error) {
       derivedFailed = true;
+      derivedWhy = error instanceof Error ? error.message : String(error);
     }
     if (scan || !pools.length) {
       try {
         const walked = await readSolanaPools(rpc, mint, scan);
         for (const p of walked) if (!pools.some((seen) => seen.address === p.address)) pools.push(p);
         pools.sort((a, b) => b.quoteReserve > a.quoteReserve ? 1 : b.quoteReserve < a.quoteReserve ? -1 : 0);
-      } catch {
+      } catch (error) {
+        walkFailed = true;
+        walkWhy = error instanceof Error ? error.message : String(error);
       }
     }
-    if (!pools.length && derivedFailed) {
-      return { ...empty, curve, note: "The pools could not be read from this endpoint." };
+    if (!pools.length && (derivedFailed || walkFailed)) {
+      const why = derivedFailed ? derivedWhy ?? "the endpoint refused the pool accounts" : walkWhy ?? "the endpoint refused the holder walk";
+      return { ...empty, curve, unread: why, note: `The pools could not be read from this endpoint: ${why}.` };
     }
     if (!pools.length) {
       const how = "Pools are found two ways: the address an Orca Whirlpool or Raydium CPMM pool for this pair would live at is worked out locally and read directly, and \u2014 when the endpoint serves it \u2014 the twenty largest accounts holding the mint are walked for vaults belonging to any other DEX. A venue with neither a derivable address nor a vault among the largest holders is not seen.";
@@ -2775,6 +2950,12 @@
       quoteSymbol: best.quoteSymbol,
       quotes,
       locks: await readLocks(rpc, pools),
+      // A venue was found and priced, so the question "where does this
+      // trade" has an answer. A failed walk here may have cost a DEX the
+      // derivation cannot see, which the note's blind-spot sentence covers;
+      // it is not the same as not knowing whether there is anywhere to sell,
+      // and marking it unread would blank a verdict that has its evidence.
+      unread: null,
       note: marketNote(pools, best, quotes)
     };
   }
@@ -3206,9 +3387,9 @@
     const c = CARD_COLORS;
     const stop = notes.filter((n) => n.level === "stop").length;
     const watch = notes.filter((n) => n.level === "watch").length;
-    if (stop) return { word: "STOP", color: c.stop, line: `${stop} thing${stop === 1 ? "" : "s"} here can cost you money outright` };
-    if (watch) return { word: "WATCH", color: c.watch, line: `${watch} thing${watch === 1 ? "" : "s"} worth reading before you buy` };
-    return { word: "CLEAR", color: c.ok, line: "nothing in what was read stands out" };
+    if (stop) return { word: "STOP", kind: "stop", color: c.stop, line: `${stop} thing${stop === 1 ? "" : "s"} here can cost you money outright` };
+    if (watch) return { word: "WATCH", kind: "watch", color: c.watch, line: `${watch} thing${watch === 1 ? "" : "s"} worth reading before you buy` };
+    return { word: "CLEAR", kind: "clear", color: c.ok, line: "nothing in what was read stands out" };
   }
   function facts(slip) {
     const o = slip.open;
@@ -3261,7 +3442,8 @@
         address: slip.subject,
         stamp: slip.stamp,
         notes: slip.notes,
-        facts: facts(slip)
+        facts: facts(slip),
+        coverage: doorCoverage(slip)
       },
       options
     );
@@ -3291,14 +3473,23 @@
             note: fee?.kind === "transfer-fee" ? "taken on every transfer" : m ? "no transfer fee extension" : "the mint would not answer"
           },
           { label: "TOP 10 HOLDERS", value: top === null ? "UNKNOWN" : `${(top / 100).toFixed(0)}%`, bad: top !== null && top >= 5e3, note: top === null ? "the holder list did not answer" : "of supply" }
-        ]
+        ],
+        coverage: splCoverage(slip)
       },
       options
     );
   }
+  function coverageFoot(cov) {
+    if (!cov || cov.state === "complete") return "read at one block \xB7 nothing here is scored, predicted or advised";
+    const names = cov.gaps.map((g) => g.label).join(", ");
+    return clip(`${cov.read} of ${cov.asked} checks answered \xB7 unread: ${names}`, 74);
+  }
   function renderCard(model, options) {
     const c = CARD_COLORS;
-    const v = cardVerdict(model.notes);
+    const v0 = cardVerdict(model.notes);
+    const cov = model.coverage;
+    const qualified = cov ? qualify(v0.kind, cov) : v0.kind;
+    const v = qualified === "incomplete" ? { ...v0, word: "INCOMPLETE", color: c.info, line: "Nothing stood out in what was read, and part of it was not read." } : v0;
     const rank = { stop: 0, watch: 1, info: 2 };
     const shown = [...model.notes].sort((a, b) => rank[a.level] - rank[b.level]).slice(0, 3);
     const levelColor = (l) => l === "stop" ? c.stop : l === "watch" ? c.watch : c.info;
@@ -3329,8 +3520,7 @@
     const stampColor = stamp === "ON THE LIST" ? c.ok : stamp === "NOT A LAUNCH" ? c.watch : c.stop;
     const stampW = stamp.length * 8.4 + 22;
     const found = model.notes.filter((n) => topicOf(n.code) !== "unread").length;
-    const unread = model.notes.length - found;
-    const counts = [`${found} finding${found === 1 ? "" : "s"}`, unread ? `${unread} unread` : ""].filter(Boolean).join(" \xB7 ");
+    const counts = `${found} finding${found === 1 ? "" : "s"}`;
     return `<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">
   <defs>
     <pattern id="hatch" width="12" height="12" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
@@ -3359,12 +3549,12 @@
   <rect x="0" y="${ROWS.subject}" width="340" height="${ROWS.verdict - ROWS.subject}" fill="url(#hatch)"/>
   <line x1="340" y1="${ROWS.subject}" x2="340" y2="${ROWS.verdict}" stroke="${c.line}"/>
   <text x="${L}" y="${ROWS.subject + 34}" font-size="13" letter-spacing="3.4" fill="${c.dimmer}">VERDICT</text>
-  <text x="${L}" y="${ROWS.subject + 110}" font-size="64" font-weight="700" fill="${v.color}">${v.word}</text>
+  <text x="${L}" y="${ROWS.subject + 110}" font-size="${v.word.length > 6 ? 34 : 64}" font-weight="700" fill="${v.color}">${v.word}</text>
   <text x="${L}" y="${ROWS.subject + 145}" font-size="14" fill="${c.dim}">${esc(counts)}</text>
   <text x="380" y="${ROWS.subject + 44}" font-size="21" fill="${c.text}">${esc(clip(model.lead || v.line, 62))}</text>
-  <text x="380" y="${ROWS.subject + 74}" font-size="17" fill="${c.dim}">${esc(clip(v.line, 74))}</text>
+  ${model.lead ? `<text x="380" y="${ROWS.subject + 74}" font-size="17" fill="${c.dim}">${esc(clip(v.line, 74))}</text>` : ""}
   <text x="380" y="${ROWS.subject + 118}" font-size="15" fill="${c.dimmer}">${esc(model.address)}</text>
-  <text x="380" y="${ROWS.subject + 144}" font-size="14" fill="${c.dimmer}">read at one block \xB7 nothing here is scored, predicted or advised</text>
+  <text x="380" y="${ROWS.subject + 144}" font-size="14" fill="${cov && cov.state !== "complete" ? c.info : c.dimmer}">${esc(coverageFoot(cov))}</text>
   ${line(ROWS.verdict)}
   ${line(ROWS.head)}
   ${factCells}
@@ -7512,13 +7702,40 @@
     if (slip.rules?.phase === 2 || slip.rules?.phase === 3) parts.push("graduated, pool locked");
     return sentence(parts);
   }
-  function verdictOf(notes, stage = "done") {
+  function verdictOf(notes, stage = "done", coverage) {
     if (stage === "opening") return { word: "READING", kind: "reading", line: "What the code can do and who holds the keys is below. The rest is still being read; there is no verdict until it is in." };
     const stop = notes.filter((n) => n.level === "stop").length;
     const watch = notes.filter((n) => n.level === "watch").length;
-    if (stop) return { word: "STOP", kind: "stop", line: `${stop} thing${stop === 1 ? "" : "s"} here can cost you money outright.` };
-    if (watch) return { word: "WATCH", kind: "watch", line: `Nothing outright dangerous, ${watch} thing${watch === 1 ? "" : "s"} worth reading before you buy.` };
-    return { word: "CLEAR", kind: "clear", line: "Nothing in what was read stands out. That is not a promise about the price." };
+    const base = stop ? { word: "STOP", kind: "stop", line: `${stop} thing${stop === 1 ? "" : "s"} here can cost you money outright.` } : watch ? { word: "WATCH", kind: "watch", line: `Nothing outright dangerous, ${watch} thing${watch === 1 ? "" : "s"} worth reading before you buy.` } : { word: "CLEAR", kind: "clear", line: "Nothing in what was read stands out. That is not a promise about the price." };
+    if (!coverage) return base;
+    const kind = qualify(base.kind, coverage);
+    if (kind === "incomplete") {
+      return { word: "INCOMPLETE", kind, line: `Nothing stood out in what was read \u2014 but ${coverage.line.replace(/^./, (c) => c.toLowerCase())} Until that is filled in, this is not a clean result.` };
+    }
+    if (coverage.state === "thin") {
+      const said = coverage.line.replace(/^./, (c) => c.toUpperCase());
+      return { ...base, kind, line: `${base.line} ${said} There may be more.` };
+    }
+    return { ...base, kind, line: base.line };
+  }
+  function coverageBand(coverage, stage) {
+    if (stage !== "done" || coverage.state === "complete") return "";
+    const rows = coverage.gaps.map(
+      (g) => `<li class="cgap${g.decisive ? " cgap-hard" : ""}">
+        <span class="cgl">${esc2(g.label)}</span>
+        <span class="cgr">${esc2(g.reason ?? "did not answer")}</span>
+        <span class="cgt">${esc2(TOPIC_TAG[g.topic])}</span>
+      </li>`
+    ).join("");
+    const retry = coverage.retryable ? `<button class="ghost" id="act-retry" type="button">Read the missing parts again</button>` : "";
+    return `<section class="cov cov-${coverage.state}" data-coverage="${coverage.state}">
+    <div class="covhead">
+      <span class="covword">${coverage.state === "thin" ? "INCOMPLETE CHECK" : "PARTIAL CHECK"}</span>
+      <span class="covcount">${coverage.read} of ${coverage.asked} checks answered</span>
+      ${retry}
+    </div>
+    <ul class="cgaps">${rows}</ul>
+  </section>`;
   }
   var SOL_STILL_READING = "still reading who holds it and where it trades";
   var STILL_READING = {
@@ -7528,15 +7745,11 @@
   };
   function verdictBlock(opts) {
     const stage = opts.stage ?? "done";
-    const v = verdictOf(opts.notes, stage);
+    const v = verdictOf(opts.notes, stage, opts.coverage);
     const stampClass = opts.stamp === "ON THE LIST" ? "yes" : opts.stamp === "NOT A LAUNCH" ? "mid" : "no";
     const pending = stage === "done" ? "" : `<span class="vpend">${esc2(opts.stillReading ?? STILL_READING[stage])}</span>`;
     const findings = opts.notes.filter((n) => topicOf(n.code) !== "unread").length;
-    const unread = opts.notes.length - findings;
-    const counts = [
-      findings ? `${findings} finding${findings === 1 ? "" : "s"}` : "nothing to flag",
-      unread ? `${unread} unreadable` : ""
-    ].filter(Boolean).join("<br>");
+    const counts = findings ? `${findings} finding${findings === 1 ? "" : "s"}` : "nothing to flag";
     return `<section class="verdict v-${v.kind}"${stage === "done" ? "" : ' data-pending="1"'}>
     <div class="vtop">
       <div class="vcell">
@@ -7554,6 +7767,7 @@
         <p class="vsub">${esc2(v.line)}${pending}</p>
       </div>
     </div>
+    ${opts.coverage ? coverageBand(opts.coverage, stage) : ""}
     ${opts.tiles ?? ""}
     <div class="vfoot">
       <button class="vaddr" type="button" data-copy="${esc2(opts.address)}" title="Copy the address">${esc2(opts.address)}</button>
@@ -7660,7 +7874,9 @@
     }
   }
   function renderSplSlip(slip, opts = {}) {
-    noteRender(opts.stage ?? "done", verdictOf(slip.notes, opts.stage ?? "done").word);
+    const stage0 = opts.stage ?? "done";
+    const coverage = stage0 === "done" ? splCoverage(slip) : void 0;
+    noteRender(stage0, verdictOf(slip.notes, stage0, coverage).word);
     const m = slip.mint;
     const sym = slip.metadata?.symbol ? esc2(slip.metadata.symbol) : shortSol(slip.subject);
     const name = slip.metadata?.name ? esc2(slip.metadata.name) : slip.whatItIs ? esc2(slip.whatItIs) : "no on-chain name";
@@ -7697,14 +7913,15 @@
       at: `${esc2(slip.chain.name)} \xB7 slot ${slip.at.slot}${slip.at.timestamp ? ` \xB7 ${isoUtc(slip.at.timestamp)}` : ""}`,
       notes: slip.notes,
       lead: splSentence(slip, blocked),
-      stage: opts.stage ?? "done",
+      stage: stage0,
+      coverage,
       tiles,
       stillReading: SOL_STILL_READING,
       actions: `<button class="ghost primary" id="act-share" type="button">Copy card</button><button class="ghost" id="act-link" type="button">Copy link</button><button class="ghost" id="act-json" type="button">JSON</button>`
     })}
     ${answerCards(slip.notes)}
     ${unreadStrip(slip.notes, slip.skipped)}
-    ${buyStrip(slip.chain.key, slip.subject, Boolean(slip.mint), verdictOf(slip.notes).kind)}
+    ${buyStrip(slip.chain.key, slip.subject, Boolean(slip.mint), verdictOf(slip.notes, "done", coverage).kind)}
     <div class="stack">
       ${section("s-id", "Is it real?", "What this address actually is, who can print more of it, and who can freeze what you hold.", idBody, false)}
       ${extBody ? section("s-ext", "Token-2022 extensions", "The rules the token program itself enforces on every transfer.", extBody, false) : ""}
@@ -7740,6 +7957,16 @@
       } catch {
         showToast(url);
       }
+    });
+    wireRetry();
+  }
+  function wireRetry() {
+    const button = document.getElementById("act-retry");
+    if (!button) return;
+    button.addEventListener("click", () => {
+      button.disabled = true;
+      button.textContent = "Reading again\u2026";
+      route();
     });
   }
   var SPL_EXTENSION_MEANING = {
@@ -7908,7 +8135,9 @@
     if (log.length < 200) log.push({ stage, at: Math.round(performance.now()), word });
   }
   function renderSlip(slip, opts = {}) {
-    noteRender(opts.stage ?? "done", verdictOf(slip.notes, opts.stage ?? "done").word);
+    const stage0 = opts.stage ?? "done";
+    const coverage = stage0 === "done" ? doorCoverage(slip) : void 0;
+    noteRender(stage0, verdictOf(slip.notes, stage0, coverage).word);
     const meta = slip.id.meta;
     const c0 = chain();
     const explorer = c0.blockscout ? `${c0.blockscout}/address/${slip.subject}` : null;
@@ -7996,14 +8225,15 @@
       at: `${mode === "demo" ? "DEMO \xB7 " : ""}${esc2(slip.chain.name)} \xB7 block ${slip.at.block} \xB7 ${isoUtc(slip.at.timestamp)}`,
       notes: slip.notes,
       lead: summarySentence(slip),
-      stage: opts.stage ?? "done",
+      stage: stage0,
+      coverage,
       tiles,
       actions: `<button class="ghost primary" id="act-share" type="button">Copy card</button><button class="ghost" id="act-card" type="button">Preview</button><button class="ghost" id="act-link" type="button">Copy link</button><button class="ghost" id="act-json" type="button">JSON</button>`
     })}
     <div class="card-wrap" id="card"></div>
     ${answerCards(slip.notes)}
     ${unreadStrip(slip.notes, slip.skipped)}
-    ${buyStrip(mode === "demo" ? "" : slip.chain.key, slip.subject, Boolean(slip.id.meta) && slip.open?.transferFunction !== false, verdictOf(slip.notes).kind)}
+    ${buyStrip(mode === "demo" ? "" : slip.chain.key, slip.subject, Boolean(slip.id.meta) && slip.open?.transferFunction !== false, verdictOf(slip.notes, "done", coverage).kind)}
     <h2 class="stack-head">The evidence</h2>
     <div class="stack">
       ${section("s-id", "Is it real?", "Did the launchpad's factory deploy this token, and can its code change later?", idBody, false)}
@@ -8058,6 +8288,7 @@
         showToast(url);
       }
     });
+    wireRetry();
     const walletGo = document.getElementById("wallet-go");
     if (walletGo) {
       walletGo.addEventListener("click", () => {

@@ -17,6 +17,7 @@ import type { DoorSlip } from "./door.js";
 import type { DoorNote, NoteLevel } from "./door.js";
 import type { SplSlip } from "./spl.js";
 import { topicOf } from "./topics.js";
+import { doorCoverage, splCoverage, qualify, type Coverage } from "./coverage.js";
 
 export interface CardOptions {
   /**
@@ -53,13 +54,13 @@ export const CARD_COLORS = {
 };
 
 /** The one word, from the loudest note. Same rule as the page, kept here so the two cannot drift. */
-export function cardVerdict(notes: DoorNote[]): { word: string; color: string; line: string } {
+export function cardVerdict(notes: DoorNote[]): { word: string; kind: "stop" | "watch" | "clear"; color: string; line: string } {
   const c = CARD_COLORS;
   const stop = notes.filter((n) => n.level === "stop").length;
   const watch = notes.filter((n) => n.level === "watch").length;
-  if (stop) return { word: "STOP", color: c.stop, line: `${stop} thing${stop === 1 ? "" : "s"} here can cost you money outright` };
-  if (watch) return { word: "WATCH", color: c.watch, line: `${watch} thing${watch === 1 ? "" : "s"} worth reading before you buy` };
-  return { word: "CLEAR", color: c.ok, line: "nothing in what was read stands out" };
+  if (stop) return { word: "STOP", kind: "stop", color: c.stop, line: `${stop} thing${stop === 1 ? "" : "s"} here can cost you money outright` };
+  if (watch) return { word: "WATCH", kind: "watch", color: c.watch, line: `${watch} thing${watch === 1 ? "" : "s"} worth reading before you buy` };
+  return { word: "CLEAR", kind: "clear", color: c.ok, line: "nothing in what was read stands out" };
 }
 
 /**
@@ -133,6 +134,16 @@ export interface CardModel {
   lead?: string;
   /** `note` is the sub-line under the figure, the same one the page's tiles carry. */
   facts: { label: string; value: string; bad: boolean; note?: string }[];
+  /**
+   * How complete the reading was.
+   *
+   * The card is the artefact that travels. A page that overstates itself
+   * is read by one person; a card that does is pasted into a group chat
+   * and forwarded, and the reader three hops down has no way back to the
+   * caveats. So whatever the page had to admit, the card admits in the
+   * same words and at the same size.
+   */
+  coverage?: Coverage;
 }
 
 export function doorCard(slip: DoorSlip, options: CardOptions): string {
@@ -149,6 +160,7 @@ export function doorCard(slip: DoorSlip, options: CardOptions): string {
       stamp: slip.stamp,
       notes: slip.notes,
       facts: facts(slip),
+      coverage: doorCoverage(slip),
     },
     options,
   );
@@ -181,14 +193,41 @@ export function splCard(slip: SplSlip, options: CardOptions): string {
         },
         { label: "TOP 10 HOLDERS", value: top === null ? "UNKNOWN" : `${(top / 100).toFixed(0)}%`, bad: top !== null && top >= 5_000, note: top === null ? "the holder list did not answer" : "of supply" },
       ],
+      coverage: splCoverage(slip),
     },
     options,
   );
 }
 
+/**
+ * The line under the address: what this reading covered, or the standing
+ * disclaimer when it covered everything.
+ *
+ * It replaces "read at one block · nothing here is scored, predicted or
+ * advised" rather than sitting beside it, because the card has one line
+ * there and the more urgent of the two claims wins. A reading with a hole
+ * in it needs to say so more than it needs to repeat that it gives no
+ * advice — and the second half of that promise was overstated anyway on a
+ * chain whose sections are read at slots of their own.
+ */
+function coverageFoot(cov: Coverage | undefined): string {
+  if (!cov || cov.state === "complete") return "read at one block · nothing here is scored, predicted or advised";
+  const names = cov.gaps.map((g) => g.label).join(", ");
+  return clip(`${cov.read} of ${cov.asked} checks answered · unread: ${names}`, 74);
+}
+
 function renderCard(model: CardModel, options: CardOptions): string {
   const c = CARD_COLORS;
-  const v = cardVerdict(model.notes);
+  const v0 = cardVerdict(model.notes);
+  const cov = model.coverage;
+  // Same rule as the page, from the same function: CLEAR is a claim about
+  // what was looked at, so a decisive gap takes it away. STOP and WATCH
+  // are claims about findings and keep their word.
+  const qualified = cov ? qualify(v0.kind, cov) : v0.kind;
+  const v =
+    qualified === "incomplete"
+      ? { ...v0, word: "INCOMPLETE", color: c.info, line: "Nothing stood out in what was read, and part of it was not read." }
+      : v0;
 
   // Loudest first, and never more than three: a card nobody finishes is a
   // card that said nothing.
@@ -240,9 +279,12 @@ function renderCard(model: CardModel, options: CardOptions): string {
   // number nobody can arrive at by reading the card — the three lines
   // below it are findings, and what could not be read is a different
   // claim that deserves saying out loud rather than being added in.
+  // One tally here, the coverage line owns the other. The cell used to
+  // read "9 findings · 2 unread" directly above "3 of 4 checks answered",
+  // and those count different things — notes against checks — so a reader
+  // is left reconciling two numbers nobody told them were different.
   const found = model.notes.filter((n) => topicOf(n.code) !== "unread").length;
-  const unread = model.notes.length - found;
-  const counts = [`${found} finding${found === 1 ? "" : "s"}`, unread ? `${unread} unread` : ""].filter(Boolean).join(" · ");
+  const counts = `${found} finding${found === 1 ? "" : "s"}`;
 
   return `<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">
   <defs>
@@ -272,12 +314,12 @@ function renderCard(model: CardModel, options: CardOptions): string {
   <rect x="0" y="${ROWS.subject}" width="340" height="${ROWS.verdict - ROWS.subject}" fill="url(#hatch)"/>
   <line x1="340" y1="${ROWS.subject}" x2="340" y2="${ROWS.verdict}" stroke="${c.line}"/>
   <text x="${L}" y="${ROWS.subject + 34}" font-size="13" letter-spacing="3.4" fill="${c.dimmer}">VERDICT</text>
-  <text x="${L}" y="${ROWS.subject + 110}" font-size="64" font-weight="700" fill="${v.color}">${v.word}</text>
+  <text x="${L}" y="${ROWS.subject + 110}" font-size="${v.word.length > 6 ? 34 : 64}" font-weight="700" fill="${v.color}">${v.word}</text>
   <text x="${L}" y="${ROWS.subject + 145}" font-size="14" fill="${c.dim}">${esc(counts)}</text>
   <text x="380" y="${ROWS.subject + 44}" font-size="21" fill="${c.text}">${esc(clip(model.lead || v.line, 62))}</text>
-  <text x="380" y="${ROWS.subject + 74}" font-size="17" fill="${c.dim}">${esc(clip(v.line, 74))}</text>
+  ${model.lead ? `<text x="380" y="${ROWS.subject + 74}" font-size="17" fill="${c.dim}">${esc(clip(v.line, 74))}</text>` : ""}
   <text x="380" y="${ROWS.subject + 118}" font-size="15" fill="${c.dimmer}">${esc(model.address)}</text>
-  <text x="380" y="${ROWS.subject + 144}" font-size="14" fill="${c.dimmer}">read at one block · nothing here is scored, predicted or advised</text>
+  <text x="380" y="${ROWS.subject + 144}" font-size="14" fill="${cov && cov.state !== "complete" ? c.info : c.dimmer}">${esc(coverageFoot(cov))}</text>
   ${line(ROWS.verdict)}
   ${line(ROWS.head)}
   ${factCells}

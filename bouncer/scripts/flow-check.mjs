@@ -109,6 +109,24 @@ async function waitForVerdict(page, ms = 40_000) {
   return page.$eval(".vword", (el) => el.textContent.trim());
 }
 
+/**
+ * The LAST render, not the first one carrying a word.
+ *
+ * waitForVerdict returns at the `fast` stage — the page has a verdict there
+ * and says so — and anything read at that point is a half-finished slip.
+ * The completeness band is drawn only on the final render, so a walk that
+ * looked for it right after the verdict found nothing and blamed the page.
+ *
+ * `data-pending` is the page's own marker for "more is coming", and it is
+ * already a stated contract with speed-check. Waiting for it to clear is
+ * waiting for the render the reader actually keeps.
+ */
+async function waitForDone(page, ms = 40_000) {
+  await waitForVerdict(page, ms);
+  await page.waitForFunction(() => document.querySelector(".verdict") && !document.querySelector("[data-pending]"), null, { timeout: ms });
+  return page.$eval(".vword", (el) => el.textContent.trim());
+}
+
 await walk("paste an address, get a verdict", async (page) => {
   await page.goto(`${url}#/demo/0x00000000000000000000000000000000000bad01`, { waitUntil: "load" });
   const word = await waitForVerdict(page);
@@ -307,9 +325,65 @@ if (live) {
   });
 }
 
+
+await walk("a reading with a hole says so where the verdict is", async (page) => {
+  // The audit's worst find, walked. BONK's holders and pools came back 403
+  // and the page said, in its calm voice, that nothing stood out. Both
+  // halves were on screen — the refusals were in a strip at the bottom,
+  // named and reasoned — and the headline was what got read.
+  //
+  // The demo impostor has the same shape: its sale simulation did not run,
+  // so whether the token can be sold at all is unanswered.
+  await page.goto(`${url}#/demo/0x00000000000000000000000000000000000bad01`, { waitUntil: "load" });
+  await waitForDone(page);
+
+  const band = await page.$(".cov");
+  if (!band) throw new Error("the reading has an unread check and the page shows no completeness band");
+
+  // Above the fold of the verdict block, not in a strip below the page.
+  // Position is the entire fix here; the text was always right.
+  const order = await page.evaluate(() => {
+    const v = document.querySelector(".verdict");
+    const c = document.querySelector(".cov");
+    const u = document.querySelector(".unread, .strip");
+    return { insideVerdict: Boolean(v && c && v.contains(c)), covTop: c?.getBoundingClientRect().top ?? -1, unreadTop: u?.getBoundingClientRect().top ?? Infinity };
+  });
+  if (!order.insideVerdict) throw new Error("the band is not inside the verdict block, which is the one place a reader looks");
+  if (order.covTop >= order.unreadTop) throw new Error("the band sits below the strip it was meant to replace");
+
+  // It has to name the missing check and why, not just wave at one.
+  const rows = await page.$$eval(".cgap", (els) => els.map((e) => e.textContent.replace(/\s+/g, " ").trim()));
+  if (!rows.length) throw new Error("the band lists no gaps");
+  if (!rows.some((r) => /simulated sale/i.test(r))) throw new Error(`the unread check is not named: ${JSON.stringify(rows)}`);
+
+  // And a retry that can work. A 403 or a timeout is exactly the case where
+  // pressing again changes the answer, and the page has to offer it.
+  const retry = await page.$("#act-retry");
+  if (!retry) throw new Error("an unread check with no way to ask again");
+  const box = await retry.boundingBox();
+  if (!box || box.height < 44) throw new Error(`the retry is ${box ? Math.round(box.height) : 0}px tall; a phone needs 44`);
+});
+
+await walk("a clean-sounding word never sits over an unread check", async (page) => {
+  // The rule, stated as a walk rather than as a unit test, because the unit
+  // test cannot see what the page does with the answer. CLEAR is a claim
+  // about coverage — "I looked and saw nothing" — so it is the one word a
+  // hole in the reading makes false. A STOP is a claim about a finding and
+  // survives.
+  for (const token of ["0x00000000000000000000000000000000000bad01", "0x0000000000000000000000000000000000f1a1a1"]) {
+    await page.goto(`${url}#/demo/${token}`, { waitUntil: "load" });
+    const word = await waitForDone(page);
+    const state = await page.$eval(".cov", (el) => el.dataset.coverage).catch(() => "complete");
+    if (word === "CLEAR" && state === "thin") {
+      throw new Error(`${token.slice(0, 10)} reads CLEAR over a reading missing a decisive check`);
+    }
+    if (!["STOP", "WATCH", "CLEAR", "INCOMPLETE"].includes(word)) throw new Error(`unknown verdict "${word}"`);
+  }
+});
 await browser.close();
 if (failures) {
   console.error(`\nflows: ${failures} journey${failures === 1 ? "" : "s"} broken.`);
   process.exit(1);
 }
 console.log("flows: every journey walked end to end");
+

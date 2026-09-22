@@ -9,6 +9,7 @@
  */
 import { BlockscoutClient } from "../../src/chain/blockscout.js";
 import { TOPIC_TAG,TOPIC_BLURB, TOPIC_ORDER, TOPIC_QUESTION, topicOf } from "../../src/bouncer/topics.js";
+import { doorCoverage, splCoverage, qualify, type Coverage } from "../../src/bouncer/coverage.js";
 import { missingVenues, tradeVenues } from "../../src/bouncer/trade.js";
 import { CHAINS, chainByKey, type ChainConfig } from "../../src/chain/chains.js";
 import { PHASE_LABEL } from "../../src/chain/pons.js";
@@ -1042,13 +1043,76 @@ function summarySentence(slip: DoorSlip): string {
  * reading it, and a STOP that turns into a CLEAR teaches a reader to ignore
  * the next one. So the first render says READING and means it.
  */
-function verdictOf(notes: DoorNote[], stage: Stage = "done"): { word: string; kind: "stop" | "watch" | "clear" | "reading"; line: string } {
+type VerdictKind = "stop" | "watch" | "clear" | "reading" | "incomplete";
+
+function verdictOf(notes: DoorNote[], stage: Stage = "done", coverage?: Coverage): { word: string; kind: VerdictKind; line: string } {
   if (stage === "opening") return { word: "READING", kind: "reading", line: "What the code can do and who holds the keys is below. The rest is still being read; there is no verdict until it is in." };
   const stop = notes.filter((n) => n.level === "stop").length;
   const watch = notes.filter((n) => n.level === "watch").length;
-  if (stop) return { word: "STOP", kind: "stop", line: `${stop} thing${stop === 1 ? "" : "s"} here can cost you money outright.` };
-  if (watch) return { word: "WATCH", kind: "watch", line: `Nothing outright dangerous, ${watch} thing${watch === 1 ? "" : "s"} worth reading before you buy.` };
-  return { word: "CLEAR", kind: "clear", line: "Nothing in what was read stands out. That is not a promise about the price." };
+  const base: { word: string; kind: "stop" | "watch" | "clear"; line: string } = stop
+    ? { word: "STOP", kind: "stop", line: `${stop} thing${stop === 1 ? "" : "s"} here can cost you money outright.` }
+    : watch
+      ? { word: "WATCH", kind: "watch", line: `Nothing outright dangerous, ${watch} thing${watch === 1 ? "" : "s"} worth reading before you buy.` }
+      : { word: "CLEAR", kind: "clear", line: "Nothing in what was read stands out. That is not a promise about the price." };
+  if (!coverage) return base;
+  const kind = qualify(base.kind, coverage);
+  // Only CLEAR can be qualified away, and the replacement has to explain
+  // itself in the same breath: a reader who sees a word they have not seen
+  // before, with no reason attached, reads it as a worse STOP.
+  if (kind === "incomplete") {
+    return { word: "INCOMPLETE", kind, line: `Nothing stood out in what was read — but ${coverage.line.replace(/^./, (c) => c.toLowerCase())} Until that is filled in, this is not a clean result.` };
+  }
+  // A STOP or a WATCH keeps its word and its count. What it must not keep
+  // is the impression that the count is the whole list.
+  if (coverage.state === "thin") {
+    // Sentence case, because this lands after a full stop. It read
+    // "…can cost you money outright. a simulated sale could not be read",
+    // which is the kind of seam that makes a reader trust the next
+    // sentence slightly less without being able to say why.
+    const said = coverage.line.replace(/^./, (c) => c.toUpperCase());
+    return { ...base, kind, line: `${base.line} ${said} There may be more.` };
+  }
+  return { ...base, kind, line: base.line };
+}
+
+/**
+ * The completeness band: what this reading covered, directly under the word.
+ *
+ * Under, and not in a strip at the bottom, because the bottom is where the
+ * refusals already were. They were there in full — section and reason, both
+ * accurate — while the headline said the token looked fine, and the audit
+ * that found this read the headline and stopped, exactly as a reader does.
+ * Position is the fix; the text was never the problem.
+ *
+ * It shows nothing at all on a complete reading. A band that is always there
+ * is furniture, and furniture is invisible by the second visit — so the one
+ * time it matters it would not be seen either.
+ */
+function coverageBand(coverage: Coverage, stage: Stage): string {
+  if (stage !== "done" || coverage.state === "complete") return "";
+  const rows = coverage.gaps
+    .map(
+      (g) => `<li class="cgap${g.decisive ? " cgap-hard" : ""}">
+        <span class="cgl">${esc(g.label)}</span>
+        <span class="cgr">${esc(g.reason ?? "did not answer")}</span>
+        <span class="cgt">${esc(TOPIC_TAG[g.topic])}</span>
+      </li>`,
+    )
+    .join("");
+  // The retry is offered only where pressing it could work. A button that
+  // cannot change the answer is a button that teaches a reader the answer
+  // never changes.
+  const retry = coverage.retryable
+    ? `<button class="ghost" id="act-retry" type="button">Read the missing parts again</button>`
+    : "";
+  return `<section class="cov cov-${coverage.state}" data-coverage="${coverage.state}">
+    <div class="covhead">
+      <span class="covword">${coverage.state === "thin" ? "INCOMPLETE CHECK" : "PARTIAL CHECK"}</span>
+      <span class="covcount">${coverage.read} of ${coverage.asked} checks answered</span>
+      ${retry}
+    </div>
+    <ul class="cgaps">${rows}</ul>
+  </section>`;
 }
 
 /**
@@ -1090,6 +1154,8 @@ function verdictBlock(opts: {
   stage?: Stage;
   /** What is still being read, when it is not what the EVM door reads. */
   stillReading?: string;
+  /** What this reading covered. Absent on the demo slips, which are complete by construction. */
+  coverage?: Coverage;
   /**
    * The four numbers that decide it, rendered inside the block rather than
    * under it. They are the verdict said in figures; a separate row with its
@@ -1099,7 +1165,7 @@ function verdictBlock(opts: {
   actions: string;
 }): string {
   const stage = opts.stage ?? "done";
-  const v = verdictOf(opts.notes, stage);
+  const v = verdictOf(opts.notes, stage, opts.coverage);
   const stampClass = opts.stamp === "ON THE LIST" ? "yes" : opts.stamp === "NOT A LAUNCH" ? "mid" : "no";
   // The level counts are gone from here.
   //
@@ -1114,13 +1180,13 @@ function verdictBlock(opts: {
   // the ledger's rows and the unread strip's. The old tallies counted by
   // severity across both, which produced a fourteen nobody could find.
   const findings = opts.notes.filter((n) => topicOf(n.code) !== "unread").length;
-  const unread = opts.notes.length - findings;
-  const counts = [
-    findings ? `${findings} finding${findings === 1 ? "" : "s"}` : "nothing to flag",
-    unread ? `${unread} unreadable` : "",
-  ]
-    .filter(Boolean)
-    .join("<br>");
+  // One tally, because there used to be two and they disagreed. The cell
+  // said "2 unreadable" — notes in the strip — while the band below said
+  // "3 of 4 checks answered", and a reader cannot reconcile two numbers
+  // counting different things without being told which is which. The
+  // band counts CHECKS and owns the subject; this cell counts findings
+  // and says nothing about coverage.
+  const counts = findings ? `${findings} finding${findings === 1 ? "" : "s"}` : "nothing to flag";
   // `data-pending` is the machine-readable half of that, and it is a
   // contract: speed-check decides a slip is COMPLETE by the absence of this
   // marker. Restyling the visible chip away without it would have made
@@ -1144,6 +1210,7 @@ function verdictBlock(opts: {
         <p class="vsub">${esc(v.line)}${pending}</p>
       </div>
     </div>
+    ${opts.coverage ? coverageBand(opts.coverage, stage) : ""}
     ${opts.tiles ?? ""}
     <div class="vfoot">
       <button class="vaddr" type="button" data-copy="${esc(opts.address)}" title="Copy the address">${esc(opts.address)}</button>
@@ -1374,7 +1441,11 @@ async function runSolanaDoor(address: string): Promise<void> {
 }
 
 function renderSplSlip(slip: SplSlip, opts: { stage?: Stage } = {}): void {
-  noteRender(opts.stage ?? "done", verdictOf(slip.notes as DoorNote[], opts.stage ?? "done").word);
+  // Last render only; see renderSlip for why a mid-read slip must not be
+  // reported as an incomplete check.
+  const stage0 = opts.stage ?? "done";
+  const coverage = stage0 === "done" ? splCoverage(slip) : undefined;
+  noteRender(stage0, verdictOf(slip.notes as DoorNote[], stage0, coverage).word);
   const m = slip.mint;
   const sym = slip.metadata?.symbol ? esc(slip.metadata.symbol) : shortSol(slip.subject);
   const name = slip.metadata?.name ? esc(slip.metadata.name) : slip.whatItIs ? esc(slip.whatItIs) : "no on-chain name";
@@ -1425,14 +1496,15 @@ function renderSplSlip(slip: SplSlip, opts: { stage?: Stage } = {}): void {
       at: `${esc(slip.chain.name)} · slot ${slip.at.slot}${slip.at.timestamp ? ` · ${isoUtc(slip.at.timestamp)}` : ""}`,
       notes: slip.notes as DoorNote[],
       lead: splSentence(slip, blocked),
-      stage: opts.stage ?? "done",
+      stage: stage0,
+      coverage,
       tiles,
       stillReading: SOL_STILL_READING,
       actions: `<button class="ghost primary" id="act-share" type="button">Copy card</button><button class="ghost" id="act-link" type="button">Copy link</button><button class="ghost" id="act-json" type="button">JSON</button>`,
     })}
     ${answerCards(slip.notes as DoorNote[])}
     ${unreadStrip(slip.notes as DoorNote[], slip.skipped)}
-    ${buyStrip(slip.chain.key, slip.subject, Boolean(slip.mint), verdictOf(slip.notes as DoorNote[]).kind)}
+    ${buyStrip(slip.chain.key, slip.subject, Boolean(slip.mint), verdictOf(slip.notes as DoorNote[], "done", coverage).kind)}
     <div class="stack">
       ${section("s-id", "Is it real?", "What this address actually is, who can print more of it, and who can freeze what you hold.", idBody, false)}
       ${extBody ? section("s-ext", "Token-2022 extensions", "The rules the token program itself enforces on every transfer.", extBody, false) : ""}
@@ -1468,6 +1540,34 @@ function renderSplSlip(slip: SplSlip, opts: { stage?: Stage } = {}): void {
   $("act-link").addEventListener("click", async () => {
     const url = `${location.origin}${location.pathname}#/t/${slip.subject}?chain=${chain().key}`;
     try { await navigator.clipboard.writeText(url); showToast("Link copied"); } catch { showToast(url); }
+  });
+  wireRetry();
+}
+
+/**
+ * The retry, wired wherever a completeness band drew one.
+ *
+ * It re-runs the route rather than re-running only the sections that
+ * failed, and that is a deliberate trade. Re-reading one section means
+ * splicing a fresh answer into a slip read at a different block or slot,
+ * which is how a page ends up showing a holder list and a pool that never
+ * coexisted. A whole re-read costs a couple of seconds and everything on
+ * screen afterwards is one moment.
+ *
+ * The client's memo makes it cheaper than it sounds: the reads that
+ * ANSWERED last time are still in hand, so what actually goes back out is
+ * roughly the part that failed.
+ */
+function wireRetry(): void {
+  const button = document.getElementById("act-retry") as HTMLButtonElement | null;
+  if (!button) return;
+  button.addEventListener("click", () => {
+    button.disabled = true;
+    button.textContent = "Reading again…";
+    // Straight to route(), not through submit(): the address is already
+    // resolved and in the URL, and going back through the box would
+    // re-run chain detection on an address whose chain is settled.
+    route();
   });
 }
 
@@ -1764,7 +1864,15 @@ function noteRender(stage: Stage, word: string): void {
 }
 
 function renderSlip(slip: DoorSlip, opts: { stage?: Stage } = {}): void {
-  noteRender(opts.stage ?? "done", verdictOf(slip.notes, opts.stage ?? "done").word);
+  const stage0 = opts.stage ?? "done";
+  // Only on the last render. The EVM door paints three times off one paste,
+  // and on the first two most sections genuinely have not been read yet —
+  // reporting that as an incomplete CHECK would put an alarm on every
+  // token for the first second and a half, which is the fastest way to
+  // train a reader to ignore it. The stage line above already says what is
+  // still coming.
+  const coverage = stage0 === "done" ? doorCoverage(slip) : undefined;
+  noteRender(stage0, verdictOf(slip.notes, stage0, coverage).word);
   const meta = slip.id.meta;
   const c0 = chain();
   const explorer = c0.blockscout ? `${c0.blockscout}/address/${slip.subject}` : null;
@@ -1882,14 +1990,15 @@ function renderSlip(slip: DoorSlip, opts: { stage?: Stage } = {}): void {
       at: `${mode === "demo" ? "DEMO · " : ""}${esc(slip.chain.name)} · block ${slip.at.block} · ${isoUtc(slip.at.timestamp)}`,
       notes: slip.notes,
       lead: summarySentence(slip),
-      stage: opts.stage ?? "done",
+      stage: stage0,
+      coverage,
       tiles,
       actions: `<button class="ghost primary" id="act-share" type="button">Copy card</button><button class="ghost" id="act-card" type="button">Preview</button><button class="ghost" id="act-link" type="button">Copy link</button><button class="ghost" id="act-json" type="button">JSON</button>`,
     })}
     <div class="card-wrap" id="card"></div>
     ${answerCards(slip.notes)}
     ${unreadStrip(slip.notes, slip.skipped)}
-    ${buyStrip(mode === "demo" ? "" : slip.chain.key, slip.subject, Boolean(slip.id.meta) && slip.open?.transferFunction !== false, verdictOf(slip.notes).kind)}
+    ${buyStrip(mode === "demo" ? "" : slip.chain.key, slip.subject, Boolean(slip.id.meta) && slip.open?.transferFunction !== false, verdictOf(slip.notes, "done", coverage).kind)}
     <h2 class="stack-head">The evidence</h2>
     <div class="stack">
       ${section("s-id", "Is it real?", "Did the launchpad's factory deploy this token, and can its code change later?", idBody, false)}
@@ -1935,6 +2044,7 @@ function renderSlip(slip: DoorSlip, opts: { stage?: Stage } = {}): void {
     const url = `${location.origin}${location.pathname}#/${mode === "demo" ? "demo" : "t"}/${slip.subject}${routeChain()}`;
     try { await navigator.clipboard.writeText(url); showToast("Link copied"); } catch { showToast(url); }
   });
+  wireRetry();
   const walletGo = document.getElementById("wallet-go");
   if (walletGo) {
     walletGo.addEventListener("click", () => {

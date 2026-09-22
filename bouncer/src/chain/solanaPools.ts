@@ -105,6 +105,20 @@ export interface SolanaMarket {
   locks: SolanaPoolLock[];
   /** What the numbers above do and do not include, in one sentence. */
   note: string;
+  /**
+   * Why the venue search could not finish, or null when it did.
+   *
+   * `pools: []` is two opposite facts wearing the same shape: nobody
+   * trades this, or nobody would tell us. The note said which in English,
+   * and English is not something the completeness state can read — so a
+   * refused search came back as "no venue", which is the most reassuring
+   * possible rendering of "we do not know if you can sell".
+   *
+   * Set means the search was cut short and an empty `pools` proves
+   * nothing. Null means the search ran and an empty `pools` is a real
+   * answer about this token, within the blind spot the note describes.
+   */
+  unread: string | null;
 }
 
 const enc = new TextEncoder();
@@ -272,7 +286,7 @@ const SHARES = [1_000, 2_500, 5_000, 10_000];
  * otherwise, and what selling a position would pay at each of four sizes.
  */
 export async function readSolanaMarket(rpc: SolanaRpc, mint: string, position: bigint, tokenDecimals: number, scan?: HolderScan): Promise<SolanaMarket> {
-  const empty: SolanaMarket = { curve: null, pools: [], best: null, spot: null, quoteSymbol: "SOL", quotes: [], locks: [], note: "" };
+  const empty: SolanaMarket = { curve: null, pools: [], best: null, spot: null, quoteSymbol: "SOL", quotes: [], locks: [], note: "", unread: null };
 
   // The curve first: while it is live it IS the market, and it is one read.
   let curve: PumpCurve | null = null;
@@ -298,6 +312,9 @@ export async function readSolanaMarket(rpc: SolanaRpc, mint: string, position: b
       quoteSymbol: "SOL",
       quotes,
       locks: [],
+      // The curve IS the market while it is live, so nothing is missing
+      // even though no pool was looked for.
+      unread: null,
       note: "Priced on the pump.fun bonding curve's own virtual reserves, with its 1% fee, and capped at the SOL the curve actually holds. It has not graduated, so there is no pool yet.",
     };
   }
@@ -309,10 +326,14 @@ export async function readSolanaMarket(rpc: SolanaRpc, mint: string, position: b
   // address, and costs nothing when it has already been done for the holders.
   let pools: SolanaPool[] = [];
   let derivedFailed = false;
+  let derivedWhy: string | null = null;
+  let walkFailed = false;
+  let walkWhy: string | null = null;
   try {
     pools = await readDerivedPools(rpc, mint);
-  } catch {
+  } catch (error) {
     derivedFailed = true;
+    derivedWhy = error instanceof Error ? error.message : String(error);
   }
   // The walk is worth its cost in two cases: when the scan it needs has
   // already been paid for by the holder list, and when derivation found
@@ -323,12 +344,18 @@ export async function readSolanaMarket(rpc: SolanaRpc, mint: string, position: b
       const walked = await readSolanaPools(rpc, mint, scan);
       for (const p of walked) if (!pools.some((seen) => seen.address === p.address)) pools.push(p);
       pools.sort((a, b) => (b.quoteReserve > a.quoteReserve ? 1 : b.quoteReserve < a.quoteReserve ? -1 : 0));
-    } catch {
-      // the walk is the optional half; losing it costs the venues only it finds
+    } catch (error) {
+      // The walk is the optional half when derivation found venues: losing
+      // it costs only the ones it alone can see. When derivation found
+      // nothing, it is the other half of the same question, and losing it
+      // means the search never covered the ground it claims to cover.
+      walkFailed = true;
+      walkWhy = error instanceof Error ? error.message : String(error);
     }
   }
-  if (!pools.length && derivedFailed) {
-    return { ...empty, curve, note: "The pools could not be read from this endpoint." };
+  if (!pools.length && (derivedFailed || walkFailed)) {
+    const why = derivedFailed ? (derivedWhy ?? "the endpoint refused the pool accounts") : (walkWhy ?? "the endpoint refused the holder walk");
+    return { ...empty, curve, unread: why, note: `The pools could not be read from this endpoint: ${why}.` };
   }
   if (!pools.length) {
     // Worth being exact about the method's blind spot. Pools are found by
@@ -364,6 +391,12 @@ export async function readSolanaMarket(rpc: SolanaRpc, mint: string, position: b
     quoteSymbol: best.quoteSymbol,
     quotes,
     locks: await readLocks(rpc, pools),
+    // A venue was found and priced, so the question "where does this
+    // trade" has an answer. A failed walk here may have cost a DEX the
+    // derivation cannot see, which the note's blind-spot sentence covers;
+    // it is not the same as not knowing whether there is anywhere to sell,
+    // and marking it unread would blank a verdict that has its evidence.
+    unread: null,
     note: marketNote(pools, best, quotes),
   };
 }

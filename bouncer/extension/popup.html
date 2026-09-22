@@ -246,6 +246,48 @@ body.answered .chips{display:none}
 .verdict.v-stop .vword{color:var(--stop)}
 .verdict.v-watch .vword{color:var(--watch)}
 .verdict.v-clear .vword{color:var(--ok)}
+/* INCOMPLETE: the reading did not cover the ground, said in the one place
+   a reader actually looks. Slate, not red — this is not an accusation
+   against the token, it is a statement about what BOUNCER managed to read.
+   --info is 6.51:1 on --surface, so the word is legible rather than a
+   decorative tint. */
+.verdict.v-incomplete .vword{color:var(--info);font-size:clamp(22px,2.6vw,30px);letter-spacing:.01em}
+
+/* The completeness band: directly under the verdict, above the tiles.
+   It is where the refusals used to be missing from — they were in a strip
+   at the bottom of the page, under a headline that said the token looked
+   fine. Same text, twenty centimetres higher, and it is the difference
+   between a disclosure and a footnote. Drawn only when something IS
+   missing; a band that is always present is furniture. */
+.cov{border-top:1px solid var(--line);background:var(--surface-2);padding:16px 18px}
+.cov-thin{background:var(--info-bg);border-top-color:var(--info-edge)}
+.covhead{display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin-bottom:12px}
+.covword{font:700 11px/1 var(--display);letter-spacing:.2em;color:var(--info)}
+.cov-partial .covword{color:var(--muted)}
+.covcount{font:11.5px var(--mono);color:var(--muted)}
+/* 44px minimum, because a retry a reader cannot hit on a phone is a retry
+   that does not exist. The audit measured the export buttons at 29px. */
+.cov .ghost{margin-left:auto;min-height:44px;padding:0 16px}
+.cgaps{list-style:none;margin:0;padding:0;display:grid;gap:1px;background:var(--line)}
+/* A ruled table, not a bullet list: label, reason, and which question it
+   belonged to, so a gap can be matched to the finding that should have
+   sat next to it. */
+.cgap{display:grid;grid-template-columns:168px 1fr auto;gap:12px;align-items:baseline;
+  background:var(--surface);padding:9px 12px;font-size:12.5px}
+.cgl{color:var(--text);font:12.5px var(--mono)}
+.cgr{color:var(--muted);line-height:1.55}
+.cgt{font:10px var(--mono);letter-spacing:.14em;color:var(--muted);text-transform:uppercase;white-space:nowrap}
+/* The ones that can blank a verdict carry a rail. The others are disclosed
+   and not alarming, and marking everything urgent is how a reader learns
+   to skip the band. */
+.cgap-hard{box-shadow:inset 2px 0 0 var(--info)}
+.cgap-hard .cgl{color:var(--info)}
+@media (max-width:640px){
+  .cgap{grid-template-columns:1fr;gap:3px}
+  .cgt{grid-row:1;justify-self:start}
+  .cov .ghost{margin-left:0;width:100%}
+}
+
 /* The opening render: the code and the keys are on screen, the verdict is
    not in yet. Deliberately the quietest of the four — a reader should be
    able to tell at a glance that this one is not an answer. */
