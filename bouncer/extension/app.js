@@ -751,13 +751,36 @@
     // this is where the page says how sure it is of what it just told you.
     "explorer-age": "unread",
     "liquidity-unread": "unread",
+    // The simulations. Every one of these answers "can you sell it right
+    // now" — including the ones that could not be run, which is a gap about
+    // SELLING and belongs beside the others rather than in a strip a reader
+    // opens last. See PROBE_KINDS above for how these codes are built.
+    "move-ok": "sell",
+    "move-reverts": "sell",
+    "move-some-revert": "sell",
+    "move-unread": "unread",
+    "move-partial": "unread",
+    "sell-ok": "sell",
+    "sell-reverts": "sell",
+    "sell-some-revert": "sell",
+    "sell-unread": "unread",
+    "sell-partial": "unread",
     "no-metadata": "unread",
     "no-probe": "unread",
     "shares-unknown": "unread",
     skipped: "unread",
     "sol-liquidity-unread": "unread",
-    "surface-unreadable": "unread",
-    unverified: "unread"
+    // Also both: a gap in the reading AND a warning. The implementation a
+    // proxy points at did not load, so its switches are unknown rather than
+    // absent — which is a thing to act on, so it goes where findings go.
+    // That a section went unread is the completeness state's job to say,
+    // not a reason to hide the warning.
+    "surface-unreadable": "keep",
+    // Not a gap in the reading — a finding about how much of this contract
+    // anybody can know. It sits at WATCH, and a WATCH inside the strip for
+    // things that were not checked is the contradiction the simulation
+    // codes just taught us to look for.
+    unverified: "keep"
   };
   function topicOf(code) {
     return TOPIC_OF[code] ?? "unread";
