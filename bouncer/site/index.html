@@ -37,7 +37,19 @@
   --bg:#07090a; --surface:#0b0e10; --surface-2:#0f1315; --surface-3:#141a1c;
   --line:#1a2220; --line-2:#23302d;
 
-  --text:#eef3f1; --muted:#cfd6d3; --dim:#6d7a76; --dimmer:#4e5a57;
+  /* Four greys, and all four clear WCAG AA (4.5:1) on every surface they
+     are drawn on. They did not: an outside audit measured --dimmer at
+     2.78:1, and --dim sat at 4.33 to 4.46, just under. Both are tokens
+     used in dozens of rules, so the failure was everywhere at once and
+     invisible in any one of them — the fix is two values and
+     scripts/layout-check.mjs now measures every pairing in the browser so
+     it cannot drift back.
+
+     Raising them is not free: on a near-black background there is not much
+     room below white for four steps that all pass, so the gaps are tighter
+     than they were. Legible beats layered — a grey nobody can read is not
+     a level of hierarchy, it is a line of text that is missing. */
+  --text:#eef3f1; --muted:#cfd6d3; --dim:#909a97; --dimmer:#7e8784;
 
   /* Amber is the brand and it is also WATCH — the same signal, which is
      the point: this tool's job is to make you look. */
@@ -614,6 +626,66 @@ footer a{color:var(--muted)}
 footer a:hover{color:var(--brass-2)}
 .toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%) translateY(8px);background:var(--brass);color:var(--brass-ink);font:600 13px var(--mono);padding:11px 18px;border-radius:999px;opacity:0;pointer-events:none;transition:opacity .2s,transform .2s;z-index:60}
 .toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+
+/* ============================================================
+   TAP TARGETS ON A PHONE
+
+   An outside audit measured the export buttons at 29px and the chain
+   switch at 26. A control a thumb misses is a control that is not there,
+   and the one this release adds — "read the missing parts again" — is
+   pressed at the worst possible moment, when a check came back with a
+   hole in it.
+
+   44px for anything a thumb aims at: buttons, the chain menu, form
+   fields. 24px for a standalone link, which is nearer to text and is
+   WCAG 2.2's own AA floor. Inline links inside prose are text and are
+   left alone.
+
+   Height only. Widening these would rebuild the header, and the misses
+   were vertical: a 27px button is a 27px button whatever its width.
+   scripts/layout-check.mjs measures every one of them in a real browser
+   at 390px, so this cannot quietly rot back.
+   ============================================================ */
+@media (max-width:640px){
+  .ghost,.chip,.btn,.link,.picker-btn,.ext,.seg button{min-height:44px}
+  .ghost,.chip,.link{display:inline-flex;align-items:center;justify-content:center}
+  .picker-btn,.ext,.seg button{align-items:center}
+  input.short,.door input,select:not(.sr){min-height:44px}
+  /* The address is deliberately a line of text rather than a control, so
+     it keeps its size and gains the room around it instead — the target
+     grows without the page growing a button it does not want. */
+  .vaddr{padding:14px 0;min-height:44px}
+  .more a,footer a{display:inline-block;padding:5px 0;min-height:24px}
+}
+
+/* ============================================================
+   ONCE THERE IS AN ANSWER, THE PITCH IS IN THE WAY
+
+   The audit measured the first screen on a phone as too long, and the
+   measurement that says it plainly is this: with a slip on screen the
+   verdict began around 900px on an 844px viewport — the one word the
+   whole page exists to say, below the fold, under a headline explaining
+   what the page is for to somebody who has already used it.
+
+   So the hero collapses once `#out` has content. Nothing is removed:
+   the explanation is there for a first visit, which is the only visit
+   it is for, and the search box stays exactly where it was so a second
+   address can go straight in. On a wide screen there is room for both
+   and the hero stays.
+
+   `body:has(#out .slip)` rather than a class toggled from script: the
+   page already re-renders `#out` on every read, so tying it to what is
+   actually in there means no third place that has to remember to
+   change. Browsers without :has get today's layout, which is the
+   correct fallback — everything is still on the page, just lower.
+   ============================================================ */
+@media (max-width:640px){
+  body:has(#out .slip) .hero{display:none}
+  body:has(#out .slip) .source{display:none}
+  body:has(#out .slip) .status{display:none}
+  body:has(#out .slip) .chips:empty{display:none}
+  body:has(#out .slip) .door{margin-top:0}
+}
 </style>
 </head>
 <body>

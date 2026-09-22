@@ -173,6 +173,134 @@ for (const size of WIDTHS) {
       }
     }
 
+// ---- contrast, measured in the browser rather than read off the palette
+    //
+    // An outside audit measured one pairing on this page at 2.78:1 against
+    // a requirement of 4.5. Reading the stylesheet would not have found it:
+    // the colour is a token used in a dozen rules, and what matters is the
+    // pair that ends up on screen — the computed colour of the text against
+    // the first ancestor that actually paints a background. Only a browser
+    // knows that.
+    //
+    // Small text only, per WCAG: 18.66px bold or 24px normal and up is
+    // large text and clears at 3:1. Measured per element and reported with
+    // the pair, because "the page has a contrast problem" is not something
+    // anybody can act on.
+    const dull = await page.evaluate((MIN) => {
+      const lum = (rgb) => {
+        const c = rgb.map((v) => v / 255).map((v) => (v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4));
+        return 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
+      };
+      const parse = (s) => {
+        const m = /rgba?\(([^)]+)\)/.exec(s || "");
+        if (!m) return null;
+        const parts = m[1].split(/[\s,/]+/).filter(Boolean).map(Number);
+        return { rgb: parts.slice(0, 3), a: parts.length > 3 ? parts[3] : 1 };
+      };
+      // The colour actually behind an element: walk up until something
+      // paints. A transparent background is not a background.
+      const behind = (el) => {
+        for (let n = el; n; n = n.parentElement) {
+          const bg = parse(getComputedStyle(n).backgroundColor);
+          if (bg && bg.a > 0.95) return bg.rgb;
+        }
+        return [0, 0, 0];
+      };
+      const ratio = (a, b) => {
+        const [x, y] = [lum(a), lum(b)].sort((p, q) => q - p);
+        return (x + 0.05) / (y + 0.05);
+      };
+      const bad = [];
+      const seen = new Set();
+      for (const el of document.querySelectorAll("body *")) {
+        // Only elements holding their own visible text.
+        const own = [...el.childNodes].filter((n) => n.nodeType === 3).map((n) => n.textContent.trim()).join(" ").trim();
+        if (!own) continue;
+        const cs = getComputedStyle(el);
+        if (cs.visibility === "hidden" || cs.display === "none" || Number(cs.opacity) < 0.1) continue;
+        const r = el.getBoundingClientRect();
+        if (r.width < 2 || r.height < 2) continue;
+        const fg = parse(cs.color);
+        if (!fg || fg.a < 0.95) continue;
+        const size = parseFloat(cs.fontSize);
+        const weight = Number(cs.fontWeight) || 400;
+        const large = size >= 24 || (size >= 18.66 && weight >= 700);
+        const need = large ? 3 : MIN;
+        const got = ratio(fg.rgb, behind(el));
+        if (got >= need) continue;
+        const key = `${cs.color}|${el.className}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        bad.push({ sel: `${el.tagName.toLowerCase()}.${(el.className || "").toString().split(" ").filter(Boolean).join(".")}`, got: Math.round(got * 100) / 100, need, color: cs.color, text: own.slice(0, 32) });
+      }
+      return bad;
+    }, 4.5);
+    for (const b of dull) {
+      failures++;
+      console.error(`::error::${size.name} (${size.w}px), ${route.what}: ${b.sel} is ${b.got}:1 against its background, needs ${b.need}:1 — ${b.color} on "${b.text}"`);
+    }
+
+    // ---- tap targets
+    //
+    // The audit measured the export buttons at 29px and the chain switch at
+    // 26. A control a thumb misses is a control that is not there, and the
+    // retry this release adds is the one somebody presses when a check came
+    // back incomplete — the worst possible moment to miss.
+    if (size.w <= 480) {
+      const small = await page.evaluate(() => {
+        const out = [];
+        for (const el of document.querySelectorAll("button, a[href], select, [role=button], input")) {
+          const cs = getComputedStyle(el);
+          if (cs.visibility === "hidden" || cs.display === "none") continue;
+          const r = el.getBoundingClientRect();
+          if (r.width < 2 || r.height < 2) continue;
+          // Pushed off-screen for a screen reader. The native <select> behind
+          // the chain picker lives here: it is the control of record and the
+          // thing assistive tech drives, and no thumb ever reaches for it.
+          if (r.right < 0 || r.bottom < 0) continue;
+          // An inline link inside prose is text, not a target.
+          if (el.tagName === "A" && el.closest("p, li, dd, td")) continue;
+          // Two rules, because they are two different promises. A control —
+          // a button, a menu, a field — is something a thumb aims at, and 44
+          // is the size a thumb needs; that is where the audit's 27px export
+          // buttons and 26px chain switch sit. A standalone link is closer
+          // to text, and WCAG 2.2's own AA floor for a target is 24.
+          const need = el.tagName === "A" ? 24 : 44;
+          if (r.height < need) out.push({ need, sel: `${el.tagName.toLowerCase()}.${(el.className || "").toString().split(" ").filter(Boolean).join(".")}`, h: Math.round(r.height), text: (el.textContent || el.value || "").trim().slice(0, 28) });
+        }
+        return out;
+      });
+      for (const t of small) {
+        failures++;
+        console.error(`::error::${size.name} (${size.w}px), ${route.what}: ${t.sel} is ${t.h}px tall, needs ${t.need} — "${t.text}"`);
+      }
+    }
+
+// ---- is the answer on the first screen?
+    //
+    // The audit said the phone's first screen was too long. Measured, it
+    // was worse than "too long": with a slip open the verdict word began
+    // around 900px on an 844px viewport, so the one word the whole page
+    // exists to say was below the fold, under a headline explaining the
+    // page to somebody who had already used it.
+    //
+    // A ceiling on where the ANSWER starts, which is the thing a reader
+    // came for. Everything above it — header, search box — is allowed to
+    // exist; it is just not allowed to push the verdict off the screen.
+    if (size.w <= 480 && route.tall) {
+      const top = await page.evaluate(() => {
+        const el = document.querySelector(".vword");
+        return el ? Math.round(el.getBoundingClientRect().top + scrollY) : null;
+      });
+      if (top === null) {
+        failures++;
+        console.error(`::error::${size.name} (${size.w}px), ${route.what}: no verdict word to measure`);
+      } else if (top > size.h - 120) {
+        failures++;
+        console.error(`::error::${size.name} (${size.w}px), ${route.what}: the verdict starts ${top}px down a ${size.h}px screen — the answer is below the fold`);
+      }
+    }
+
     const over = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
     if (over > 1) {
       failures++;
@@ -209,4 +337,7 @@ if (failures) {
   console.error(`\nlayout: ${failures} of ${checked} checks failed.`);
   process.exit(1);
 }
-console.log(`layout: ${checked} page loads across ${WIDTHS.length} widths, no horizontal scroll, no page errors, nothing over its height ceiling`);
+// Name what passed, not just that something did. A summary that says "no
+// horizontal scroll" while two other checks sat silently disabled is how a
+// green run stops meaning anything.
+console.log(`layout: ${checked} page loads across ${WIDTHS.length} widths · no horizontal scroll · no page errors · nothing over its height ceiling · every text pairing at or above WCAG AA (4.5:1, 3:1 for large) · every phone control at 44px and every standalone link at 24 · the verdict above the fold on a phone`);
