@@ -94,6 +94,18 @@ export interface ChainConfig {
   blockscout: string | null;
   /** An explorer for links only, when there is no machine-readable one. */
   explorerUrl?: string;
+  /**
+   * The chain's colour, and a glyph for the picker.
+   *
+   * `mark` is the INNER markup of a 16x16 SVG, drawn in `currentColor` so
+   * it takes `tint` from the element around it. Where a chain's mark is
+   * simple, well-known geometry it is drawn faithfully; where it is not,
+   * the glyph is the chain's initial rather than an approximation —
+   * a badly redrawn logo is worse than a letter, and inventing one for a
+   * network that has its own is worse than both.
+   */
+  tint: string;
+  mark: string;
   /** Launchpad factory (PonsV2LaunchFactory or its port), lower-cased, or null when this chain has none. */
   factory: string | null;
   /** The older Pons V1 factory on this chain, when there is one; V1 tokens are read from it so they are not called impostors. */
@@ -126,6 +138,8 @@ export const PUBLIC_PROXY = "https://bouncer-proxy.tarasenkosanja12.workers.dev"
 export const CHAINS: Record<string, ChainConfig> = {
   robinhood: {
     key: "robinhood",
+    tint: "#c8f751",
+    mark: '<text x="8" y="12" text-anchor="middle" font-family="monospace" font-size="11" font-weight="700" fill="currentColor">R</text>',
     name: "Robinhood Chain",
     family: "evm",
     chainId: 4663,
@@ -160,6 +174,8 @@ export const CHAINS: Record<string, ChainConfig> = {
   },
   base: {
     key: "base",
+    tint: "#3f6cff",
+    mark: '<path d="M9.5 1.57a6.6 6.6 0 1 0 0 12.86Z" fill="currentColor"/>',
     name: "Base",
     family: "evm",
     chainId: 8453,
@@ -181,6 +197,8 @@ export const CHAINS: Record<string, ChainConfig> = {
   },
   bnb: {
     key: "bnb",
+    tint: "#f0b90b",
+    mark: '<g fill="currentColor"><rect x="6.6" y="1.2" width="2.8" height="2.8" transform="rotate(45 8 2.6)"/><rect x="6.6" y="12" width="2.8" height="2.8" transform="rotate(45 8 13.4)"/><rect x="1.2" y="6.6" width="2.8" height="2.8" transform="rotate(45 2.6 8)"/><rect x="12" y="6.6" width="2.8" height="2.8" transform="rotate(45 13.4 8)"/><rect x="6.2" y="6.2" width="3.6" height="3.6" transform="rotate(45 8 8)"/></g>',
     name: "BNB Chain",
     family: "evm",
     chainId: 56,
@@ -205,6 +223,8 @@ export const CHAINS: Record<string, ChainConfig> = {
   },
   solana: {
     key: "solana",
+    tint: "#14f195",
+    mark: '<g fill="currentColor"><path d="M3.6 4.2h9.2l-1.9 2H1.7l1.9-2Z"/><path d="M3.6 7h9.2l-1.9 2H1.7L3.6 7Z"/><path d="M3.6 9.8h9.2l-1.9 2H1.7l1.9-2Z"/></g>',
     name: "Solana",
     family: "solana",
     chainId: 0,
@@ -228,6 +248,8 @@ export const CHAINS: Record<string, ChainConfig> = {
   },
   "arc-testnet": {
     key: "arc-testnet",
+    tint: "#8a8fa8",
+    mark: '<text x="8" y="12" text-anchor="middle" font-family="monospace" font-size="11" font-weight="700" fill="currentColor">A</text>',
     name: "Arc Testnet",
     family: "evm",
     chainId: 5042002,
@@ -241,6 +263,8 @@ export const CHAINS: Record<string, ChainConfig> = {
   },
   arc: {
     key: "arc",
+    tint: "#6f7bff",
+    mark: '<text x="8" y="12" text-anchor="middle" font-family="monospace" font-size="11" font-weight="700" fill="currentColor">A</text>',
     name: "Arc",
     family: "evm",
     chainId: 5042,

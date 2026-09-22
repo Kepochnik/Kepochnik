@@ -809,6 +809,8 @@
   var CHAINS = {
     robinhood: {
       key: "robinhood",
+      tint: "#c8f751",
+      mark: '<text x="8" y="12" text-anchor="middle" font-family="monospace" font-size="11" font-weight="700" fill="currentColor">R</text>',
       name: "Robinhood Chain",
       family: "evm",
       chainId: 4663,
@@ -843,6 +845,8 @@
     },
     base: {
       key: "base",
+      tint: "#3f6cff",
+      mark: '<path d="M9.5 1.57a6.6 6.6 0 1 0 0 12.86Z" fill="currentColor"/>',
       name: "Base",
       family: "evm",
       chainId: 8453,
@@ -864,6 +868,8 @@
     },
     bnb: {
       key: "bnb",
+      tint: "#f0b90b",
+      mark: '<g fill="currentColor"><rect x="6.6" y="1.2" width="2.8" height="2.8" transform="rotate(45 8 2.6)"/><rect x="6.6" y="12" width="2.8" height="2.8" transform="rotate(45 8 13.4)"/><rect x="1.2" y="6.6" width="2.8" height="2.8" transform="rotate(45 2.6 8)"/><rect x="12" y="6.6" width="2.8" height="2.8" transform="rotate(45 13.4 8)"/><rect x="6.2" y="6.2" width="3.6" height="3.6" transform="rotate(45 8 8)"/></g>',
       name: "BNB Chain",
       family: "evm",
       chainId: 56,
@@ -888,6 +894,8 @@
     },
     solana: {
       key: "solana",
+      tint: "#14f195",
+      mark: '<g fill="currentColor"><path d="M3.6 4.2h9.2l-1.9 2H1.7l1.9-2Z"/><path d="M3.6 7h9.2l-1.9 2H1.7L3.6 7Z"/><path d="M3.6 9.8h9.2l-1.9 2H1.7l1.9-2Z"/></g>',
       name: "Solana",
       family: "solana",
       chainId: 0,
@@ -911,6 +919,8 @@
     },
     "arc-testnet": {
       key: "arc-testnet",
+      tint: "#8a8fa8",
+      mark: '<text x="8" y="12" text-anchor="middle" font-family="monospace" font-size="11" font-weight="700" fill="currentColor">A</text>',
       name: "Arc Testnet",
       family: "evm",
       chainId: 5042002,
@@ -924,6 +934,8 @@
     },
     arc: {
       key: "arc",
+      tint: "#6f7bff",
+      mark: '<text x="8" y="12" text-anchor="middle" font-family="monospace" font-size="11" font-weight="700" fill="currentColor">A</text>',
       name: "Arc",
       family: "evm",
       chainId: 5042,
@@ -6801,12 +6813,10 @@
   }
   function setMode(next, silent = false) {
     mode = next;
-    $("mode-demo").setAttribute("aria-pressed", String(next === "demo"));
-    $("mode-live").setAttribute("aria-pressed", String(next === "live"));
-    chainSelect.disabled = next === "demo";
-    sourcePill.textContent = next === "demo" ? "Demo data" : chainOrNull() ? `Live \xB7 ${chainOrNull().name}` : "Live \xB7 finding the chain";
-    sourcePill.classList.toggle("live", next === "live");
-    sourceText.innerHTML = next === "demo" ? SANDBOXED ? `You are looking at an invented example chain. This preview on claude.ai cannot reach the internet, so <b>Live</b> is off here: use the <a href="${HOSTED}">hosted site</a>, the Chrome extension or the CLI for real tokens.` : "You are looking at an invented example chain. Switch to <b>Live</b> to check a real token." : `Reading ${esc2(chain().name)} from your browser at one block. Nothing is cached.`;
+    chainSelect.disabled = false;
+    sourcePill.textContent = SANDBOXED ? "No network" : "Live";
+    sourcePill.classList.toggle("live", !SANDBOXED);
+    sourceText.innerHTML = SANDBOXED ? `This preview on claude.ai cannot reach the internet, so nothing here can be read. Use the <a href="${HOSTED}">hosted site</a>, the Chrome extension or the CLI.` : chainOrNull() ? `Reading ${esc2(chainOrNull().name)} from your browser at one block. Nothing is cached.` : "Paste an address and BOUNCER finds the chain it lives on. Read from your browser at one block, nothing cached.";
     renderChips();
     if (!silent) storage("bouncer.mode", next);
   }
@@ -6831,6 +6841,87 @@
     if (parts.length === 1 && /^0x/.test(parts[0]) && mode === "demo" && /^0xdemo/i.test(parts[0])) return { view: "tx", parts };
     if (raw.trim() && mode === "live" && /^\$?[a-z0-9 ._-]{2,32}$/i.test(raw.trim())) return { view: "door", parts: [raw.trim()] };
     return null;
+  }
+  function chainMark(key) {
+    if (key === "auto") return `<svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="5.6" fill="none" stroke="currentColor" stroke-width="1.4" stroke-dasharray="2.6 2.2"/></svg>`;
+    const c = CHAINS[key];
+    return c ? `<svg viewBox="0 0 16 16" aria-hidden="true">${c.mark}</svg>` : "";
+  }
+  function chainTint(key) {
+    return key === "auto" ? "var(--dim)" : CHAINS[key]?.tint ?? "var(--dim)";
+  }
+  function setUpPicker() {
+    const btn = $("picker-btn");
+    const menu = $("picker-menu");
+    const markEl = $("picker-mark");
+    const nameEl = $("picker-name");
+    const options = [...chainSelect.options].map((o) => ({ value: o.value, label: o.textContent ?? o.value }));
+    const paint = () => {
+      const key = chainSelect.value;
+      markEl.innerHTML = chainMark(key);
+      markEl.style.color = chainTint(key);
+      nameEl.textContent = options.find((o) => o.value === key)?.label ?? key;
+    };
+    const draw = () => {
+      menu.innerHTML = options.map(
+        (o) => `<li role="option" data-value="${esc2(o.value)}" aria-selected="${o.value === chainSelect.value}" tabindex="-1">
+          <span class="picker-mark" style="color:${esc2(chainTint(o.value))}">${chainMark(o.value)}</span>
+          <span>${esc2(o.label)}</span>
+          ${o.value === chainSelect.value ? '<span class="tick" aria-hidden="true">&#10003;</span>' : ""}
+        </li>`
+      ).join("");
+    };
+    let open = false;
+    const items = () => [...menu.querySelectorAll("li")];
+    const highlight = (i) => {
+      const list = items();
+      list.forEach((el, n) => el.classList.toggle("on", n === i));
+      list[i]?.scrollIntoView({ block: "nearest" });
+    };
+    const at = () => items().findIndex((el) => el.classList.contains("on"));
+    const show = () => {
+      draw();
+      menu.hidden = false;
+      btn.setAttribute("aria-expanded", "true");
+      open = true;
+      highlight(Math.max(0, options.findIndex((o) => o.value === chainSelect.value)));
+    };
+    const hide = () => {
+      menu.hidden = true;
+      btn.setAttribute("aria-expanded", "false");
+      open = false;
+    };
+    const choose = (value) => {
+      chainSelect.value = value;
+      chainSelect.dispatchEvent(new Event("change", { bubbles: true }));
+      paint();
+      hide();
+      btn.focus();
+    };
+    btn.addEventListener("click", () => open ? hide() : show());
+    menu.addEventListener("click", (e) => {
+      const li = e.target.closest("li[data-value]");
+      if (li) choose(li.dataset.value);
+    });
+    btn.addEventListener("keydown", (e) => {
+      if (e.key === "ArrowDown" || e.key === "ArrowUp" || e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        if (!open) return show();
+      }
+      if (!open) return;
+      const list = items();
+      if (e.key === "ArrowDown") highlight(Math.min(list.length - 1, at() + 1));
+      else if (e.key === "ArrowUp") highlight(Math.max(0, at() - 1));
+      else if (e.key === "Home") highlight(0);
+      else if (e.key === "End") highlight(list.length - 1);
+      else if (e.key === "Enter" || e.key === " ") choose(list[Math.max(0, at())].dataset.value);
+      else if (e.key === "Escape") hide();
+    });
+    document.addEventListener("click", (e) => {
+      if (open && !$("picker").contains(e.target)) hide();
+    });
+    chainSelect.addEventListener("change", paint);
+    paint();
   }
   function proxyBase() {
     return (proxyInput.value.trim() || DEFAULT_PROXY).replace(/\/$/, "");
@@ -6997,7 +7088,7 @@
   }
   function paintChain() {
     const c = chainOrNull();
-    sourcePill.textContent = mode === "demo" ? "Demo data" : c ? `Live \xB7 ${c.name}` : "Live \xB7 finding the chain";
+    setMode(mode, true);
   }
   async function resolveChain(address) {
     if (autoChain && autoChain.key === resolvedFor.chain && resolvedFor.address === address.toLowerCase()) return true;
@@ -8131,6 +8222,7 @@
     factoryInput.value = storage("bouncer.factory") ?? "";
     chainSelect.value = storage("bouncer.chain") ?? "auto";
     paintSelectedChain();
+    setUpPicker();
     rpcInput.addEventListener("change", () => storage("bouncer.rpc", rpcInput.value.trim()));
     factoryInput.addEventListener("change", () => storage("bouncer.factory", factoryInput.value.trim()));
     chainSelect.addEventListener("change", () => {
@@ -8143,13 +8235,6 @@
       if (mode === "live") setMode("live", true);
       renderChips();
     });
-    $("mode-demo").addEventListener("click", () => setMode("demo"));
-    $("mode-live").addEventListener("click", () => setMode("live"));
-    if (SANDBOXED) {
-      const live = $("mode-live");
-      live.disabled = true;
-      live.title = "Live mode cannot run inside the claude.ai preview: the sandbox blocks network requests. Use the hosted site or the Chrome extension.";
-    }
     settingsToggle.addEventListener("click", () => {
       const open = !settings.classList.contains("open");
       settings.classList.toggle("open", open);
@@ -8160,13 +8245,11 @@
       submit();
     });
     window.addEventListener("hashchange", route);
-    setMode(SANDBOXED ? "demo" : storage("bouncer.mode") ?? "demo", true);
+    setMode("live", true);
     setView("door");
     if (location.hash) route();
     else {
-      q.value = DEMO.tokens.fresh.token;
-      setMode("demo", true);
-      void runDoor(DEMO.tokens.fresh.token);
+      q.focus();
     }
   }
   boot();

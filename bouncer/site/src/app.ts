@@ -44,6 +44,19 @@ const REPO = "github.com/Kepochnik/bouncer";
 const MARK = "$BOUNCER";
 const ADDR = /^0x[0-9a-fA-F]{40}$/;
 /** The claude.ai preview sandbox blocks every network request a page makes; live mode cannot work there. */
+/**
+ * The demo is gone from the interface.
+ *
+ * Not from the codebase: `#/demo/…` still routes, because every offline
+ * check in this repo reads the demo chain through it — the three renders,
+ * the journeys, the whole layout pass run with no network at all, and
+ * deleting the route would mean the only way to test the page is against
+ * a live chain from a runner. What IS gone is every way to reach it from
+ * the page: the demo/live toggle, the "you are looking at an invented
+ * example chain" strip, and the demo token the page used to open on.
+ *
+ * A reader arrives on a live chain and stays there.
+ */
 const SANDBOXED = /(^|\.)claude\.ai$|claudeusercontent|anthropic/.test(location.hostname);
 const HOSTED = "https://kepochnik.github.io/bouncer/";
 /** Set this to your deployed bouncer-proxy URL to make it the default for everyone who opens the site. */
@@ -104,16 +117,18 @@ function chain(): ChainConfig {
 
 function setMode(next: Mode, silent = false): void {
   mode = next;
-  $("mode-demo").setAttribute("aria-pressed", String(next === "demo"));
-  $("mode-live").setAttribute("aria-pressed", String(next === "live"));
-  chainSelect.disabled = next === "demo";
-  sourcePill.textContent = next === "demo" ? "Demo data" : chainOrNull() ? `Live · ${chainOrNull()!.name}` : "Live · finding the chain";
-  sourcePill.classList.toggle("live", next === "live");
-  sourceText.innerHTML = next === "demo"
-    ? SANDBOXED
-      ? `You are looking at an invented example chain. This preview on claude.ai cannot reach the internet, so <b>Live</b> is off here: use the <a href="${HOSTED}">hosted site</a>, the Chrome extension or the CLI for real tokens.`
-      : "You are looking at an invented example chain. Switch to <b>Live</b> to check a real token."
-    : `Reading ${esc(chain().name)} from your browser at one block. Nothing is cached.`;
+  chainSelect.disabled = false;
+  // The strip says what this page is doing, and on a chain nobody has
+  // chosen yet it says that instead of naming one. In the claude.ai
+  // preview the sandbox blocks every request, so it says so rather than
+  // letting somebody paste an address into a box that cannot answer.
+  sourcePill.textContent = SANDBOXED ? "No network" : "Live";
+  sourcePill.classList.toggle("live", !SANDBOXED);
+  sourceText.innerHTML = SANDBOXED
+    ? `This preview on claude.ai cannot reach the internet, so nothing here can be read. Use the <a href="${HOSTED}">hosted site</a>, the Chrome extension or the CLI.`
+    : chainOrNull()
+      ? `Reading ${esc(chainOrNull()!.name)} from your browser at one block. Nothing is cached.`
+      : "Paste an address and BOUNCER finds the chain it lives on. Read from your browser at one block, nothing cached.";
   renderChips();
   if (!silent) storage("bouncer.mode", next);
 }
@@ -148,6 +163,109 @@ function detect(raw: string): { view: View; parts: string[] } | null {
   // not what this tab needs".
   if (raw.trim() && mode === "live" && /^\$?[a-z0-9 ._-]{2,32}$/i.test(raw.trim())) return { view: "door", parts: [raw.trim()] };
   return null;
+}
+
+/**
+ * The chain picker: a listbox that drives the native <select>.
+ *
+ * A <select> cannot draw a mark beside an option, and the marks are the
+ * point — a reader scanning for "the blue circle one" beats a reader
+ * reading six names. So the visible control is a listbox and the select
+ * stays underneath as the value: every existing reader and writer of
+ * `chainSelect.value`, the route, the storage key and the change handler
+ * all carry on untouched, and a page whose script never ran still has a
+ * working form control rather than a dead button.
+ */
+function chainMark(key: string): string {
+  if (key === "auto") return `<svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="5.6" fill="none" stroke="currentColor" stroke-width="1.4" stroke-dasharray="2.6 2.2"/></svg>`;
+  const c = CHAINS[key];
+  return c ? `<svg viewBox="0 0 16 16" aria-hidden="true">${c.mark}</svg>` : "";
+}
+
+function chainTint(key: string): string {
+  return key === "auto" ? "var(--dim)" : (CHAINS[key]?.tint ?? "var(--dim)");
+}
+
+function setUpPicker(): void {
+  const btn = $<HTMLButtonElement>("picker-btn");
+  const menu = $<HTMLUListElement>("picker-menu");
+  const markEl = $("picker-mark");
+  const nameEl = $("picker-name");
+  const options = [...chainSelect.options].map((o) => ({ value: o.value, label: o.textContent ?? o.value }));
+
+  const paint = (): void => {
+    const key = chainSelect.value;
+    markEl.innerHTML = chainMark(key);
+    markEl.style.color = chainTint(key);
+    nameEl.textContent = options.find((o) => o.value === key)?.label ?? key;
+  };
+
+  const draw = (): void => {
+    menu.innerHTML = options
+      .map(
+        (o) => `<li role="option" data-value="${esc(o.value)}" aria-selected="${o.value === chainSelect.value}" tabindex="-1">
+          <span class="picker-mark" style="color:${esc(chainTint(o.value))}">${chainMark(o.value)}</span>
+          <span>${esc(o.label)}</span>
+          ${o.value === chainSelect.value ? '<span class="tick" aria-hidden="true">&#10003;</span>' : ""}
+        </li>`,
+      )
+      .join("");
+  };
+
+  let open = false;
+  const items = (): HTMLLIElement[] => [...menu.querySelectorAll<HTMLLIElement>("li")];
+  const highlight = (i: number): void => {
+    const list = items();
+    list.forEach((el, n) => el.classList.toggle("on", n === i));
+    list[i]?.scrollIntoView({ block: "nearest" });
+  };
+  const at = (): number => items().findIndex((el) => el.classList.contains("on"));
+
+  const show = (): void => {
+    draw();
+    menu.hidden = false;
+    btn.setAttribute("aria-expanded", "true");
+    open = true;
+    highlight(Math.max(0, options.findIndex((o) => o.value === chainSelect.value)));
+  };
+  const hide = (): void => {
+    menu.hidden = true;
+    btn.setAttribute("aria-expanded", "false");
+    open = false;
+  };
+  const choose = (value: string): void => {
+    chainSelect.value = value;
+    // The one that everything else in this file is already listening for.
+    chainSelect.dispatchEvent(new Event("change", { bubbles: true }));
+    paint();
+    hide();
+    btn.focus();
+  };
+
+  btn.addEventListener("click", () => (open ? hide() : show()));
+  menu.addEventListener("click", (e) => {
+    const li = (e.target as HTMLElement).closest<HTMLLIElement>("li[data-value]");
+    if (li) choose(li.dataset.value!);
+  });
+  btn.addEventListener("keydown", (e) => {
+    if (e.key === "ArrowDown" || e.key === "ArrowUp" || e.key === "Enter" || e.key === " ") {
+      e.preventDefault();
+      if (!open) return show();
+    }
+    if (!open) return;
+    const list = items();
+    if (e.key === "ArrowDown") highlight(Math.min(list.length - 1, at() + 1));
+    else if (e.key === "ArrowUp") highlight(Math.max(0, at() - 1));
+    else if (e.key === "Home") highlight(0);
+    else if (e.key === "End") highlight(list.length - 1);
+    else if (e.key === "Enter" || e.key === " ") choose(list[Math.max(0, at())].dataset.value!);
+    else if (e.key === "Escape") hide();
+  });
+  document.addEventListener("click", (e) => {
+    if (open && !$("picker").contains(e.target as Node)) hide();
+  });
+  chainSelect.addEventListener("change", paint);
+  paint();
 }
 
 function proxyBase(): string {
@@ -438,7 +556,7 @@ function paintSelectedChain(): void {
 /** Repaints the chrome that names the chain, after a search settles it. */
 function paintChain(): void {
   const c = chainOrNull();
-  sourcePill.textContent = mode === "demo" ? "Demo data" : c ? `Live · ${c.name}` : "Live · finding the chain";
+  setMode(mode, true);
 }
 
 /**
@@ -2092,6 +2210,7 @@ function boot(): void {
   // a reader to know it first is asking them the question they came with.
   chainSelect.value = storage("bouncer.chain") ?? "auto";
   paintSelectedChain();
+  setUpPicker();
   rpcInput.addEventListener("change", () => storage("bouncer.rpc", rpcInput.value.trim()));
   factoryInput.addEventListener("change", () => storage("bouncer.factory", factoryInput.value.trim()));
   chainSelect.addEventListener("change", () => {
@@ -2106,13 +2225,6 @@ function boot(): void {
     if (mode === "live") setMode("live", true);
     renderChips();
   });
-  $("mode-demo").addEventListener("click", () => setMode("demo"));
-  $("mode-live").addEventListener("click", () => setMode("live"));
-  if (SANDBOXED) {
-    const live = $<HTMLButtonElement>("mode-live");
-    live.disabled = true;
-    live.title = "Live mode cannot run inside the claude.ai preview: the sandbox blocks network requests. Use the hosted site or the Chrome extension.";
-  }
   settingsToggle.addEventListener("click", () => {
     const open = !settings.classList.contains("open");
     settings.classList.toggle("open", open);
@@ -2123,13 +2235,18 @@ function boot(): void {
     submit();
   });
   window.addEventListener("hashchange", route);
-  setMode(SANDBOXED ? "demo" : ((storage("bouncer.mode") as Mode | null) ?? "demo"), true);
+  setMode("live", true);
   setView("door");
   if (location.hash) route();
   else {
-    q.value = DEMO.tokens.fresh.token;
-    setMode("demo", true);
-    void runDoor(DEMO.tokens.fresh.token);
+    // An empty box, and the cursor in it.
+    //
+    // It used to open on an invented token, which meant the first thing
+    // anybody saw was a full slip about a coin that does not exist —
+    // impressive for a second and misleading for as long as it took them
+    // to notice the word DEMO. A tool that reads the chain should start
+    // by asking which address.
+    q.focus();
   }
 }
 

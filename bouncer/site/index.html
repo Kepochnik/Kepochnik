@@ -98,6 +98,31 @@ header{position:sticky;top:0;z-index:40;background:var(--surface);border-bottom:
 .seg button[disabled]{opacity:.35;cursor:not-allowed}
 .seg button:focus-visible{outline:2px solid var(--brass);outline-offset:-2px}
 
+/* The chain picker.
+   A native <select> cannot draw a logo beside an option, so the real
+   control is a listbox and the <select> stays as the value everything
+   else already reads and writes — no other code changes, and the form
+   still works if the script never runs. */
+.picker{position:relative;display:flex;align-self:stretch;border-left:1px solid var(--line)}
+.picker-btn{display:inline-flex;align-items:center;gap:9px;background:none;border:0;border-right:1px solid var(--line);
+  color:var(--muted);padding:0 13px;cursor:pointer;font:500 11px/1 var(--mono);letter-spacing:.1em;text-transform:uppercase}
+.picker-btn:hover{color:var(--text);background:var(--surface-2)}
+.picker-btn[aria-expanded="true"]{background:var(--surface-2);color:var(--text)}
+.picker-btn:focus-visible{outline:2px solid var(--brass);outline-offset:-2px}
+.picker-mark{width:16px;height:16px;flex:none;display:inline-flex;color:var(--dim)}
+.picker-mark svg{width:16px;height:16px;display:block}
+.picker-caret{width:6px;height:6px;flex:none;border-right:1.5px solid currentColor;border-bottom:1.5px solid currentColor;transform:translateY(-2px) rotate(45deg)}
+.picker-menu{position:absolute;top:100%;right:0;z-index:60;margin:0;padding:0;list-style:none;min-width:230px;
+  background:var(--surface);border:1px solid var(--line-2);box-shadow:0 16px 40px -18px #000}
+.picker-menu li{display:flex;align-items:center;gap:10px;padding:10px 14px;cursor:pointer;color:var(--muted);
+  font:12px var(--mono);border-top:1px solid var(--line);white-space:nowrap}
+.picker-menu li:first-child{border-top:0}
+.picker-menu li[aria-selected="true"]{color:var(--text);background:var(--surface-2)}
+.picker-menu li.on,.picker-menu li:hover{background:var(--surface-3);color:var(--text)}
+.picker-menu li .picker-mark{color:inherit}
+.picker-menu li .tick{margin-left:auto;color:var(--brass);font-size:11px}
+@media (max-width:520px){.picker-menu{right:auto;left:0}}
+
 select,.ext,.link{font:500 11px/1 var(--mono);letter-spacing:.1em;text-transform:uppercase}
 select{background:var(--surface);border:0;border-right:1px solid var(--line);color:var(--muted);padding:0 12px;cursor:pointer;align-self:stretch}
 select:hover{color:var(--text);background:var(--surface-2)}
@@ -527,11 +552,16 @@ footer a:hover{color:var(--brass-2)}
     <p class="wordmark">BOUN<span>C</span>ER</p>
     <div class="hspace"></div>
     <div class="toolbar">
-      <div class="seg" role="group" aria-label="Data source">
-        <button type="button" id="mode-demo" aria-pressed="true">demo</button>
-        <button type="button" id="mode-live" aria-pressed="false">live</button>
+      <div class="picker" id="picker">
+        <button type="button" id="picker-btn" class="picker-btn" aria-haspopup="listbox" aria-expanded="false" aria-labelledby="picker-label picker-name">
+          <span class="sr" id="picker-label">Chain</span>
+          <span class="picker-mark" id="picker-mark" aria-hidden="true"></span>
+          <span class="picker-name" id="picker-name">Find the chain</span>
+          <span class="picker-caret" aria-hidden="true"></span>
+        </button>
+        <ul class="picker-menu" id="picker-menu" role="listbox" aria-labelledby="picker-label" hidden></ul>
       </div>
-      <select id="chain" aria-label="Chain">
+      <select id="chain" aria-label="Chain" class="sr" tabindex="-1">
         <option value="auto">Find the chain</option>
         <option value="robinhood">Robinhood Chain</option>
         <option value="base">Base</option>
