@@ -43,7 +43,16 @@ export interface SplHolder {
 
 export interface SplSlip {
   chain: { key: string; name: string; family: "solana" };
-  at: { slot: number; timestamp: number | null };
+  /**
+   * `slot` is when the reading started. `span` is what it actually covered.
+   *
+   * They are not the same and the page used to print only the first, under
+   * a promise that everything was read at one block. On Solana nothing
+   * pins a slot: each request is served at whatever slot its node had
+   * reached, so a slip is a range, and `span` is that range measured
+   * rather than assumed. Null when no response reported a context slot.
+   */
+  at: { slot: number; timestamp: number | null; span?: { first: number; last: number; spread: number } | null };
   subject: string;
   /** ON THE LIST is not a stamp Solana can earn here: there is no launchpad registry to be on. */
   stamp: "NOT A LAUNCH" | "NOT ON THE LIST";
@@ -233,6 +242,9 @@ export async function readSplDoor(rpc: SolanaRpc, input: string, chain: ChainCon
       );
 
   await Promise.all([readName, readHolders, readMarket]);
+  // Measured after every read has landed, because that is the only point
+  // at which the range is the whole range.
+  slip.at.span = rpc.slotSpan();
   slip.notes = splNotes(slip);
   return slip;
 }

@@ -882,7 +882,7 @@ function probeNotes(o: OpenDoor, probes: TransferProbe[], kind: "move" | "sell")
       code: `${kind}-reverts`,
       text:
         kind === "sell"
-          ? `Sending 1 unit ${what} from ${from} reverts right now${why}. A sale is a transfer into the pool, so on this reading the token cannot be sold. Simulated on the chain, nothing was sent.`
+          ? `Sending 1 unit ${what} from ${from} reverts right now${why}. Every sale begins with that transfer, so on this reading the token cannot be sold at all. Simulated on the chain, nothing was sent.`
           : `A transfer ${what} from ${from} reverts right now${why}. Simulated on the chain, nothing was sent. This is what a paused, closed or trapping token looks like from the outside.`,
     });
   } else if (reverted.length) {
@@ -897,7 +897,7 @@ function probeNotes(o: OpenDoor, probes: TransferProbe[], kind: "move" | "sell")
       code: `${kind}-ok`,
       text:
         kind === "sell"
-          ? `Sending 1 unit ${what} from ${from} goes through. That is the shape of a sale and it is not blocked at this block. It is one unit, not a priced trade: a fee on transfer, a cap on size or a rule that changes tomorrow would not show up here.`
+          ? `Sending 1 unit ${what} from ${from} goes through. That is the first step of a sale, and it is the step traps usually break. It is NOT a proven sale: a real one goes through a router, which pulls the tokens with transferFrom and then calls the pool's swap, and a token can allow a plain transfer to the pool and still revert on that path. It is also one unit, not a priced trade — a fee on transfer, a cap on size or a rule that changes tomorrow would not show up here.`
           : `Tokens can move: a 1-unit transfer ${what} from ${from} goes through (simulated on the chain, nothing sent).`,
     });
   }

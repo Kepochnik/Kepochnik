@@ -129,6 +129,40 @@ export class SolanaRpc {
     this.counters.set(method, entry);
   }
 
+  /**
+   * The slots this client's answers actually came from.
+   *
+   * The page promised every number was "read at one block", and on an EVM
+   * chain that is true — the door pins a block header and every call
+   * carries it. Solana has no equivalent: the slot is fetched once, then
+   * several requests go out and each is served at whatever slot its node
+   * had reached. The claim was carried over from the other chain, which
+   * made it a guess dressed as a guarantee.
+   *
+   * Every Solana response that reports state carries `context.slot`. They
+   * are collected here, so the page can say the true thing — the range the
+   * reading actually spans — instead of a number it wished for. A spread
+   * of a few slots is a second of wall clock and worth nothing; a spread
+   * of hundreds means the sections do not describe one moment, and a
+   * reader comparing a holder list to a pool balance deserves to know.
+   */
+  private slots: number[] = [];
+
+  /** Pick the context slot out of a response, when it has one. */
+  private noteSlot(result: unknown): void {
+    const ctx = (result as { context?: { slot?: unknown } } | null)?.context;
+    const slot = ctx?.slot;
+    if (typeof slot === "number" && Number.isFinite(slot)) this.slots.push(slot);
+  }
+
+  /** The span of slots this reading was served from, or null when nothing reported one. */
+  slotSpan(): { first: number; last: number; spread: number } | null {
+    if (!this.slots.length) return null;
+    const first = Math.min(...this.slots);
+    const last = Math.max(...this.slots);
+    return { first, last, spread: last - first };
+  }
+
   async send(method: string, params: unknown[]): Promise<unknown> {
     if (!SOLANA_READ_ONLY_METHODS.has(method)) throw new SolanaRpcError(`refusing non-read method ${method}`);
     // getSlot moves by design, so it is never remembered; everything else is
@@ -160,6 +194,7 @@ export class SolanaRpc {
         const body = (await response.json()) as { result?: unknown; error?: { code: number; message: string } };
         if (body.error) throw new SolanaRpcError(body.error.message, body.error.code);
         this.record(method, Date.now() - startedAt, false);
+        this.noteSlot(body.result);
         if (key !== null) this.memo!.set(key, body.result);
         return body.result;
       } catch (error) {

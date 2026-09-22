@@ -77,8 +77,21 @@ export type Completeness = "complete" | "partial" | "thin";
 
 export interface Coverage {
   checks: Check[];
-  /** Everything `unread` or `unsupported`, in the order the checks are listed. */
+  /**
+   * The holes in THIS reading: everything `unread`.
+   *
+   * `unsupported` is deliberately not here, and the distinction is what
+   * keeps the band worth looking at. A hole in the reading is news — it
+   * was there this time and may not be next time, and a retry can close
+   * it. A limit of the tool is true of every reading of every token, and
+   * a banner that appears on all of them is furniture by the second
+   * visit, which means the one time it carries something urgent it is
+   * not seen either. Those live in `limits`, and belong on a methodology
+   * page rather than over one token's verdict.
+   */
   gaps: Check[];
+  /** What this tool cannot answer here at all, however many times it is asked. */
+  limits: Check[];
   /** The gaps that could have moved the verdict. A non-empty list forbids a clean-sounding headline. */
   decisiveGaps: Check[];
   /** How many of the checks that COULD answer did. `n/a` is out of both halves. */
@@ -130,9 +143,14 @@ function worthRetrying(c: Check): boolean {
 }
 
 function summarise(checks: Check[]): Coverage {
-  const gaps = checks.filter((c) => c.state === "unread" || c.state === "unsupported");
+  const gaps = checks.filter((c) => c.state === "unread");
+  const limits = checks.filter((c) => c.state === "unsupported");
   const decisiveGaps = gaps.filter((c) => c.decisive);
-  const asked = checks.filter((c) => c.state !== "n/a").length;
+  // `asked` counts what could have answered here, so a check the tool
+  // cannot run is out of both halves: "3 of 4" must be a fraction a
+  // reader can arrive at, and counting an impossible check as a failure
+  // makes every reading look worse than it is.
+  const asked = checks.filter((c) => c.state !== "n/a" && c.state !== "unsupported").length;
   const read = checks.filter((c) => c.state === "read").length;
   const state: Completeness = decisiveGaps.length ? "thin" : gaps.length ? "partial" : "complete";
   const names = (list: Check[]) =>
@@ -145,7 +163,7 @@ function summarise(checks: Check[]): Coverage {
       : state === "thin"
         ? `${names(decisiveGaps)} could not be read, so this reading cannot tell you ${decisiveGaps.some((c) => c.topic === "sell" || c.topic === "exit") ? "whether you could get back out" : "the whole story"}.`
         : `${read} of ${asked} checks answered; ${names(gaps)} did not.`;
-  return { checks, gaps, decisiveGaps, read, asked, state, line, retryable: gaps.some(worthRetrying) };
+  return { checks, gaps, limits, decisiveGaps, read, asked, state, line, retryable: gaps.some(worthRetrying) };
 }
 
 /**
@@ -257,11 +275,34 @@ export function doorCoverage(slip: DoorSlip): Coverage {
   const probes = slip.open?.probes ?? null;
   checks.push({
     id: "sale-probe",
-    label: "a simulated sale",
+    label: "a simulated transfer",
     topic: "sell",
     state: probes && probes.length ? "read" : slip.open?.probesSkipped ? "unread" : "n/a",
     reason: slip.open?.probesSkipped ? plainReason(String(slip.open.probesSkipped)) : undefined,
     decisive: true,
+  });
+  // The honest edge of what BOUNCER simulates, listed rather than implied.
+  //
+  // The probe above sends one unit to the pool's address. That is the first
+  // step of a sale and the step traps break, so it is worth a lot — but a
+  // real sale goes through a router, which pulls the tokens with
+  // transferFrom and then calls the pool's swap, and a token can allow the
+  // plain transfer and revert on that path.
+  //
+  // Simulating the router needs eth_call with state overrides, to stand in
+  // for an approval that does not exist. That is a non-standard extension
+  // and a large share of public endpoints do not serve it, so the choice
+  // was between a check that quietly fails on most nodes and an admission
+  // that reads the same on all of them. The admission is worth more: a
+  // reader who knows this was not checked can go and check it, and one who
+  // believes it was cannot.
+  checks.push({
+    id: "swap-route",
+    label: "a swap through a router",
+    topic: "sell",
+    state: "unsupported",
+    reason: "BOUNCER simulates the transfer a sale starts with, not the router path it finishes through — that needs an eth_call state override most public nodes do not serve",
+    decisive: false,
   });
   const exitReason = reasonOf(s, "exit door");
   checks.push({

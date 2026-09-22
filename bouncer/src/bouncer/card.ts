@@ -90,11 +90,17 @@ function facts(slip: DoorSlip): Fact[] {
     const sells = o.probes.filter((p) => p.target === "pool");
     const ok = sells.filter((p) => p.status === "ok").length;
     const sale = !sells.length ? "NOT RUN" : sells.every((p) => p.status === "ok") ? "ALL PASS" : sells.some((p) => p.status === "reverts") ? `${ok}/${sells.length}` : "UNREAD";
+    // "SALE INTO POOL" with the value ALL PASS reads as "you can sell this",
+    // and it is not what was simulated. What was simulated is a plain
+    // transfer to the pool's address: the first step of a sale, and the step
+    // traps break. A real sale goes through a router that pulls the tokens
+    // with transferFrom and then calls swap, and a token can allow the one
+    // and revert the other. The label now says which of the two this is.
     out.push({
-      label: "SALE INTO POOL",
+      label: "TRANSFER TO POOL",
       value: sale,
       bad: sells.some((p) => p.status === "reverts"),
-      note: !sells.length ? "not simulated" : `${sells.length} wallet${sells.length === 1 ? "" : "s"} tried`,
+      note: !sells.length ? "not simulated" : `${sells.length} wallet${sells.length === 1 ? "" : "s"} · not a router swap`,
     });
     const top = o.holders?.top10WalletsBps ?? null;
     out.push({
@@ -174,7 +180,9 @@ export function splCard(slip: SplSlip, options: CardOptions): string {
   return renderCard(
     {
       chain: slip.chain.name,
-      at: `slot ${slip.at.slot}`,
+      // The range the reading covered, not the slot it started at. See
+      // SplSlip.at for why those differ on this chain.
+      at: slip.at.span && slip.at.span.spread > 4 ? `slots ${slip.at.span.first}-${slip.at.span.last}` : `slot ${slip.at.span?.last ?? slip.at.slot}`,
       timestamp: slip.at.timestamp,
       ticker: clip(slip.metadata?.symbol || shortAddress(slip.subject), 12),
       lead: options.lead,
@@ -211,7 +219,7 @@ export function splCard(slip: SplSlip, options: CardOptions): string {
  * chain whose sections are read at slots of their own.
  */
 function coverageFoot(cov: Coverage | undefined): string {
-  if (!cov || cov.state === "complete") return "read at one block · nothing here is scored, predicted or advised";
+  if (!cov || cov.state === "complete") return "read from the chain · nothing here is scored, predicted or advised";
   const names = cov.gaps.map((g) => g.label).join(", ");
   return clip(`${cov.read} of ${cov.asked} checks answered · unread: ${names}`, 74);
 }

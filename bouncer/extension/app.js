@@ -807,14 +807,15 @@
     return c.state === "unread";
   }
   function summarise(checks) {
-    const gaps = checks.filter((c) => c.state === "unread" || c.state === "unsupported");
+    const gaps = checks.filter((c) => c.state === "unread");
+    const limits = checks.filter((c) => c.state === "unsupported");
     const decisiveGaps = gaps.filter((c) => c.decisive);
-    const asked = checks.filter((c) => c.state !== "n/a").length;
+    const asked = checks.filter((c) => c.state !== "n/a" && c.state !== "unsupported").length;
     const read = checks.filter((c) => c.state === "read").length;
     const state = decisiveGaps.length ? "thin" : gaps.length ? "partial" : "complete";
     const names = (list) => list.length === 1 ? list[0].label : `${list.slice(0, -1).map((c) => c.label).join(", ")} and ${list[list.length - 1].label}`;
     const line = state === "complete" ? `All ${asked} checks answered.` : state === "thin" ? `${names(decisiveGaps)} could not be read, so this reading cannot tell you ${decisiveGaps.some((c) => c.topic === "sell" || c.topic === "exit") ? "whether you could get back out" : "the whole story"}.` : `${read} of ${asked} checks answered; ${names(gaps)} did not.`;
-    return { checks, gaps, decisiveGaps, read, asked, state, line, retryable: gaps.some(worthRetrying) };
+    return { checks, gaps, limits, decisiveGaps, read, asked, state, line, retryable: gaps.some(worthRetrying) };
   }
   function splCoverage(slip) {
     const s = slip.skipped;
@@ -902,11 +903,19 @@
     const probes = slip.open?.probes ?? null;
     checks.push({
       id: "sale-probe",
-      label: "a simulated sale",
+      label: "a simulated transfer",
       topic: "sell",
       state: probes && probes.length ? "read" : slip.open?.probesSkipped ? "unread" : "n/a",
       reason: slip.open?.probesSkipped ? plainReason(String(slip.open.probesSkipped)) : void 0,
       decisive: true
+    });
+    checks.push({
+      id: "swap-route",
+      label: "a swap through a router",
+      topic: "sell",
+      state: "unsupported",
+      reason: "BOUNCER simulates the transfer a sale starts with, not the router path it finishes through \u2014 that needs an eth_call state override most public nodes do not serve",
+      decisive: false
     });
     const exitReason = reasonOf(s, "exit door");
     checks.push({
@@ -2189,6 +2198,37 @@
       if (failed2) entry.failures += 1;
       this.counters.set(method, entry);
     }
+    /**
+     * The slots this client's answers actually came from.
+     *
+     * The page promised every number was "read at one block", and on an EVM
+     * chain that is true — the door pins a block header and every call
+     * carries it. Solana has no equivalent: the slot is fetched once, then
+     * several requests go out and each is served at whatever slot its node
+     * had reached. The claim was carried over from the other chain, which
+     * made it a guess dressed as a guarantee.
+     *
+     * Every Solana response that reports state carries `context.slot`. They
+     * are collected here, so the page can say the true thing — the range the
+     * reading actually spans — instead of a number it wished for. A spread
+     * of a few slots is a second of wall clock and worth nothing; a spread
+     * of hundreds means the sections do not describe one moment, and a
+     * reader comparing a holder list to a pool balance deserves to know.
+     */
+    slots = [];
+    /** Pick the context slot out of a response, when it has one. */
+    noteSlot(result) {
+      const ctx = result?.context;
+      const slot = ctx?.slot;
+      if (typeof slot === "number" && Number.isFinite(slot)) this.slots.push(slot);
+    }
+    /** The span of slots this reading was served from, or null when nothing reported one. */
+    slotSpan() {
+      if (!this.slots.length) return null;
+      const first = Math.min(...this.slots);
+      const last = Math.max(...this.slots);
+      return { first, last, spread: last - first };
+    }
     async send(method, params) {
       if (!SOLANA_READ_ONLY_METHODS.has(method)) throw new SolanaRpcError(`refusing non-read method ${method}`);
       const key = this.memo && method !== "getSlot" ? `${method}|${JSON.stringify(params)}` : null;
@@ -2218,6 +2258,7 @@
           const body = await response.json();
           if (body.error) throw new SolanaRpcError(body.error.message, body.error.code);
           this.record(method, Date.now() - startedAt, false);
+          this.noteSlot(body.result);
           if (key !== null) this.memo.set(key, body.result);
           return body.result;
         } catch (error) {
@@ -3118,6 +3159,7 @@
       options.marketDeadlineMs ?? 25e3
     );
     await Promise.all([readName, readHolders, readMarket2]);
+    slip.at.span = rpc.slotSpan();
     slip.notes = splNotes(slip);
     return slip;
   }
@@ -3409,10 +3451,10 @@
       const ok = sells.filter((p) => p.status === "ok").length;
       const sale = !sells.length ? "NOT RUN" : sells.every((p) => p.status === "ok") ? "ALL PASS" : sells.some((p) => p.status === "reverts") ? `${ok}/${sells.length}` : "UNREAD";
       out2.push({
-        label: "SALE INTO POOL",
+        label: "TRANSFER TO POOL",
         value: sale,
         bad: sells.some((p) => p.status === "reverts"),
-        note: !sells.length ? "not simulated" : `${sells.length} wallet${sells.length === 1 ? "" : "s"} tried`
+        note: !sells.length ? "not simulated" : `${sells.length} wallet${sells.length === 1 ? "" : "s"} \xB7 not a router swap`
       });
       const top = o.holders?.top10WalletsBps ?? null;
       out2.push({
@@ -3455,7 +3497,9 @@
     return renderCard(
       {
         chain: slip.chain.name,
-        at: `slot ${slip.at.slot}`,
+        // The range the reading covered, not the slot it started at. See
+        // SplSlip.at for why those differ on this chain.
+        at: slip.at.span && slip.at.span.spread > 4 ? `slots ${slip.at.span.first}-${slip.at.span.last}` : `slot ${slip.at.span?.last ?? slip.at.slot}`,
         timestamp: slip.at.timestamp,
         ticker: clip(slip.metadata?.symbol || shortAddress(slip.subject), 12),
         lead: options.lead,
@@ -3480,7 +3524,7 @@
     );
   }
   function coverageFoot(cov) {
-    if (!cov || cov.state === "complete") return "read at one block \xB7 nothing here is scored, predicted or advised";
+    if (!cov || cov.state === "complete") return "read from the chain \xB7 nothing here is scored, predicted or advised";
     const names = cov.gaps.map((g) => g.label).join(", ");
     return clip(`${cov.read} of ${cov.asked} checks answered \xB7 unread: ${names}`, 74);
   }
@@ -6705,7 +6749,7 @@
       notes.push({
         level: "stop",
         code: `${kind}-reverts`,
-        text: kind === "sell" ? `Sending 1 unit ${what} from ${from} reverts right now${why}. A sale is a transfer into the pool, so on this reading the token cannot be sold. Simulated on the chain, nothing was sent.` : `A transfer ${what} from ${from} reverts right now${why}. Simulated on the chain, nothing was sent. This is what a paused, closed or trapping token looks like from the outside.`
+        text: kind === "sell" ? `Sending 1 unit ${what} from ${from} reverts right now${why}. Every sale begins with that transfer, so on this reading the token cannot be sold at all. Simulated on the chain, nothing was sent.` : `A transfer ${what} from ${from} reverts right now${why}. Simulated on the chain, nothing was sent. This is what a paused, closed or trapping token looks like from the outside.`
       });
     } else if (reverted.length) {
       notes.push({
@@ -6717,7 +6761,7 @@
       notes.push({
         level: "info",
         code: `${kind}-ok`,
-        text: kind === "sell" ? `Sending 1 unit ${what} from ${from} goes through. That is the shape of a sale and it is not blocked at this block. It is one unit, not a priced trade: a fee on transfer, a cap on size or a rule that changes tomorrow would not show up here.` : `Tokens can move: a 1-unit transfer ${what} from ${from} goes through (simulated on the chain, nothing sent).`
+        text: kind === "sell" ? `Sending 1 unit ${what} from ${from} goes through. That is the first step of a sale, and it is the step traps usually break. It is NOT a proven sale: a real one goes through a router, which pulls the tokens with transferFrom and then calls the pool's swap, and a token can allow a plain transfer to the pool and still revert on that path. It is also one unit, not a priced trade \u2014 a fee on transfer, a cap on size or a rule that changes tomorrow would not show up here.` : `Tokens can move: a 1-unit transfer ${what} from ${from} goes through (simulated on the chain, nothing sent).`
       });
     }
     if (unread.length) notes.push({ level: "info", code: `${kind}-partial`, text: `${unread.length} further ${kind === "sell" ? "sale" : "transfer"} simulation${unread.length === 1 ? "" : "s"} could not be run and ${unread.length === 1 ? "is" : "are"} not counted above.` });
@@ -7104,7 +7148,7 @@
     chainSelect.disabled = false;
     sourcePill.textContent = SANDBOXED ? "No network" : "Live";
     sourcePill.classList.toggle("live", !SANDBOXED);
-    sourceText.innerHTML = SANDBOXED ? `This preview on claude.ai cannot reach the internet, so nothing here can be read. Use the <a href="${HOSTED}">hosted site</a>, the Chrome extension or the CLI.` : chainOrNull() ? `Reading ${esc2(chainOrNull().name)} from your browser at one block. Nothing is cached.` : "Paste an address and BOUNCER finds the chain it lives on. Read from your browser at one block, nothing cached.";
+    sourceText.innerHTML = SANDBOXED ? `This preview on claude.ai cannot reach the internet, so nothing here can be read. Use the <a href="${HOSTED}">hosted site</a>, the Chrome extension or the CLI.` : chainOrNull() ? `Reading ${esc2(chainOrNull().name)} from your browser${chainOrNull().family === "solana" ? ", slot by slot" : " at one block"}. Nothing is cached.` : "Paste an address and BOUNCER finds the chain it lives on. Read from your browser at one block, nothing cached.";
     renderChips();
     if (!silent) storage("bouncer.mode", next);
   }
@@ -7311,7 +7355,7 @@
   function busy(text) {
     go.disabled = true;
     stopWatch();
-    status.innerHTML = `<span class="dot"></span> ${esc2(text)} ${mode === "demo" ? "(demo chain, every address invented)" : `(${esc2(chain().name)}, one block pinned)`}`;
+    status.innerHTML = `<span class="dot"></span> ${esc2(text)} ${mode === "demo" ? "(demo chain, every address invented)" : `(${esc2(chain().name)}, ${chain().family === "solana" ? "read slot by slot" : "one block pinned"})`}`;
     out.innerHTML = "";
     if (ticker) {
       clearInterval(ticker);
@@ -7720,13 +7764,12 @@
   }
   function coverageBand(coverage, stage) {
     if (stage !== "done" || coverage.state === "complete") return "";
-    const rows = coverage.gaps.map(
-      (g) => `<li class="cgap${g.decisive ? " cgap-hard" : ""}">
+    const row = (g, limit) => `<li class="cgap${g.decisive && !limit ? " cgap-hard" : ""}${limit ? " cgap-limit" : ""}">
         <span class="cgl">${esc2(g.label)}</span>
         <span class="cgr">${esc2(g.reason ?? "did not answer")}</span>
-        <span class="cgt">${esc2(TOPIC_TAG[g.topic])}</span>
-      </li>`
-    ).join("");
+        <span class="cgt">${limit ? "not offered" : esc2(TOPIC_TAG[g.topic])}</span>
+      </li>`;
+    const rows = [...coverage.gaps.map((g) => row(g, false)), ...coverage.limits.map((g) => row(g, true))].join("");
     const retry = coverage.retryable ? `<button class="ghost" id="act-retry" type="button">Read the missing parts again</button>` : "";
     return `<section class="cov cov-${coverage.state}" data-coverage="${coverage.state}">
     <div class="covhead">
@@ -7873,6 +7916,12 @@
       go.disabled = false;
     }
   }
+  function solanaWhen(slip) {
+    const span = slip.at.span;
+    if (!span || span.spread === 0) return `slot ${slip.at.slot}`;
+    if (span.spread <= 4) return `slot ${span.last}`;
+    return `slots ${span.first}\u2013${span.last} \xB7 ${span.spread} apart`;
+  }
   function renderSplSlip(slip, opts = {}) {
     const stage0 = opts.stage ?? "done";
     const coverage = stage0 === "done" ? splCoverage(slip) : void 0;
@@ -7910,7 +7959,7 @@
       name,
       address: slip.subject,
       stamp: slip.stamp,
-      at: `${esc2(slip.chain.name)} \xB7 slot ${slip.at.slot}${slip.at.timestamp ? ` \xB7 ${isoUtc(slip.at.timestamp)}` : ""}`,
+      at: `${esc2(slip.chain.name)} \xB7 ${esc2(solanaWhen(slip))}${slip.at.timestamp ? ` \xB7 ${isoUtc(slip.at.timestamp)}` : ""}`,
       notes: slip.notes,
       lead: splSentence(slip, blocked),
       stage: stage0,
@@ -8373,7 +8422,7 @@
     return `<div class="tiles">
     <div class="tile"><div class="l">Owner</div><div class="v ${!unreadable && o.owner && !o.owner.renounced && kinds.length ? "bad" : ""}">${ownerV}</div><div class="s">${esc2(ownerS)}</div></div>
     <div class="tile"><div class="l">Code can</div><div class="v ${kinds.length ? "bad" : ""}">${unreadable ? "?" : kinds.length || "0"}</div><div class="s">${unreadable ? "the implementation could not be read" : kinds.length ? esc2(kinds.join(", ")) : "no mint, pause, blacklist, fee or trading switch seen"}</div></div>
-    <div class="tile"><div class="l">Sale into the pool</div><div class="v ${sell.bad ? "bad" : ""}">${sell.value}</div><div class="s">${esc2(sell.note)}</div></div>
+    <div class="tile"><div class="l">Transfer to the pool</div><div class="v ${sell.bad ? "bad" : ""}">${sell.value}</div><div class="s">${esc2(sell.note)}</div></div>
     <div class="tile"><div class="l">Top 10 wallets</div><div class="v ${h && h.top10WalletsBps !== null && h.top10WalletsBps >= 5e3 ? "bad" : ""}">${h && h.top10WalletsBps !== null ? `${(h.top10WalletsBps / 100).toFixed(0)}%` : "\u2014"}</div><div class="s">${h ? h.top10WalletsBps === null ? "supply not readable" : `of supply \xB7 ${h.count ?? "?"} holders` : "explorer not reachable"}</div></div>
   </div>`;
   }

@@ -136,6 +136,11 @@ test("an ordinary token gets a card about an ordinary token", async () => {
   const rpc = demoRpc();
   const slip = await readDoor(rpc, DEMO_PLAIN.token, opts);
   const svg = doorCard(slip, { repoUrl: "r", ticker: "$BOUNCER", mascotSvg: "" });
-  for (const label of ["OWNER", "CODE CAN", "SALE INTO POOL", "TOP 10 WALLETS"]) assert.match(svg, new RegExp(label));
+  for (const label of ["OWNER", "CODE CAN", "TRANSFER TO POOL", "TOP 10 WALLETS"]) assert.match(svg, new RegExp(label));
+  // The tile is a transfer to the pool's address, which is the first step
+  // of a sale and not the whole route — a router pulls the tokens with
+  // transferFrom and then calls swap, and a token can allow the one and
+  // revert the other. The card must not call that a sale.
+  assert.ok(!/SALE INTO POOL/.test(svg), "the card must not promise a sale it did not simulate");
   assert.ok(!/COVER CHARGE|HOUSE RULES/.test(svg), "and none of the launch-only rows");
 });

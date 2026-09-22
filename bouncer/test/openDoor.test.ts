@@ -167,7 +167,7 @@ test("a genuine revert is still a STOP, and the sale is reported apart from the 
   assert.ok(slip.notes.some((n) => n.code === "move-reverts" && n.level === "stop"));
   const sell = slip.notes.find((n) => n.code === "sell-reverts");
   assert.ok(sell && sell.level === "stop");
-  assert.match(sell.text, /A sale is a transfer into the pool/);
+  assert.match(sell.text, /Every sale begins with that transfer/);
   assert.match(sell.text, /Trading not open/);
 });
 

@@ -128,7 +128,7 @@ function setMode(next: Mode, silent = false): void {
   sourceText.innerHTML = SANDBOXED
     ? `This preview on claude.ai cannot reach the internet, so nothing here can be read. Use the <a href="${HOSTED}">hosted site</a>, the Chrome extension or the CLI.`
     : chainOrNull()
-      ? `Reading ${esc(chainOrNull()!.name)} from your browser at one block. Nothing is cached.`
+      ? `Reading ${esc(chainOrNull()!.name)} from your browser${chainOrNull()!.family === "solana" ? ", slot by slot" : " at one block"}. Nothing is cached.`
       : "Paste an address and BOUNCER finds the chain it lives on. Read from your browser at one block, nothing cached.";
   renderChips();
   if (!silent) storage("bouncer.mode", next);
@@ -429,7 +429,7 @@ function showToast(text: string): void {
 function busy(text: string): void {
   go.disabled = true;
   stopWatch();
-  status.innerHTML = `<span class="dot"></span> ${esc(text)} ${mode === "demo" ? "(demo chain, every address invented)" : `(${esc(chain().name)}, one block pinned)`}`;
+  status.innerHTML = `<span class="dot"></span> ${esc(text)} ${mode === "demo" ? "(demo chain, every address invented)" : `(${esc(chain().name)}, ${chain().family === "solana" ? "read slot by slot" : "one block pinned"})`}`;
   out.innerHTML = "";
   if (ticker) { clearInterval(ticker); ticker = null; }
 }
@@ -1090,15 +1090,17 @@ function verdictOf(notes: DoorNote[], stage: Stage = "done", coverage?: Coverage
  */
 function coverageBand(coverage: Coverage, stage: Stage): string {
   if (stage !== "done" || coverage.state === "complete") return "";
-  const rows = coverage.gaps
-    .map(
-      (g) => `<li class="cgap${g.decisive ? " cgap-hard" : ""}">
+  // The holes first, then the standing limits. The limits do not open the
+  // band — they are true of every reading and would make it permanent —
+  // but once it IS open they are the other half of "what this does not
+  // tell you", and a reader looking at one gap should see the rest.
+  const row = (g: (typeof coverage.gaps)[number], limit: boolean) =>
+    `<li class="cgap${g.decisive && !limit ? " cgap-hard" : ""}${limit ? " cgap-limit" : ""}">
         <span class="cgl">${esc(g.label)}</span>
         <span class="cgr">${esc(g.reason ?? "did not answer")}</span>
-        <span class="cgt">${esc(TOPIC_TAG[g.topic])}</span>
-      </li>`,
-    )
-    .join("");
+        <span class="cgt">${limit ? "not offered" : esc(TOPIC_TAG[g.topic])}</span>
+      </li>`;
+  const rows = [...coverage.gaps.map((g) => row(g, false)), ...coverage.limits.map((g) => row(g, true))].join("");
   // The retry is offered only where pressing it could work. A button that
   // cannot change the answer is a button that teaches a reader the answer
   // never changes.
@@ -1440,6 +1442,24 @@ async function runSolanaDoor(address: string): Promise<void> {
   }
 }
 
+/**
+ * When a Solana reading was taken, said truthfully.
+ *
+ * "slot N" was the slot the reading STARTED at, printed beside a claim
+ * that everything was read at one block. On Solana nothing pins a slot:
+ * the sections go out as separate requests and each is served at whatever
+ * slot its node had reached, so the honest unit is a range. A spread of a
+ * few slots is a second of wall clock and not worth a word; a wide one
+ * means the holder list and the pool balance below it describe different
+ * moments, and a reader comparing them should know before they do.
+ */
+function solanaWhen(slip: SplSlip): string {
+  const span = slip.at.span;
+  if (!span || span.spread === 0) return `slot ${slip.at.slot}`;
+  if (span.spread <= 4) return `slot ${span.last}`;
+  return `slots ${span.first}–${span.last} · ${span.spread} apart`;
+}
+
 function renderSplSlip(slip: SplSlip, opts: { stage?: Stage } = {}): void {
   // Last render only; see renderSlip for why a mid-read slip must not be
   // reported as an incomplete check.
@@ -1493,7 +1513,7 @@ function renderSplSlip(slip: SplSlip, opts: { stage?: Stage } = {}): void {
       name,
       address: slip.subject,
       stamp: slip.stamp,
-      at: `${esc(slip.chain.name)} · slot ${slip.at.slot}${slip.at.timestamp ? ` · ${isoUtc(slip.at.timestamp)}` : ""}`,
+      at: `${esc(slip.chain.name)} · ${esc(solanaWhen(slip))}${slip.at.timestamp ? ` · ${isoUtc(slip.at.timestamp)}` : ""}`,
       notes: slip.notes as DoorNote[],
       lead: splSentence(slip, blocked),
       stage: stage0,
@@ -2140,7 +2160,7 @@ function openDoorTiles(slip: DoorSlip): string {
   return `<div class="tiles">
     <div class="tile"><div class="l">Owner</div><div class="v ${!unreadable && o.owner && !o.owner.renounced && kinds.length ? "bad" : ""}">${ownerV}</div><div class="s">${esc(ownerS)}</div></div>
     <div class="tile"><div class="l">Code can</div><div class="v ${kinds.length ? "bad" : ""}">${unreadable ? "?" : kinds.length || "0"}</div><div class="s">${unreadable ? "the implementation could not be read" : kinds.length ? esc(kinds.join(", ")) : "no mint, pause, blacklist, fee or trading switch seen"}</div></div>
-    <div class="tile"><div class="l">Sale into the pool</div><div class="v ${sell.bad ? "bad" : ""}">${sell.value}</div><div class="s">${esc(sell.note)}</div></div>
+    <div class="tile"><div class="l">Transfer to the pool</div><div class="v ${sell.bad ? "bad" : ""}">${sell.value}</div><div class="s">${esc(sell.note)}</div></div>
     <div class="tile"><div class="l">Top 10 wallets</div><div class="v ${h && h.top10WalletsBps !== null && h.top10WalletsBps >= 5_000 ? "bad" : ""}">${h && h.top10WalletsBps !== null ? `${(h.top10WalletsBps / 100).toFixed(0)}%` : "—"}</div><div class="s">${h ? (h.top10WalletsBps === null ? "supply not readable" : `of supply · ${h.count ?? "?"} holders`) : "explorer not reachable"}</div></div>
   </div>`;
 }

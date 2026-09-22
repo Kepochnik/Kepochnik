@@ -354,7 +354,12 @@ await walk("a reading with a hole says so where the verdict is", async (page) =>
   // It has to name the missing check and why, not just wave at one.
   const rows = await page.$$eval(".cgap", (els) => els.map((e) => e.textContent.replace(/\s+/g, " ").trim()));
   if (!rows.length) throw new Error("the band lists no gaps");
-  if (!rows.some((r) => /simulated sale/i.test(r))) throw new Error(`the unread check is not named: ${JSON.stringify(rows)}`);
+  if (!rows.some((r) => /simulated transfer/i.test(r))) throw new Error(`the unread check is not named: ${JSON.stringify(rows)}`);
+  // And the standing limits ride along once the band is open, marked as
+  // limits rather than as things that went wrong on this reading.
+  const limits = await page.$$eval(".cgap-limit", (els) => els.map((e) => e.textContent.replace(/\s+/g, " ").trim()));
+  if (!limits.some((r) => /router/i.test(r))) throw new Error(`the router limit is not disclosed: ${JSON.stringify(limits)}`);
+  if (limits.some((r) => /^\s*$/.test(r))) throw new Error("an empty limit row");
 
   // And a retry that can work. A 403 or a timeout is exactly the case where
   // pressing again changes the answer, and the page has to offer it.

@@ -282,6 +282,11 @@ body.answered .chips{display:none}
    to skip the band. */
 .cgap-hard{box-shadow:inset 2px 0 0 var(--info)}
 .cgap-hard .cgl{color:var(--info)}
+/* A standing limit of the tool, shown once the band is open for a real
+   hole. Quieter than a gap: nothing happened here, this is simply the
+   edge of what BOUNCER can answer. */
+.cgap-limit .cgl{color:var(--muted)}
+.cgap-limit .cgt{color:var(--dim)}
 @media (max-width:640px){
   .cgap{grid-template-columns:1fr;gap:3px}
   .cgt{grid-row:1;justify-self:start}
@@ -687,7 +692,7 @@ footer>span{flex:1 1 100%}
 <main class="wrap">
   <section class="hero">
     <h1>CHECK IT AT THE DOOR</h1>
-    <p>Paste a token — or type its ticker. BOUNCER reads the chain itself, at one block, and answers the five questions you would ask before buying: <b>is this the token you meant</b>, <b>can they take it from you</b>, <b>can you sell it right now</b>, <b>what would you actually get</b>, and <b>who is already inside</b>. No key, no wallet, nothing signed.</p>
+    <p>Paste a token — or type its ticker. BOUNCER reads the chain itself and answers the five questions you would ask before buying: <b>is this the token you meant</b>, <b>can they take it from you</b>, <b>can you sell it right now</b>, <b>what would you actually get</b>, and <b>who is already inside</b>. No key, no wallet, nothing signed.</p>
   </section>
 
   <section class="door" aria-labelledby="door-label">
@@ -717,7 +722,7 @@ footer>span{flex:1 1 100%}
   <div id="out"></div>
 
   <footer>
-    <span><b>No key · no signer · no transaction path.</b><br>Every number is read from the chain at one block. Nothing is scored, predicted or advised.</span>
+    <span><b>No key · no signer · no transaction path.</b><br>Every number is read from the chain — pinned to one block on EVM chains, and on Solana across the slots the reading spans, which the slip states. Nothing is scored, predicted or advised.</span>
     <span><a href="https://github.com/Kepochnik/bouncer">github.com/Kepochnik/bouncer</a> · <a href="bouncer-extension.zip" download>Chrome extension (zip)</a> · <a href="https://github.com/Kepochnik/bouncer#browser-extension">how to install</a><br>$BOUNCER · official CA: not launched yet</span>
   </footer>
 </main>

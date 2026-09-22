@@ -99,11 +99,17 @@ test("a check nothing can ever fill does not offer a retry", () => {
     notes: [],
     skipped: [],
   });
-  assert.equal(cov.retryable, false, "the only gap is one no retry can fill");
-  assert.equal(cov.state, "partial", "unsupported is still a gap — it is just not one to press a button over");
-  assert.equal(qualify("clear", cov), "clear", "an unsupported check is disclosed, not held against the token");
-  const probe = cov.gaps.find((c) => c.id === "sale-probe");
-  assert.equal(probe?.state, "unsupported");
+  assert.equal(cov.retryable, false, "there is nothing here a retry could fill");
+  // And it does not open the band either. A limit of the tool is true of
+  // every reading of every token, so a band that appeared for it would be
+  // on screen always — and a warning that is always on screen is furniture
+  // by the second visit, which is how the one that matters gets missed.
+  assert.equal(cov.state, "complete", "this reading has no holes; what is missing is missing from the tool");
+  assert.equal(qualify("clear", cov), "clear", "a standing limit is disclosed, not held against the token");
+  assert.equal(cov.gaps.length, 0, "a tool limit is not a gap in the reading");
+  const probe = cov.limits.find((c) => c.id === "sale-probe");
+  assert.ok(probe, `the limit is still listed, just not as a failure: ${JSON.stringify(cov.limits)}`);
+  assert.equal(probe!.state, "unsupported");
 });
 
 test("a complete reading says so, and says nothing about gaps it does not have", async () => {
@@ -165,4 +171,28 @@ test("a refused pool search is not the same answer as a token nobody trades", as
   const market = cov.checks.find((c) => c.id === "market");
   assert.equal(market!.state, "unread", "an empty list from a search that could not run is not a read");
   assert.match(market!.reason ?? "", /refused|403/i);
+});
+
+test("a transfer to the pool is never reported as a proven sale", async () => {
+  // The audit's code-level note. A sale goes out through a router, which
+  // pulls the tokens with transferFrom and then calls the pool's swap. The
+  // probe sends one unit straight to the pool's address — the first step,
+  // and the step traps break, but a token can allow it and still revert on
+  // the router path. Claiming the one proves the other is the single
+  // costliest thing this tool could get wrong, because the reader acts on
+  // it with their own money.
+  const slip = await demoSlip(DEMO_PLAIN.token);
+  const cov = doorCoverage(slip);
+  const probe = cov.checks.find((c) => c.id === "sale-probe");
+  assert.equal(probe?.label, "a simulated transfer", "the check is named for what it does");
+
+  const route = cov.limits.find((c) => c.id === "swap-route");
+  assert.ok(route, `the router path must be disclosed as unsupported: ${JSON.stringify(cov.limits)}`);
+  assert.match(route!.reason ?? "", /state override|router/i, "and it must say why, so a reader can go and check it elsewhere");
+
+  for (const note of slip.notes) {
+    if (note.code !== "sell-ok") continue;
+    assert.match(note.text, /NOT a proven sale/, "the passing case is where the overclaim lives");
+    assert.match(note.text, /router/, "and it has to name what was not simulated");
+  }
 });
