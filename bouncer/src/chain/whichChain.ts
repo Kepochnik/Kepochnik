@@ -50,6 +50,23 @@ export interface ChainSearch {
   empty: ChainConfig[];
 }
 
+/**
+ * Which family an address belongs to, from the address alone.
+ *
+ * An EVM address is 0x and forty hex digits; a Solana mint is base58 and
+ * has no 0x. Nothing else is needed to tell them apart, and in particular
+ * the chain the LAST read settled on is not — that is what made the page
+ * answer every EVM address pasted after a Solana one with "paste a Solana
+ * mint address". A remembered answer is about the address it was found
+ * for, and this address is a different one.
+ */
+export function addressFamily(address: string, isBase58: (a: string) => boolean): "evm" | "solana" | "neither" {
+  const v = address.trim();
+  if (/^0x[0-9a-fA-F]{40}$/.test(v)) return "evm";
+  if (isBase58(v)) return "solana";
+  return "neither";
+}
+
 /** The EVM chains worth asking, in the order a reader should see them. */
 export function searchableChains(): ChainConfig[] {
   return Object.values(CHAINS).filter((c) => c.family === "evm");

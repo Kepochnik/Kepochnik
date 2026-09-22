@@ -8,7 +8,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { RpcClient } from "../src/chain/rpc.js";
 import { CHAINS, type ChainConfig } from "../src/chain/chains.js";
-import { readChainSearch, whichChains } from "../src/chain/whichChain.js";
+import { addressFamily, readChainSearch, whichChains } from "../src/chain/whichChain.js";
 import { encodeCall, decodeOutputs } from "../src/chain/abi.js";
 import { ERC20_FUNCTIONS } from "../src/chain/pons.js";
 
@@ -186,4 +186,23 @@ test("an endpoint answering for the wrong chain is never a hit", async () => {
   assert.ok(base, "and the reader has to be told the endpoint is misrouted, not that the chain is empty");
   assert.match(base.reason, /reports chain \d+, not \d+/);
   assert.ok(!search.empty.some((c) => c.key === "base"));
+});
+
+test("the address decides the family, not the last answer", async () => {
+  // Reported from the live site with a screenshot: the menu said "Find the
+  // chain", the strip said "Reading Solana", and a perfectly good EVM
+  // address came back "paste a Solana mint address". The page had checked
+  // a Solana mint earlier and was still answering for that one.
+  const b58 = (a: string) => /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(a);
+  const evm = "0x6835dbf2d7d5852f84bf0a80de00cab3864f44b1";
+  const mint = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
+
+  assert.equal(addressFamily(evm, b58), "evm");
+  assert.equal(addressFamily(mint, b58), "solana");
+  // Whitespace either side is a paste, not a different address.
+  assert.equal(addressFamily(`  ${evm}\n`, b58), "evm");
+  // 0x and forty hex wins even where base58 would also match, which it
+  // cannot here — but the order is the guarantee, so it is stated.
+  assert.equal(addressFamily("not an address at all", b58), "neither");
+  assert.equal(addressFamily("0x1234", b58), "neither");
 });

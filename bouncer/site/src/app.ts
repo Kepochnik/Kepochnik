@@ -16,7 +16,7 @@ import { PonsReader } from "../../src/chain/reader.js";
 import { RpcClient, type BlockHeader } from "../../src/chain/rpc.js";
 import { SolanaRpc } from "../../src/chain/solana.js";
 import { isSolanaAddress } from "../../src/chain/base58.js";
-import { readChainSearch, searchableChains, whichChains, type ChainSearch } from "../../src/chain/whichChain.js";
+import { addressFamily, readChainSearch, searchableChains, whichChains, type ChainSearch } from "../../src/chain/whichChain.js";
 import { readSplDoor, type SplSlip } from "../../src/bouncer/spl.js";
 import { findBlockByTimestamp } from "../../src/chain/tape.js";
 import { doorCard, splCard } from "../../src/bouncer/card.js";
@@ -176,6 +176,24 @@ function detect(raw: string): { view: View; parts: string[] } | null {
  * all carry on untouched, and a page whose script never ran still has a
  * working form control rather than a dead button.
  */
+/**
+ * The one way to change the selected chain.
+ *
+ * route() used to assign chainSelect.value straight from the URL. The
+ * select changed, the picker's button did not — it repaints on `change`,
+ * and assigning a value fires nothing — so the header could read "Find
+ * the chain" while the page was pinned to Solana. A control that lies
+ * about its own state is worse than no control.
+ */
+let repaintPicker: (() => void) | null = null;
+
+function selectChain(key: string): void {
+  if (chainSelect.value === key) return;
+  chainSelect.value = key;
+  repaintPicker?.();
+  paintSelectedChain();
+}
+
 function chainMark(key: string): string {
   if (key === "auto") return `<svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="5.6" fill="none" stroke="currentColor" stroke-width="1.4" stroke-dasharray="2.6 2.2"/></svg>`;
   const c = CHAINS[key];
@@ -265,6 +283,7 @@ function setUpPicker(): void {
     if (open && !$("picker").contains(e.target as Node)) hide();
   });
   chainSelect.addEventListener("change", paint);
+  repaintPicker = paint;
   paint();
 }
 
@@ -642,15 +661,31 @@ function renderChainMiss(address: string, search: ChainSearch): void {
 }
 
 async function runDoor(address: string): Promise<void> {
-  // A Solana mint is base58 and an EVM address is 0x and hex, so which
-  // family it belongs to is readable off the address with nothing asked of
-  // anybody. Only WHICH EVM chain needs the network.
-  if (mode === "live" && chainSelect.value === "auto" && isSolanaAddress(address) && !ADDR.test(address)) {
-    autoChain = CHAINS.solana;
-    paintChain();
-    return await runSolanaDoor(address);
+  // On "auto" the ADDRESS decides the family, and nothing else.
+  //
+  // This used to ask chainOrNull(), which on "auto" hands back whatever
+  // the LAST read settled on. Check one Solana mint and every EVM address
+  // pasted afterwards went to the Solana reader and came back "paste a
+  // Solana mint address" — with the menu still showing Find the chain.
+  // A remembered answer belongs to the address it was found for.
+  if (mode === "live") {
+    const auto = chainSelect.value === "auto";
+    const family = auto ? addressFamily(address, isSolanaAddress) : chainByKey(chainSelect.value).family;
+    if (family === "solana") {
+      if (auto) {
+        autoChain = CHAINS.solana;
+        resolvedFor = { address: address.trim().toLowerCase(), chain: CHAINS.solana.key };
+        paintChain();
+      }
+      return await runSolanaDoor(address);
+    }
+    // An EVM address under auto: forget a chain found for some other one,
+    // so the strip stops naming it while this read is still being placed.
+    if (auto && autoChain && resolvedFor.address !== address.trim().toLowerCase()) {
+      autoChain = null;
+      paintChain();
+    }
   }
-  if (chainOrNull()?.family === "solana" && mode === "live") return await runSolanaDoor(address);
   if (!ADDR.test(address)) {
     // A ticker, most likely. Say so and go looking rather than refusing.
     if (mode === "live" && /^[a-z0-9$ ._-]{2,32}$/i.test(address)) return await runSearch(address.replace(/^\$/, ""));
@@ -2177,7 +2212,7 @@ function route(): void {
   if (wantDemo && mode !== "demo") setMode("demo", true);
   if (!wantDemo && parts[0] !== "demo") {
     if (mode !== "live") setMode("live", true);
-    if (chainParam && CHAINS[chainParam]) chainSelect.value = chainParam;
+    if (chainParam && CHAINS[chainParam]) selectChain(chainParam);
   }
   switch (parts[0]) {
     case "t":
@@ -2216,10 +2251,17 @@ function route(): void {
 
 function submit(): void {
   const v = q.value.trim();
-  // With "auto" and no search run yet there is no chain to name, and writing
-  // one into the link would be picking for the reader — and route() reads it
-  // straight back into the menu, so a guess here turns itself into a choice.
-  const c = mode === "demo" ? "demo" : chainSelect.value === "auto" ? (chainOrNull()?.key ?? "auto") : chain().key;
+  // With "auto", the link may only name a chain that was found FOR THE
+  // ADDRESS BEING SUBMITTED.
+  //
+  // It used to name whatever the last read settled on. route() reads that
+  // straight back into the menu, so checking one Solana mint wrote
+  // ?chain=solana into the next link, pinned the picker to Solana, and
+  // every EVM address after it came back "paste a Solana mint address" —
+  // with the header still reading Find the chain until the value landed.
+  // One check, and the tool stopped working for every other chain.
+  const same = chainSelect.value === "auto" && autoChain && resolvedFor.address === v.trim().toLowerCase();
+  const c = mode === "demo" ? "demo" : chainSelect.value === "auto" ? (same ? autoChain!.key : "auto") : chain().key;
   let hash: string;
   if (view === "plan") hash = `#/plan?tax=${encodeURIComponent(v || "100")}&chain=${c}`;
   else if (view === "board") hash = `#/board?hours=${encodeURIComponent(v || "1")}&chain=${c}`;

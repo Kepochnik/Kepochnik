@@ -144,6 +144,37 @@ await walk("press Copy card, get a PNG", async (page) => {
   if (!card.includes(ticker)) throw new Error(`the card does not name ${ticker}; it says "${card.slice(0, 120).replace(/\s+/g, " ")}"`);
 });
 
+await walk("one chain does not capture the menu", async (page) => {
+  // Reported with a screenshot: the header read "Find the chain", the
+  // strip read "Reading Solana", and a valid EVM address came back
+  // "paste a Solana mint address". Checking one Solana mint wrote
+  // ?chain=solana into the next link, the router read it back into the
+  // menu, and the tool stopped working for every other chain until the
+  // page was reloaded.
+  //
+  // Both reads need a network and neither gets one here. That is fine:
+  // what this walks is the ROUTING, which is decided before any request
+  // goes out, and the failure was never about what came back.
+  await page.goto(url, { waitUntil: "load" });
+  await page.waitForTimeout(500);
+  const menu0 = await page.$eval("#chain", (el) => el.value);
+  if (menu0 !== "auto") throw new Error(`the menu should start on auto, not "${menu0}"`);
+
+  await page.fill("#q", "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v");
+  await page.click("#go");
+  await page.waitForTimeout(2_000);
+  const afterMint = await page.$eval("#chain", (el) => el.value);
+  if (afterMint !== "auto") throw new Error(`one Solana mint pinned the menu to "${afterMint}"`);
+
+  await page.fill("#q", "0x6835dbf2d7d5852f84bf0a80de00cab3864f44b1");
+  await page.click("#go");
+  await page.waitForTimeout(2_500);
+  const afterEvm = await page.$eval("#chain", (el) => el.value);
+  if (afterEvm !== "auto") throw new Error(`an EVM address left the menu on "${afterEvm}"`);
+  const said = await page.evaluate(() => document.querySelector("#out")?.innerText ?? "");
+  if (/Solana mint address/i.test(said)) throw new Error(`an EVM address was answered as a Solana one: ${said.replace(/\s+/g, " ").slice(0, 120)}`);
+});
+
 if (live) {
   await walk("paste an address without picking a chain", async (page) => {
     // The whole point of the feature: a reader who does not know which

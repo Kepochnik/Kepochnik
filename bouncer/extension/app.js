@@ -2278,6 +2278,12 @@
 
   // src/chain/whichChain.ts
   init_abi();
+  function addressFamily(address, isBase58) {
+    const v = address.trim();
+    if (/^0x[0-9a-fA-F]{40}$/.test(v)) return "evm";
+    if (isBase58(v)) return "solana";
+    return "neither";
+  }
   function searchableChains() {
     return Object.values(CHAINS).filter((c) => c.family === "evm");
   }
@@ -6888,6 +6894,13 @@
     if (raw.trim() && mode === "live" && /^\$?[a-z0-9 ._-]{2,32}$/i.test(raw.trim())) return { view: "door", parts: [raw.trim()] };
     return null;
   }
+  var repaintPicker = null;
+  function selectChain(key) {
+    if (chainSelect.value === key) return;
+    chainSelect.value = key;
+    repaintPicker?.();
+    paintSelectedChain();
+  }
   function chainMark(key) {
     if (key === "auto") return `<svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="5.6" fill="none" stroke="currentColor" stroke-width="1.4" stroke-dasharray="2.6 2.2"/></svg>`;
     const c = CHAINS[key];
@@ -6967,6 +6980,7 @@
       if (open && !$("picker").contains(e.target)) hide();
     });
     chainSelect.addEventListener("change", paint);
+    repaintPicker = paint;
     paint();
   }
   function proxyBase() {
@@ -7192,12 +7206,22 @@
   </section>`;
   }
   async function runDoor(address) {
-    if (mode === "live" && chainSelect.value === "auto" && isSolanaAddress(address) && !ADDR.test(address)) {
-      autoChain = CHAINS.solana;
-      paintChain();
-      return await runSolanaDoor(address);
+    if (mode === "live") {
+      const auto = chainSelect.value === "auto";
+      const family = auto ? addressFamily(address, isSolanaAddress) : chainByKey(chainSelect.value).family;
+      if (family === "solana") {
+        if (auto) {
+          autoChain = CHAINS.solana;
+          resolvedFor = { address: address.trim().toLowerCase(), chain: CHAINS.solana.key };
+          paintChain();
+        }
+        return await runSolanaDoor(address);
+      }
+      if (auto && autoChain && resolvedFor.address !== address.trim().toLowerCase()) {
+        autoChain = null;
+        paintChain();
+      }
     }
-    if (chainOrNull()?.family === "solana" && mode === "live") return await runSolanaDoor(address);
     if (!ADDR.test(address)) {
       if (mode === "live" && /^[a-z0-9$ ._-]{2,32}$/i.test(address)) return await runSearch(address.replace(/^\$/, ""));
       return bad("Paste a 20-byte hex address \u2014 0x followed by 40 hex characters \u2014 or a token's name to search for it.");
@@ -8215,7 +8239,7 @@
     if (wantDemo && mode !== "demo") setMode("demo", true);
     if (!wantDemo && parts[0] !== "demo") {
       if (mode !== "live") setMode("live", true);
-      if (chainParam && CHAINS[chainParam]) chainSelect.value = chainParam;
+      if (chainParam && CHAINS[chainParam]) selectChain(chainParam);
     }
     switch (parts[0]) {
       case "t":
@@ -8253,7 +8277,8 @@
   }
   function submit() {
     const v = q.value.trim();
-    const c = mode === "demo" ? "demo" : chainSelect.value === "auto" ? chainOrNull()?.key ?? "auto" : chain().key;
+    const same = chainSelect.value === "auto" && autoChain && resolvedFor.address === v.trim().toLowerCase();
+    const c = mode === "demo" ? "demo" : chainSelect.value === "auto" ? same ? autoChain.key : "auto" : chain().key;
     let hash;
     if (view === "plan") hash = `#/plan?tax=${encodeURIComponent(v || "100")}&chain=${c}`;
     else if (view === "board") hash = `#/board?hours=${encodeURIComponent(v || "1")}&chain=${c}`;
