@@ -3135,18 +3135,20 @@
 
   // src/bouncer/card.ts
   var CARD_COLORS = {
-    ink: "#0b0b0f",
-    panel: "#15151c",
-    line: "#2a2a35",
-    brass: "#d4a017",
-    rope: "#c8102e",
-    text: "#f2efe6",
-    muted: "#8f8f9c",
-    stop: "#ff4d5e",
-    watch: "#e8b323",
-    ok: "#39d98a",
-    info: "#7f8ea3",
-    dim: "#5e5a66"
+    ink: "#07090a",
+    panel: "#0b0e10",
+    panel2: "#0f1315",
+    line: "#1a2220",
+    brass: "#e8b84b",
+    rope: "#c0122e",
+    text: "#eef3f1",
+    muted: "#cfd6d3",
+    stop: "#ff6b5e",
+    watch: "#e8b84b",
+    ok: "#7fd6a9",
+    info: "#7d9aa8",
+    dim: "#6d7a76",
+    dimmer: "#4e5a57"
   };
   function cardVerdict(notes) {
     const c = CARD_COLORS;
@@ -3160,20 +3162,37 @@
     const o = slip.open;
     const out2 = [];
     if (o) {
-      const owner = o.ownerUnread ? "UNREAD" : o.owner === null ? "NONE" : o.owner.renounced ? "RENOUNCED" : shortAddress(o.owner.address).toUpperCase();
-      out2.push({ label: "OWNER", value: owner, bad: Boolean(o.owner && !o.owner.renounced) });
-      const powers = o.powers.filter((p) => p.kind !== "exempt" && p.kind !== "sweep").length;
-      out2.push({ label: "CODE CAN", value: String(powers), bad: powers > 0 });
+      const owner = o.ownerUnread ? "UNREAD" : o.owner === null ? "NONE" : o.owner.renounced ? "RENOUNCED" : "HAS KEYS";
+      out2.push({
+        label: "OWNER",
+        value: owner,
+        bad: Boolean(o.owner && !o.owner.renounced),
+        note: o.ownerUnread ? "owner() would not answer" : o.owner === null ? "no owner() in the code" : o.owner.renounced ? "nobody can call owner-only code" : shortAddress(o.owner.address)
+      });
+      const kinds = o.powers.filter((p) => p.kind !== "exempt" && p.kind !== "sweep");
+      const names = [...new Set(kinds.map((p) => p.kind))];
+      out2.push({ label: "CODE CAN", value: String(kinds.length), bad: kinds.length > 0, note: names.length ? names.join(", ") : "nothing owner-only found" });
       const sells = o.probes.filter((p) => p.target === "pool");
-      const sale = !sells.length ? "NOT RUN" : sells.every((p) => p.status === "ok") ? "GOES THROUGH" : sells.some((p) => p.status === "reverts") ? "REVERTS" : "UNREAD";
-      out2.push({ label: "SALE INTO POOL", value: sale, bad: sale === "REVERTS" });
+      const ok = sells.filter((p) => p.status === "ok").length;
+      const sale = !sells.length ? "NOT RUN" : sells.every((p) => p.status === "ok") ? "ALL PASS" : sells.some((p) => p.status === "reverts") ? `${ok}/${sells.length}` : "UNREAD";
+      out2.push({
+        label: "SALE INTO POOL",
+        value: sale,
+        bad: sells.some((p) => p.status === "reverts"),
+        note: !sells.length ? "not simulated" : `${sells.length} wallet${sells.length === 1 ? "" : "s"} tried`
+      });
       const top = o.holders?.top10WalletsBps ?? null;
-      out2.push({ label: "TOP 10 WALLETS", value: top === null ? "UNKNOWN" : `${(top / 100).toFixed(0)}%`, bad: top !== null && top >= 5e3 });
+      out2.push({
+        label: "TOP 10 WALLETS",
+        value: top === null ? "UNKNOWN" : `${(top / 100).toFixed(0)}%`,
+        bad: top !== null && top >= 5e3,
+        note: o.holders?.count ? `of supply \xB7 ${o.holders.count} holders` : "explorer not reachable"
+      });
     } else if (slip.rules) {
-      out2.push({ label: "TRADE FEE", value: formatBps(slip.rules.totalTradeBps), bad: slip.rules.totalTradeBps >= 1e3 });
-      out2.push({ label: "CREATOR TAX", value: formatBps(slip.rules.creatorTaxBps), bad: slip.rules.creatorTaxBps >= 500 });
-      out2.push({ label: "DEV HOLDS", value: `${(slip.rules.deployerShareBps / 100).toFixed(1)}%`, bad: slip.rules.deployerShareBps >= 2e3 });
-      out2.push({ label: "BUYBACK", value: slip.rules.buybackEnabled ? "VESTS" : "NONE", bad: slip.rules.buybackEnabled });
+      out2.push({ label: "TRADE FEE", value: formatBps(slip.rules.totalTradeBps), bad: slip.rules.totalTradeBps >= 1e3, note: "on every buy and sell" });
+      out2.push({ label: "CREATOR TAX", value: formatBps(slip.rules.creatorTaxBps), bad: slip.rules.creatorTaxBps >= 500, note: "of the fee, to the creator" });
+      out2.push({ label: "DEV HOLDS", value: `${(slip.rules.deployerShareBps / 100).toFixed(1)}%`, bad: slip.rules.deployerShareBps >= 2e3, note: "of supply" });
+      out2.push({ label: "BUYBACK", value: slip.rules.buybackEnabled ? "VESTS" : "NONE", bad: slip.rules.buybackEnabled, note: slip.rules.buybackEnabled ? "bought back, not burned" : "no buyback in the rules" });
     }
     return out2.slice(0, 4);
   }
@@ -3186,6 +3205,7 @@
         timestamp: slip.at.timestamp,
         ticker: meta ? clip(meta.symbol, 12) : shortAddress(slip.subject),
         name: meta ? clip(meta.name, 34) : slip.known ? "known contract" : "no name on chain",
+        lead: options.lead,
         address: slip.subject,
         stamp: slip.stamp,
         notes: slip.notes,
@@ -3204,19 +3224,21 @@
         at: `slot ${slip.at.slot}`,
         timestamp: slip.at.timestamp,
         ticker: clip(slip.metadata?.symbol || shortAddress(slip.subject), 12),
+        lead: options.lead,
         name: clip(slip.metadata?.name || slip.whatItIs || "no name on chain", 34),
         address: slip.subject,
         stamp: slip.stamp,
         notes: slip.notes,
         facts: [
-          { label: "CAN THEY FREEZE YOU", value: m?.freezeAuthority ? "YES" : m ? "NO" : "UNREAD", bad: Boolean(m?.freezeAuthority) },
-          { label: "CAN THEY PRINT MORE", value: m?.mintAuthority ? "YES" : m ? "NO" : "UNREAD", bad: Boolean(m?.mintAuthority) },
+          { label: "FREEZE YOU", value: m?.freezeAuthority ? "YES" : m ? "NO" : "UNREAD", bad: Boolean(m?.freezeAuthority), note: m?.freezeAuthority ? "a freeze authority is set" : m ? "no freeze authority" : "the mint would not answer" },
+          { label: "PRINT MORE", value: m?.mintAuthority ? "YES" : m ? "NO" : "UNREAD", bad: Boolean(m?.mintAuthority), note: m?.mintAuthority ? "a mint authority is set" : m ? "supply is fixed" : "the mint would not answer" },
           {
             label: "TAX PER TRANSFER",
             value: fee?.kind === "transfer-fee" ? `${(fee.feeBps / 100).toFixed(2)}%` : m ? "0%" : "UNREAD",
-            bad: fee?.kind === "transfer-fee" && fee.feeBps >= 500
+            bad: fee?.kind === "transfer-fee" && fee.feeBps >= 500,
+            note: fee?.kind === "transfer-fee" ? "taken on every transfer" : m ? "no transfer fee extension" : "the mint would not answer"
           },
-          { label: "TOP 10 HOLDERS", value: top === null ? "UNKNOWN" : `${(top / 100).toFixed(0)}%`, bad: top !== null && top >= 5e3 }
+          { label: "TOP 10 HOLDERS", value: top === null ? "UNKNOWN" : `${(top / 100).toFixed(0)}%`, bad: top !== null && top >= 5e3, note: top === null ? "the holder list did not answer" : "of supply" }
         ]
       },
       options
@@ -3225,57 +3247,81 @@
   function renderCard(model, options) {
     const c = CARD_COLORS;
     const v = cardVerdict(model.notes);
-    const ticker2 = model.ticker;
-    const name = model.name;
     const rank = { stop: 0, watch: 1, info: 2 };
     const shown = [...model.notes].sort((a, b) => rank[a.level] - rank[b.level]).slice(0, 3);
-    const tiles = model.facts.map((f, i) => {
-      const x = 60 + i * 272;
-      return `<g>
-      <rect x="${x}" y="344" width="252" height="96" rx="12" fill="${c.ink}" stroke="${c.line}"/>
-      <text x="${x + 18}" y="374" font-size="12" letter-spacing="2" fill="${c.muted}">${esc(f.label)}</text>
-      <text x="${x + 18}" y="416" font-size="${f.value.length > 11 ? 21 : 29}" font-weight="700" fill="${f.bad ? c.stop : c.text}">${esc(f.value)}</text>
-    </g>`;
+    const levelColor = (l) => l === "stop" ? c.stop : l === "watch" ? c.watch : c.info;
+    const ROWS = { bar: 44, subject: 104, verdict: 288, head: 320, facts: 408, foot: 560 };
+    const L = 40;
+    const R = 1160;
+    const line = (y) => `<line x1="0" y1="${y}" x2="1200" y2="${y}" stroke="${c.line}"/>`;
+    const cols = model.facts.length;
+    const colW = (R - L) / cols;
+    const factCells = model.facts.map((f, i) => {
+      const x = L + i * colW;
+      const long = f.value.length > 9;
+      return `${i ? `<line x1="${x}" y1="${ROWS.head}" x2="${x}" y2="${ROWS.facts}" stroke="${c.line}"/>` : ""}
+      <text x="${x + 16}" y="${ROWS.head - 11}" font-size="12" letter-spacing="2.2" fill="${c.dimmer}">${esc(f.label)}</text>
+      <text x="${x + 16}" y="${ROWS.head + 44}" font-size="${long ? 24 : 32}" font-weight="700" fill="${f.bad ? c.stop : c.text}">${esc(f.value)}</text>
+      <text x="${x + 16}" y="${ROWS.head + 70}" font-size="13" fill="${c.dim}">${esc(clip(f.note ?? "", Math.floor(colW / 7.6)))}</text>`;
     }).join("");
+    const rowH = Math.floor((ROWS.foot - ROWS.facts) / Math.max(1, shown.length));
     const noteRows = shown.map((n, i) => {
-      const y = 496 + i * 32;
-      const color = n.level === "stop" ? c.stop : n.level === "watch" ? c.watch : c.info;
-      return `<circle cx="66" cy="${y - 5}" r="5" fill="${color}"/><text x="86" y="${y}" font-size="17" fill="${n.level === "info" ? c.muted : c.text}">${esc(clip(n.text, 96))}</text>`;
+      const top = ROWS.facts + i * rowH;
+      const mid = top + rowH / 2 + 6;
+      return `${i ? line(top) : ""}
+      <line x1="150" y1="${top}" x2="150" y2="${top + rowH}" stroke="${c.line}"/>
+      <text x="${L}" y="${mid}" font-size="13" letter-spacing="1.6" fill="${levelColor(n.level)}">${n.level.toUpperCase()}</text>
+      <text x="170" y="${mid}" font-size="17" fill="${n.level === "info" ? c.muted : c.text}">${esc(clip(n.text, 98))}</text>`;
     }).join("");
     const stamp = model.stamp;
-    const stampColor = stamp === "ON THE LIST" ? c.brass : stamp === "NOT A LAUNCH" ? c.muted : c.stop;
-    const stampWidth = stamp.length * 9.5 + 26;
+    const stampColor = stamp === "ON THE LIST" ? c.ok : stamp === "NOT A LAUNCH" ? c.watch : c.stop;
+    const stampW = stamp.length * 8.4 + 22;
+    const found = model.notes.filter((n) => topicOf(n.code) !== "unread").length;
+    const unread = model.notes.length - found;
+    const counts = [`${found} finding${found === 1 ? "" : "s"}`, unread ? `${unread} unread` : ""].filter(Boolean).join(" \xB7 ");
     return `<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">
-  <rect width="1200" height="630" fill="${c.ink}"/>
-  <rect x="24" y="24" width="1152" height="582" rx="20" fill="${c.panel}" stroke="${c.line}"/>
-  <rect x="24" y="24" width="1152" height="5" rx="2.5" fill="${v.color}"/>
+  <defs>
+    <pattern id="hatch" width="12" height="12" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
+      <rect width="12" height="12" fill="${c.panel}"/>
+      <rect width="6" height="12" fill="${c.panel2}"/>
+    </pattern>
+  </defs>
+  <rect width="1200" height="630" fill="${c.panel}"/>
+  <rect width="1200" height="2" fill="${c.rope}"/>
 
-  <g transform="translate(56 50) scale(1.05)">${options.mascotSvg}</g>
-  <text x="112" y="70" font-size="22" font-weight="700" letter-spacing="6" fill="${c.brass}">BOUNCER</text>
-  <text x="112" y="92" font-size="13" fill="${c.dim}">read-only \xB7 no key \xB7 no signer</text>
-  <text x="1144" y="70" text-anchor="end" font-size="15" fill="${c.muted}">${esc(model.chain)} \xB7 ${esc(model.at)}</text>
-  <text x="1144" y="92" text-anchor="end" font-size="13" fill="${c.dim}">${model.timestamp ? esc(isoUtc(model.timestamp)) : ""}</text>
-  <line x1="56" y1="116" x2="1144" y2="116" stroke="${c.line}"/>
+  <g transform="translate(14 10) scale(0.66)">${options.mascotSvg}</g>
+  <text x="56" y="${ROWS.bar - 15}" font-size="15" font-weight="700" letter-spacing="5" fill="${c.text}">BOUNCER</text>
+  <line x1="168" y1="2" x2="168" y2="${ROWS.bar}" stroke="${c.line}"/>
+  <text x="186" y="${ROWS.bar - 15}" font-size="14" fill="${c.dim}">read-only \xB7 no key \xB7 no signer</text>
+  <text x="${R}" y="${ROWS.bar - 15}" text-anchor="end" font-size="14" fill="${c.dim}">${esc(model.chain)} \xB7 ${esc(model.at)}${model.timestamp ? ` \xB7 ${esc(isoUtc(model.timestamp))}` : ""}</text>
+  ${line(ROWS.bar)}
 
-  <text x="60" y="168" font-size="42" font-weight="800" fill="${c.text}">${esc(ticker2)}</text>
-  <text x="60" y="200" font-size="20" fill="${c.muted}">${esc(name)}</text>
-  <g transform="translate(${1144 - stampWidth} 142)">
-    <rect x="0" y="0" width="${stampWidth}" height="30" rx="15" fill="none" stroke="${stampColor}"/>
-    <text x="${stampWidth / 2}" y="20" text-anchor="middle" font-size="13" font-weight="700" letter-spacing="2" fill="${stampColor}">${esc(stamp)}</text>
+  <text x="${L}" y="${ROWS.subject - 22}" font-size="26" font-weight="700" letter-spacing="1.5" fill="${c.text}">${esc(model.ticker)}</text>
+  <text x="${L + model.ticker.length * 17 + 22}" y="${ROWS.subject - 22}" font-size="17" fill="${c.dim}">${esc(model.name)}</text>
+  <g transform="translate(${R - stampW} ${ROWS.subject - 42})">
+    <rect x="0" y="0" width="${stampW}" height="26" fill="none" stroke="${stampColor}"/>
+    <text x="${stampW / 2}" y="18" text-anchor="middle" font-size="12" letter-spacing="2" fill="${stampColor}">${esc(stamp)}</text>
   </g>
-  <text x="1144" y="200" text-anchor="end" font-size="15" fill="${c.dim}">${esc(model.address)}</text>
+  ${line(ROWS.subject)}
 
-  <text x="60" y="296" font-size="76" font-weight="800" letter-spacing="1" fill="${v.color}">${v.word}</text>
-  <text x="${60 + v.word.length * 46 + 34}" y="284" font-size="20" fill="${c.text}">${esc(v.line)}</text>
-  <text x="${60 + v.word.length * 46 + 34}" y="310" font-size="15" fill="${c.dim}">read at one block \xB7 nothing here is advice</text>
-
-  ${tiles}
-
-  <line x1="60" y1="470" x2="1140" y2="470" stroke="${c.line}"/>
+  <rect x="0" y="${ROWS.subject}" width="340" height="${ROWS.verdict - ROWS.subject}" fill="url(#hatch)"/>
+  <line x1="340" y1="${ROWS.subject}" x2="340" y2="${ROWS.verdict}" stroke="${c.line}"/>
+  <text x="${L}" y="${ROWS.subject + 34}" font-size="13" letter-spacing="3.4" fill="${c.dimmer}">VERDICT</text>
+  <text x="${L}" y="${ROWS.subject + 110}" font-size="64" font-weight="700" fill="${v.color}">${v.word}</text>
+  <text x="${L}" y="${ROWS.subject + 145}" font-size="14" fill="${c.dim}">${esc(counts)}</text>
+  <text x="380" y="${ROWS.subject + 44}" font-size="21" fill="${c.text}">${esc(clip(model.lead || v.line, 62))}</text>
+  <text x="380" y="${ROWS.subject + 74}" font-size="17" fill="${c.dim}">${esc(clip(v.line, 74))}</text>
+  <text x="380" y="${ROWS.subject + 118}" font-size="15" fill="${c.dimmer}">${esc(model.address)}</text>
+  <text x="380" y="${ROWS.subject + 144}" font-size="14" fill="${c.dimmer}">read at one block \xB7 nothing here is scored, predicted or advised</text>
+  ${line(ROWS.verdict)}
+  ${line(ROWS.head)}
+  ${factCells}
+  ${line(ROWS.facts)}
   ${noteRows}
+  ${line(ROWS.foot)}
 
-  <text x="60" y="588" font-size="15" fill="${c.muted}">${esc(options.checkUrl ?? options.repoUrl)}</text>
-  <text x="1144" y="588" text-anchor="end" font-size="15" fill="${c.dim}">check it yourself before you buy \xB7 ${esc(options.ticker)}</text>
+  <text x="${L}" y="${ROWS.foot + 44}" font-size="15" fill="${c.brass}">${esc(options.checkUrl ?? options.repoUrl)}</text>
+  <text x="${R}" y="${ROWS.foot + 44}" text-anchor="end" font-size="15" fill="${c.dim}">check it yourself before you buy</text>
 </svg>
 `;
   }
@@ -7592,6 +7638,19 @@
       ${holdersBodyText ? section("s-holders", "Who holds it", "The largest token accounts and the wallets behind them.", holdersBodyText, false) : ""}
     </div>
   </div>`;
+    $("act-share").addEventListener("click", async (event) => {
+      const button = event.currentTarget;
+      button.disabled = true;
+      try {
+        const sym2 = slip.metadata?.symbol ?? slip.subject.slice(0, 10);
+        noteCard("spl", slip.metadata?.symbol ?? slip.subject);
+        const svg = splCard(slip, { repoUrl: REPO, ticker: MARK, mascotSvg: MASCOT_SVG_INNER, checkUrl: shareBase(), lead: splSentence(slip, blocked) });
+        const how = await copyCardImage(svg, `bouncer-${sym2.replace(/[^a-z0-9]+/gi, "-").toLowerCase()}.png`);
+        showToast(how === "copied" ? "Card copied \u2014 paste it anywhere" : "Your browser would not take an image; the card was downloaded instead");
+      } finally {
+        button.disabled = false;
+      }
+    });
     $("act-json").addEventListener("click", async () => {
       try {
         await navigator.clipboard.writeText(slipJson(slip));
@@ -7767,6 +7826,10 @@
       }
     };
   }
+  function noteCard(kind, ticker2) {
+    const log = window.__bouncerCards ??= [];
+    if (log.length < 50) log.push({ kind, ticker: ticker2, at: Math.round(performance.now()) });
+  }
   function noteRender(stage, word) {
     const log = window.__bouncerRenders ??= [];
     if (log.length < 200) log.push({ stage, at: Math.round(performance.now()), word });
@@ -7885,7 +7948,10 @@
       ${registered && !v1 ? section("s-watch", "Watch for changes", "Get told when the dev moves, right in this tab.", watchBody, new URLSearchParams(location.hash.split("?")[1] ?? "").get("watch") === "1") : ""}
     </div>
   </div>`;
-    const cardSvg = () => doorCard(slip, { repoUrl: REPO, ticker: MARK, mascotSvg: MASCOT_SVG_INNER, checkUrl: shareBase() });
+    const cardSvg = () => {
+      noteCard("door", slip.id.meta?.symbol ?? slip.subject);
+      return doorCard(slip, { repoUrl: REPO, ticker: MARK, mascotSvg: MASCOT_SVG_INNER, checkUrl: shareBase(), lead: summarySentence(slip) });
+    };
     $("act-card").addEventListener("click", () => {
       const wrap = $("card");
       if (!wrap.classList.contains("open")) wrap.innerHTML = cardSvg();
@@ -7897,18 +7963,6 @@
       try {
         const sym2 = slip.id.meta?.symbol ?? slip.subject.slice(0, 10);
         const how = await copyCardImage(cardSvg(), `bouncer-${sym2.replace(/[^a-z0-9]+/gi, "-").toLowerCase()}.png`);
-        showToast(how === "copied" ? "Card copied \u2014 paste it anywhere" : "Your browser would not take an image; the card was downloaded instead");
-      } finally {
-        button.disabled = false;
-      }
-    });
-    $("act-share").addEventListener("click", async (event) => {
-      const button = event.currentTarget;
-      button.disabled = true;
-      try {
-        const sym2 = slip.metadata?.symbol ?? slip.subject.slice(0, 10);
-        const svg = splCard(slip, { repoUrl: REPO, ticker: MARK, mascotSvg: MASCOT_SVG_INNER, checkUrl: shareBase() });
-        const how = await copyCardImage(svg, `bouncer-${sym2.replace(/[^a-z0-9]+/gi, "-").toLowerCase()}.png`);
         showToast(how === "copied" ? "Card copied \u2014 paste it anywhere" : "Your browser would not take an image; the card was downloaded instead");
       } finally {
         button.disabled = false;

@@ -1391,6 +1391,29 @@ function renderSplSlip(slip: SplSlip, opts: { stage?: Stage } = {}): void {
       ${holdersBodyText ? section("s-holders", "Who holds it", "The largest token accounts and the wallets behind them.", holdersBodyText, false) : ""}
     </div>
   </div>`;
+  // Copy card, on the renderer that draws the button.
+  //
+  // This handler was registered in renderSlip — the EVM one — against a
+  // DoorSlip, which meant two things at once: pressing Copy card on an
+  // EVM token ran it a SECOND time and overwrote the good card with an
+  // SPL card built from a slip that has no mint, and pressing it on a
+  // Solana token did nothing at all, because the button the Solana
+  // renderer draws had no listener on the page it was drawn on.
+  // flow-check only asked whether a PNG reached the clipboard, and one
+  // always did.
+  $("act-share").addEventListener("click", async (event) => {
+    const button = event.currentTarget as HTMLButtonElement;
+    button.disabled = true;
+    try {
+      const sym = slip.metadata?.symbol ?? slip.subject.slice(0, 10);
+      noteCard("spl", slip.metadata?.symbol ?? slip.subject);
+      const svg = splCard(slip, { repoUrl: REPO, ticker: MARK, mascotSvg: MASCOT_SVG_INNER, checkUrl: shareBase(), lead: splSentence(slip, blocked) });
+      const how = await copyCardImage(svg, `bouncer-${sym.replace(/[^a-z0-9]+/gi, "-").toLowerCase()}.png`);
+      showToast(how === "copied" ? "Card copied — paste it anywhere" : "Your browser would not take an image; the card was downloaded instead");
+    } finally {
+      button.disabled = false;
+    }
+  });
   $("act-json").addEventListener("click", async () => {
     try { await navigator.clipboard.writeText(slipJson(slip)); showToast("JSON copied"); } catch { showToast("Clipboard blocked; use the CLI --format json"); }
   });
@@ -1609,6 +1632,7 @@ declare global {
   interface Window {
     __bouncerRenders?: { stage: Stage; at: number; word: string }[];
     __bouncerWire?: { url: string; at: number; ms: number; ok: boolean; done: boolean; status: number; why: string }[];
+    __bouncerCards?: { kind: string; ticker: string; at: number }[];
   }
 }
 
@@ -1665,6 +1689,25 @@ declare global {
       throw error;
     }
   };
+}
+
+/**
+ * Every card this page builds, and what it was about.
+ *
+ * The copy path had two handlers bound to one button for months: the
+ * good card went to the clipboard and an SPL card built from an EVM slip
+ * went straight over it. flow-check watched the clipboard and saw a PNG
+ * both times, so it passed — and the preview path, which the check can
+ * read, was never the broken one.
+ *
+ * A clipboard image cannot be read back as text, so the page says what
+ * it put there. One press, one entry, naming the token: a second handler
+ * shows up as a second entry, and a card about the wrong token shows up
+ * in the name.
+ */
+function noteCard(kind: "door" | "spl", ticker: string): void {
+  const log = (window.__bouncerCards ??= []);
+  if (log.length < 50) log.push({ kind, ticker, at: Math.round(performance.now()) });
 }
 
 function noteRender(stage: Stage, word: string): void {
@@ -1817,7 +1860,10 @@ function renderSlip(slip: DoorSlip, opts: { stage?: Stage } = {}): void {
     </div>
   </div>`;
 
-  const cardSvg = () => doorCard(slip, { repoUrl: REPO, ticker: MARK, mascotSvg: MASCOT_SVG_INNER, checkUrl: shareBase() });
+  const cardSvg = () => {
+    noteCard("door", slip.id.meta?.symbol ?? slip.subject);
+    return doorCard(slip, { repoUrl: REPO, ticker: MARK, mascotSvg: MASCOT_SVG_INNER, checkUrl: shareBase(), lead: summarySentence(slip) });
+  };
   $("act-card").addEventListener("click", () => {
     const wrap = $("card");
     if (!wrap.classList.contains("open")) wrap.innerHTML = cardSvg();
@@ -1829,18 +1875,6 @@ function renderSlip(slip: DoorSlip, opts: { stage?: Stage } = {}): void {
     try {
       const sym = slip.id.meta?.symbol ?? slip.subject.slice(0, 10);
       const how = await copyCardImage(cardSvg(), `bouncer-${sym.replace(/[^a-z0-9]+/gi, "-").toLowerCase()}.png`);
-      showToast(how === "copied" ? "Card copied — paste it anywhere" : "Your browser would not take an image; the card was downloaded instead");
-    } finally {
-      button.disabled = false;
-    }
-  });
-  $("act-share").addEventListener("click", async (event) => {
-    const button = event.currentTarget as HTMLButtonElement;
-    button.disabled = true;
-    try {
-      const sym = slip.metadata?.symbol ?? slip.subject.slice(0, 10);
-      const svg = splCard(slip, { repoUrl: REPO, ticker: MARK, mascotSvg: MASCOT_SVG_INNER, checkUrl: shareBase() });
-      const how = await copyCardImage(svg, `bouncer-${sym.replace(/[^a-z0-9]+/gi, "-").toLowerCase()}.png`);
       showToast(how === "copied" ? "Card copied — paste it anywhere" : "Your browser would not take an image; the card was downloaded instead");
     } finally {
       button.disabled = false;

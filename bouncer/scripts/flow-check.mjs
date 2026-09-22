@@ -121,6 +121,27 @@ await walk("press Copy card, get a PNG", async (page) => {
     }
   });
   if (!kind.includes("image/png")) throw new Error(`the clipboard holds "${kind}", not an image`);
+
+  // A PNG is not enough. Two handlers were bound to this button for
+  // months — the second built a Solana card out of an EVM slip and
+  // overwrote the good one — and this walk passed the whole time,
+  // because something always landed on the clipboard. So look at what
+  // the card SAYS: open the preview and require the token's own ticker
+  // in it. A card about the wrong token cannot pass that.
+  const ticker = await page.$eval(".vsym", (el) => el.textContent.trim());
+  if (!ticker) throw new Error("the slip has no ticker to check the card against");
+  // What the page says it put on the clipboard. One press builds one card,
+  // and it is about the token on screen — a second handler bound to the
+  // same button shows up here as a second entry, which is the shape of the
+  // bug this walk sat through for months while watching only for a PNG.
+  const built = await page.evaluate(() => window.__bouncerCards ?? []);
+  if (built.length !== 1) throw new Error(`one press built ${built.length} cards: ${JSON.stringify(built)}`);
+  if (built[0].ticker !== ticker) throw new Error(`the copied card is about ${built[0].ticker}, the slip is about ${ticker}`);
+  // And the preview draws the same token.
+  await page.click("#act-card");
+  await page.waitForSelector("#card svg", { timeout: 5_000 });
+  const card = await page.$eval("#card svg", (el) => el.textContent ?? "");
+  if (!card.includes(ticker)) throw new Error(`the card does not name ${ticker}; it says "${card.slice(0, 120).replace(/\s+/g, " ")}"`);
 });
 
 if (live) {
