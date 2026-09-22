@@ -315,13 +315,15 @@ function decodeAccount(raw: RawAccount | null): AccountInfo | null {
 
 function base64ToBytes(text: string): Uint8Array {
   if (!text) return new Uint8Array(0);
-  if (typeof atob === "function") {
-    const binary = atob(text);
-    const out = new Uint8Array(binary.length);
-    for (let i = 0; i < binary.length; i++) out[i] = binary.charCodeAt(i);
-    return out;
-  }
-  return new Uint8Array(Buffer.from(text, "base64"));
+  // atob only. It was written with a Buffer fallback for Node, and that
+  // branch has been unreachable since Node 16 made atob global — this
+  // project requires 22. It was also the one Node-only global in a file
+  // the website bundles, which is how it turned up: the site had never
+  // been typechecked, and the first run of that check found it.
+  const binary = atob(text);
+  const out = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) out[i] = binary.charCodeAt(i);
+  return out;
 }
 
 // ---------------------------------------------------------------------------

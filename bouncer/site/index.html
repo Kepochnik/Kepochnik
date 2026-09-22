@@ -689,6 +689,49 @@ footer a:hover{color:var(--brass-2)}
   body:has(#out .slip) .chips:empty{display:none}
   body:has(#out .slip) .door{margin-top:0}
 }
+
+/* ============================================================
+   COULD YOU GET OUT? — the exit calculator
+
+   The one place on the page that answers a question about the reader
+   instead of about the token, so it is allowed to look like a control
+   rather than a record. Everything else here is a reading; this is a
+   thing you use.
+   ============================================================ */
+.calc{display:grid;gap:12px}
+.calc-row{display:flex;gap:0;border:1px solid var(--line-2);background:var(--surface-2)}
+.calc-row input{flex:1;min-width:0;background:none;border:0;color:var(--text);font:14px var(--mono);padding:13px 14px;min-height:46px}
+.calc-row input:focus{outline:none}
+.calc-row:focus-within{box-shadow:inset 0 0 0 1px var(--brass)}
+.calc-row .ghost{border:0;border-left:1px solid var(--line-2);border-radius:0;white-space:nowrap}
+.calc-presets{display:flex;gap:0;flex-wrap:wrap;border:1px solid var(--line);border-right:0;border-bottom:0;width:fit-content;max-width:100%}
+.calc-presets .chip{border:0;border-right:1px solid var(--line);border-bottom:1px solid var(--line)}
+.calc-out:empty{display:none}
+/* The figure and what it means, side by side: a number with no reading
+   next to it invites "so I get 0.8 ETH" and stops there, and the reading
+   is almost always the more useful half. */
+.calc-res{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:0;border:1px solid var(--line-2);background:var(--surface)}
+.calc-fig{padding:18px;border-right:1px solid var(--line);display:flex;flex-direction:column;justify-content:center;gap:4px;
+  background:repeating-linear-gradient(45deg,var(--surface),var(--surface) 6px,var(--surface-2) 6px,var(--surface-2) 12px)}
+.calc-fig .num{font:700 clamp(22px,3vw,32px)/1 var(--display);color:var(--text);word-break:break-all}
+.calc-fig span{font:11px var(--mono);letter-spacing:.14em;text-transform:uppercase;color:var(--muted)}
+.calc-side{padding:18px;display:grid;gap:12px;align-content:center}
+.calc-kv{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;font:12px var(--mono);color:var(--muted)}
+.calc-kv b{font:700 17px var(--display);color:var(--text)}
+.calc-say{grid-column:1/-1;margin:0;padding:13px 18px;border-top:1px solid var(--line);font-size:13px;line-height:1.6;color:var(--muted)}
+/* Colour only where the answer is bad news, and only on the figure —
+   the same rule the verdict follows. */
+.calc-stop .calc-fig .num{color:var(--stop)}
+.calc-stop .calc-say{color:var(--stop);background:var(--stop-bg)}
+.calc-watch .calc-fig .num{color:var(--watch)}
+.calc-no{margin:0;padding:13px 14px;border:1px solid var(--info-edge);background:var(--info-bg);color:var(--muted);font-size:13px;line-height:1.6}
+.calc-foot{margin:0;color:var(--dim);font-size:11.5px;line-height:1.6}
+@media (max-width:640px){
+  .calc-row{flex-direction:column}
+  .calc-row .ghost{border-left:0;border-top:1px solid var(--line-2);width:100%}
+  .calc-res{grid-template-columns:1fr}
+  .calc-fig{border-right:0;border-bottom:1px solid var(--line)}
+}
 </style>
 </head>
 <body>

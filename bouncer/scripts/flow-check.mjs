@@ -462,6 +462,50 @@ await walkLive("the paid links sit after the evidence and say they are paid", as
   if (order.buy < order.stack) throw new Error(`the paid links are above the evidence (${Math.round(order.buy)} vs ${Math.round(order.stack)})`);
   if (order.buy < order.verdict) throw new Error("the paid links are above the verdict");
 });
+await walk("the exit calculator answers for a size, or says why it cannot", async (page) => {
+  // The product's own thesis, walked: "can I get out" is a different
+  // question from "what is it worth", and they come apart exactly when it
+  // matters. A token with a healthy price over a thin pool is not an exit.
+  await page.goto(`${url}#/demo/0x00000000000000000000000000000000000f2e54`, { waitUntil: "load" });
+  await waitForDone(page);
+  await page.evaluate(() => document.querySelector("#s-calc")?.setAttribute("open", ""));
+  if (!(await page.$("#calc-size"))) throw new Error("no exit calculator on a slip that has a priceable venue");
+
+  // A small size and a large one must not give the same answer. If they
+  // do, the thing is quoting a price rather than pricing an exit.
+  const realised = async (value) => {
+    await page.fill("#calc-size", value);
+    await page.click("#calc-go");
+    await page.waitForTimeout(250);
+    const text = await page.$eval("#calc-out", (el) => el.textContent.replace(/\s+/g, " ").trim());
+    const m = /you keep\s*([\d.]+)%/.exec(text);
+    if (!m) throw new Error(`no answer for ${value}: ${text.slice(0, 140)}`);
+    return Number(m[1]);
+  };
+  const small = await realised("1000");
+  const large = await realised("200000000");
+  if (!(small > large)) throw new Error(`a large position must realise less than a small one (${small}% vs ${large}%)`);
+  if (large >= 99) throw new Error(`a position that size cannot realise ${large}% of the screen price`);
+
+  // Nothing typed, nothing claimed.
+  await page.fill("#calc-size", "");
+  await page.click("#calc-go");
+  await page.waitForTimeout(200);
+  const empty = await page.$eval("#calc-out", (el) => el.textContent.trim());
+  if (empty) throw new Error(`an empty box produced an answer: "${empty.slice(0, 80)}"`);
+
+  // And where it cannot price, it says so in a sentence rather than
+  // quoting zero — the failure this whole release is about.
+  await page.goto(`${url}#/demo/0x0000000000000000000000000000000000f1a1a1`, { waitUntil: "load" });
+  await waitForDone(page);
+  await page.evaluate(() => document.querySelector("#s-calc")?.setAttribute("open", ""));
+  await page.fill("#calc-size", "1000");
+  await page.click("#calc-go");
+  await page.waitForTimeout(250);
+  const said = await page.$eval("#calc-out", (el) => el.textContent.replace(/\s+/g, " ").trim());
+  if (/^0\b/.test(said)) throw new Error(`a token it cannot price was quoted at zero: "${said.slice(0, 120)}"`);
+  if (!/ranges|no pool|could not/i.test(said)) throw new Error(`the refusal does not say why: "${said.slice(0, 160)}"`);
+});
 await browser.close();
 if (failures) {
   console.error(`\nflows: ${failures} journey${failures === 1 ? "" : "s"} broken.`);

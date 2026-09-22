@@ -22,6 +22,7 @@ import { readSplDoor, type SplSlip } from "../../src/bouncer/spl.js";
 import { findBlockByTimestamp } from "../../src/chain/tape.js";
 import { doorCard, splCard } from "../../src/bouncer/card.js";
 import { coverChargeLine } from "../../src/bouncer/coverCharge.js";
+import { evmExitFor, splExitFor, readSizeQuote, type SizeAnswer } from "../../src/bouncer/exitSize.js";
 import { DEMO, DEMO_BLOCKSCOUT, DEMO_IMPOSTOR, DEMO_PLAIN, DEMO_V1, demoBlockscoutFetch, demoRpc } from "../../src/bouncer/demo.js";
 import { devReportLine, readDevReport, type DevReport } from "../../src/bouncer/devReport.js";
 import { findLaunchBlock, impostorOf, readDoor, slipJson, stampLabel, stampTone, type DoorNote, type DoorSlip } from "../../src/bouncer/door.js";
@@ -332,6 +333,21 @@ function blockscoutFor(memo = false): BlockscoutClient | null {
   if (!c.blockscout) return null;
   const proxy = proxyBase();
   return new BlockscoutClient({ baseUrl: proxy ? `${proxy}/api/${c.key}` : c.blockscout, memo });
+}
+
+/**
+ * The factory, for a read that cannot work without one.
+ *
+ * The routes that walk a launchpad curve's events are guarded by
+ * refuseFeature() before they get here, and that guard requires a factory
+ * — so this throwing means the guard was bypassed, which is worth an
+ * error naming the cause rather than an `undefined` travelling down four
+ * call frames and surfacing as an empty result.
+ */
+function factoryOrFail(): string {
+  const f = factoryFor();
+  if (!f) throw new Error(`no launchpad factory is known for ${chain().name}, and this read is built on a launchpad curve's events`);
+  return f;
 }
 
 function factoryFor(): string | undefined {
@@ -910,8 +926,8 @@ async function runWallet(token: string, wallet: string): Promise<void> {
     const factory = factoryFor();
     const head = await rpc.blockNumber();
     const launch = await new PonsReader(rpc, factory).launchedToken(token, head);
-    const launchBlock = await findLaunchBlock(rpc, launch.token, head, mode === "demo" ? 400_000 : Math.round(30 * 86_400 * chain().blocksPerSecond), factory, mode === "demo" ? 100_000 : undefined);
-    const p = await readPosition(rpc, launch, wallet, launchBlock ?? 0, head, factory, mode === "demo" ? 100_000 : undefined);
+    const launchBlock = await findLaunchBlock(rpc, launch.token, head, mode === "demo" ? 400_000 : Math.round(30 * 86_400 * chain().blocksPerSecond), factoryOrFail(), mode === "demo" ? 100_000 : undefined);
+    const p = await readPosition(rpc, launch, wallet, launchBlock ?? 0, head, factoryOrFail(), mode === "demo" ? 100_000 : undefined);
     done(`block ${head}`);
     renderPosition(p, head);
   } catch (error) {
@@ -926,7 +942,7 @@ async function runTx(hash: string): Promise<void> {
   if (!hash.startsWith("0x")) return bad("Paste a transaction hash.");
   busy("decoding the trade…");
   try {
-    const receipts = await readTradeReceipt(rpcFor(), hash, factoryFor());
+    const receipts = await readTradeReceipt(rpcFor(), hash, factoryOrFail());
     done(`block ${receipts[0].block}`);
     out.innerHTML = `<div class="slip">${receipts.map(receiptSection).join("")}</div>`;
   } catch (error) {
@@ -944,7 +960,7 @@ async function runPlan(taxBps: number, params: URLSearchParams): Promise<void> {
     const c = chain();
     const buy = params.get("buy");
     const plan = await readLaunchPlan(rpc, {
-      factory: factoryFor(),
+      factory: factoryOrFail(),
       block: await rpc.blockNumber(),
       nativeSymbol: c.native.symbol,
       creatorTaxBps: BigInt(taxBps),
@@ -1392,7 +1408,7 @@ function unreadStrip(notes: DoorNote[], skipped: { section: string; reason: stri
  * to buy a thing this page could not identify is the one recommendation it
  * has no business making.
  */
-function buyStrip(chainKey: string, address: string, sellable = true, verdict: "stop" | "watch" | "clear" | "reading" = "clear"): string {
+function buyStrip(chainKey: string, address: string, sellable = true, verdict: VerdictKind = "clear"): string {
   if (!sellable) {
     return `<section class="buy">
       <div class="buy-head"><h2>Buy it</h2></div>
@@ -1427,9 +1443,15 @@ function buyStrip(chainKey: string, address: string, sellable = true, verdict: "
   const lead =
     verdict === "stop"
       ? "The slip above says STOP: something here can cost you money outright. The links are not hidden — this page does not decide for anybody — but read the red lines first, because nothing on the other side of them will."
-      : verdict === "watch"
-        ? "The slip above has things worth reading first. These open the token on someone else's venue; BOUNCER cannot trade and holds no key."
-        : "BOUNCER cannot trade and holds no key. These open the token on someone else's venue. Read the slip above first; nothing here changes what it says.";
+      : verdict === "incomplete"
+        ? // Without this branch an incomplete reading got the CLEAR
+          // wording — "nothing here changes what it says" — over a slip
+          // that had just admitted it could not finish. The first
+          // typecheck of this file is what caught it.
+          "The check above did not finish: part of what decides whether you could sell was not read. These links still work; what is missing above is not."
+        : verdict === "watch"
+          ? "The slip above has things worth reading first. These open the token on someone else's venue; BOUNCER cannot trade and holds no key."
+          : "BOUNCER cannot trade and holds no key. These open the token on someone else's venue. Read the slip above first; nothing here changes what it says.";
   // Said plainly, in the reader's line of sight, at the moment it is
   // relevant. A tool whose only asset is that it sells you nothing cannot
   // have a payment it did not mention.
@@ -1441,6 +1463,99 @@ function buyStrip(chainKey: string, address: string, sellable = true, verdict: "
     <div class="buy-links">${links}</div>
     ${gap}
   </section>`;
+}
+
+/**
+ * COULD YOU GET OUT? — the calculator, and the only thing on the page that
+ * answers a question about the reader rather than about the token.
+ *
+ * "This token is worth X" and "your bag can leave for X" are different
+ * claims, and they come apart exactly when it matters: a healthy-looking
+ * price over four thousand dollars of liquidity is not an exit for ten
+ * thousand dollars of position, and nothing else on the slip would tell
+ * somebody which of those they are holding.
+ *
+ * It re-prices in the browser from the reserves the slip already has, so
+ * every answer is at the same block or slot as the rest of the page and
+ * typing a number costs nothing. See src/bouncer/exitSize.ts for why that
+ * is a correctness decision and not a performance one.
+ */
+function exitCalcBody(supply: bigint | null): string {
+  // Sensible starting points rather than an empty box: most people do not
+  // know their position in raw token units, and "1% of supply" is the size
+  // the slip above is already quoting, so the two agree by default.
+  const presets = supply && supply > 0n
+    ? [
+        { label: "0.1% of supply", value: supply / 1_000n },
+        { label: "1%", value: supply / 100n },
+        { label: "5%", value: supply / 20n },
+      ]
+    : [];
+  return `<div class="calc">
+    <div class="calc-row">
+      <input id="calc-size" inputmode="decimal" spellcheck="false" placeholder="how many tokens do you hold?" aria-label="Position size in tokens">
+      <button class="ghost" id="calc-go" type="button">What would I get?</button>
+    </div>
+    ${presets.length ? `<div class="calc-presets">${presets.map((x) => `<button class="chip" type="button" data-size="${x.value}">${esc(x.label)}</button>`).join("")}</div>` : ""}
+    <div class="calc-out" id="calc-out"></div>
+    <p class="calc-foot">Priced against the reserves read above, at the same moment as everything else on this slip — not a fresh quote, and not a promise about later. It is the venue's own arithmetic on balances that anybody can move between now and when you sell.</p>
+  </div>`;
+}
+
+/** Wires the calculator, wherever it was drawn. */
+function wireExitCalc(decimals: number, quoteFor: (tokens: bigint) => SizeAnswer): void {
+  const input = document.getElementById("calc-size") as HTMLInputElement | null;
+  const out = document.getElementById("calc-out");
+  if (!input || !out) return;
+  const run = () => {
+    const raw = input.value.trim().replace(/[\s,_]/g, "");
+    if (!raw) {
+      out.innerHTML = "";
+      return;
+    }
+    // Decimal text to base units, without floating point. Number() on a
+    // token amount with eighteen decimals loses the tail, and the tail is
+    // somebody's money.
+    const [whole, frac = ""] = raw.split(".");
+    if (!/^\d*$/.test(whole) || !/^\d*$/.test(frac)) {
+      out.innerHTML = `<p class="calc-no">That is not a number of tokens.</p>`;
+      return;
+    }
+    const tokens = BigInt(whole || "0") * 10n ** BigInt(decimals) + BigInt((frac + "0".repeat(decimals)).slice(0, decimals) || "0");
+    const answer = quoteFor(tokens);
+    if (!answer.ok) {
+      out.innerHTML = `<p class="calc-no">${esc(answer.why.replace(/^./, (c) => c.toUpperCase()))}.</p>`;
+      return;
+    }
+    const q = answer.quote;
+    const said = readSizeQuote(q);
+    out.innerHTML = `<div class="calc-res calc-${said.level}">
+      <div class="calc-fig">
+        <b class="num">${esc(formatUnits(q.out, q.quoteDecimals))}</b>
+        <span>${esc(q.quoteSymbol)} in hand</span>
+      </div>
+      <div class="calc-side">
+        <div class="calc-kv"><span>you keep</span><b>${(q.realisedBps / 100).toFixed(1)}%</b><span>of the screen price</span></div>
+        <div class="calc-kv"><span>your size is</span><b>${(q.shareOfPoolBps / 100).toFixed(2)}%</b><span>of the pool's token side</span></div>
+      </div>
+      <p class="calc-say">${esc(said.text)}</p>
+    </div>`;
+  };
+  input.addEventListener("keydown", (e) => {
+    if ((e as KeyboardEvent).key === "Enter") {
+      e.preventDefault();
+      run();
+    }
+  });
+  document.getElementById("calc-go")?.addEventListener("click", run);
+  for (const b of document.querySelectorAll<HTMLButtonElement>(".calc-presets .chip")) {
+    b.addEventListener("click", () => {
+      // The preset is in base units already; show it the way a holder
+      // would write it so the box stays editable rather than magic.
+      input.value = formatUnits(BigInt(b.dataset.size ?? "0"), decimals, 0);
+      run();
+    });
+  }
 }
 
 /**
@@ -1591,6 +1706,7 @@ function renderSplSlip(slip: SplSlip, opts: { stage?: Stage } = {}): void {
       ${section("s-id", "Is it real?", "What this address actually is, who can print more of it, and who can freeze what you hold.", idBody, false)}
       ${extBody ? section("s-ext", "Token-2022 extensions", "The rules the token program itself enforces on every transfer.", extBody, false) : ""}
       ${holdersBodyText ? section("s-holders", "Who holds it", "The largest token accounts and the wallets behind them.", holdersBodyText, false) : ""}
+      ${m ? section("s-calc", "Could you get out?", "Your own position size, priced against the pool reserves read above. A price is not an exit: the two come apart exactly when it matters.", exitCalcBody(m.supply), false) : ""}
     </div>
     ${buyStrip(slip.chain.key, slip.subject, Boolean(slip.mint), verdictOf(slip.notes as DoorNote[], "done", coverage).kind)}
   </div>`;
@@ -2091,6 +2207,7 @@ function renderSlip(slip: DoorSlip, opts: { stage?: Stage } = {}): void {
       ${r ? section("s-rules", "Fees and rules", "What every trade costs, where the creator's cut goes, what buyback really does.", rulesBody, false) : ""}
       ${v1 ? section("s-v1", "Rules (Pons V1)", "How this older kind of launch works: pool from block one, launch caps, locked liquidity.", `<ol class="rules">${v1.rules.map((x) => `<li>${esc(x)}</li>`).join("")}</ol>`, false) : ""}
       ${e ? section("s-exit", "Cash out now", "What you would actually get for selling part or all of a position right now.", exitBody, false) : ""}
+      ${section("s-calc", "Could you get out?", "Your own position size, priced against the reserves above. A price is not an exit: the two come apart exactly when it matters.", exitCalcBody(slip.id.meta?.totalSupply ?? null), false)}
       ${room ? section("s-room", "Who is inside", "Every buyer since launch, how much the creator's own wallets put in, buys landing in the same block.", roomBody, false) : ""}
       ${crew ? section("s-crew", "Same funder?", "Where the first buyers got their money. Wallets funded by one address before the launch are one group.", crewBody, false) : ""}
       ${l ? section("s-look", "Same name", "Other tokens with this ticker on the chain, and which one launched first.", lookBody, false) : ""}
@@ -2128,6 +2245,7 @@ function renderSlip(slip: DoorSlip, opts: { stage?: Stage } = {}): void {
     try { await navigator.clipboard.writeText(url); showToast("Link copied"); } catch { showToast(url); }
   });
   wireRetry();
+  wireExitCalc(slip.id.meta?.decimals ?? 18, (tokens) => evmExitFor(slip, tokens));
   const walletGo = document.getElementById("wallet-go");
   if (walletGo) {
     walletGo.addEventListener("click", () => {
@@ -2358,7 +2476,7 @@ function renderPlan(plan: LaunchPlan): void {
   const c = chain();
   const u = (v: bigint, f = 4) => `${formatUnits(v, qd.decimals, f)} ${esc(qd.symbol)}`;
   out.innerHTML = `<div class="slip">
-    <div class="stamp-row"><div class="who"><div class="sym">PLAN</div><div class="name">${esc(c.name)} · ${esc(c.launchpad)} · config ${plan.configId}${plan.configEnabled ? "" : " (disabled)"} · quote ${esc(qd.symbol)}</div><div class="at">block ${plan.block}</div>
+    <div class="stamp-row"><div class="who"><div class="sym">PLAN</div><div class="name">${esc(c.name)} · ${esc(c.launchpad ?? "no launchpad")} · config ${plan.configId}${plan.configEnabled ? "" : " (disabled)"} · quote ${esc(qd.symbol)}</div><div class="at">block ${plan.block}</div>
       <form class="row" id="plan-form" style="margin-top:12px"><input class="short" id="plan-tax" placeholder="creator tax bps" value="${plan.creatorTaxBps}"><input class="short" id="plan-buy" placeholder="sample buy (${esc(qd.symbol)})" value="${formatUnits(plan.sampleBuy, qd.decimals)}"><input class="short" id="plan-quote" placeholder="quote token 0x… (blank = ${esc(c.native.symbol)})" value="${plan.pairToken === "0x0000000000000000000000000000000000000000" ? "" : plan.pairToken}"><button class="ghost" type="submit">Recalculate</button></form></div>
       <div class="stamp">${formatBps(plan.creatorTaxBps)} TAX</div></div>
     <div class="grid">

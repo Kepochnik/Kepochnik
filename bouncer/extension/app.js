@@ -1168,6 +1168,13 @@
         return null;
       case "wallet":
       case "tx":
+        if (chain2.family !== "evm") {
+          return `${chain2.name} is not an EVM chain, and this read is built on EVM logs and receipts`;
+        }
+        if (!chain2.factory || !chain2.launchpad) {
+          return `this reads trades off a launchpad curve's events, and BOUNCER knows no launchpad on ${chain2.name}`;
+        }
+        return null;
       case "dev":
         if (chain2.family !== "evm") {
           return `${chain2.name} is not an EVM chain, and this read is built on EVM logs and receipts`;
@@ -2371,13 +2378,10 @@
   }
   function base64ToBytes(text) {
     if (!text) return new Uint8Array(0);
-    if (typeof atob === "function") {
-      const binary = atob(text);
-      const out2 = new Uint8Array(binary.length);
-      for (let i = 0; i < binary.length; i++) out2[i] = binary.charCodeAt(i);
-      return out2;
-    }
-    return new Uint8Array(Buffer.from(text, "base64"));
+    const binary = atob(text);
+    const out2 = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) out2[i] = binary.charCodeAt(i);
+    return out2;
   }
   var MINT_SIZE = 82;
   var TLV_START = 166;
@@ -6359,6 +6363,104 @@
     return `${(space > max - 18 ? cut.slice(0, space) : cut).trimEnd()}\u2026`;
   }
 
+  // src/bouncer/exitSize.ts
+  function priceableEvmPool(pools) {
+    if (!pools) return null;
+    const flat = pools.filter(
+      (p) => (p.kind === "v2" || p.kind === "solidly") && !p.stable && (p.tokenReserve ?? 0n) > 0n && (p.quoteReserve ?? 0n) > 0n
+    );
+    flat.sort((a, b) => b.quoteReserve > a.quoteReserve ? 1 : b.quoteReserve < a.quoteReserve ? -1 : 0);
+    return flat[0] ?? null;
+  }
+  function shaped(tokensIn, out2, spotOut, tokenReserve, quoteReserve, rest) {
+    return {
+      ...rest,
+      tokensIn,
+      out: out2,
+      realisedBps: spotOut === 0n ? 0 : Number(out2 * 10000n / spotOut),
+      // 99% of the quote side is the practical definition of draining: the
+      // formula is asymptotic, so it never returns the last unit and a
+      // strict comparison would never fire.
+      drainsPool: quoteReserve > 0n && out2 * 100n >= quoteReserve * 99n,
+      shareOfPoolBps: tokenReserve > 0n ? Number(tokensIn * 10000n / tokenReserve) : 0
+    };
+  }
+  function evmExitFor(slip, tokensIn) {
+    if (tokensIn <= 0n) return { ok: false, why: "enter a position size" };
+    const native = slip.chain.native;
+    const exit = slip.exit;
+    if (exit && exit.venue !== "closed" && exit.reserves.token > 0n && exit.reserves.quote > 0n) {
+      const gross = curveAmountOut(tokensIn, exit.reserves.token, exit.reserves.quote, 0n);
+      const out2 = gross - gross * exit.feeBps / 10000n - gross * exit.creatorTaxBps / 10000n;
+      const spotOut = tokensIn * exit.spot / 10n ** 18n;
+      return {
+        ok: true,
+        quote: shaped(tokensIn, out2, spotOut, exit.reserves.token, exit.reserves.quote, {
+          quoteSymbol: native.symbol,
+          quoteDecimals: native.decimals,
+          venue: exit.venue === "curve" ? "the bonding curve" : "the launch pool"
+        })
+      };
+    }
+    const pool = priceableEvmPool(slip.open?.pools ?? null);
+    if (pool) {
+      const tokenReserve = pool.tokenReserve;
+      const quoteReserve = pool.quoteReserve;
+      const out2 = curveAmountOut(tokensIn, tokenReserve, quoteReserve, BigInt(pool.feeBps));
+      const spotOut = tokensIn * quoteReserve / tokenReserve;
+      return {
+        ok: true,
+        quote: shaped(tokensIn, out2, spotOut, tokenReserve, quoteReserve, {
+          quoteSymbol: slip.chain.native.symbol,
+          quoteDecimals: 18,
+          venue: `${pool.dex} (${pool.kind})`
+        })
+      };
+    }
+    const pools = slip.open?.pools;
+    if (pools === null || pools === void 0) return { ok: false, why: "the pools could not be read on this chain, so there is nothing to price a sale against" };
+    if (!pools.length) return { ok: false, why: "no pool was found for this token, so there is nowhere for a sale of any size to go" };
+    if (pools.every((p) => p.kind === "v3" || p.kind === "v4")) {
+      return {
+        ok: false,
+        why: "the only pools here keep their liquidity in ranges (Uniswap V3/V4), and their balances are not what a trade moves through \u2014 pricing a sale off them would overstate what you get, in the direction that costs you money"
+      };
+    }
+    return { ok: false, why: "the pools that were found have no readable balances, so a sale cannot be priced" };
+  }
+  function readSizeQuote(q2) {
+    const lost = 1e4 - q2.realisedBps;
+    const pct3 = (bps3) => `${(bps3 / 100).toFixed(bps3 < 100 ? 2 : 1)}%`;
+    if (q2.drainsPool) {
+      return {
+        level: "stop",
+        text: `A sale this size takes essentially everything ${q2.venue} holds. Past that point the arithmetic stops being a quote: there would be no meaningful market left to sell the last of it into, and anybody selling ahead of you makes your share smaller.`
+      };
+    }
+    if (q2.shareOfPoolBps >= 3333) {
+      return {
+        level: "stop",
+        text: `This position is ${pct3(q2.shareOfPoolBps)} of the token side of ${q2.venue}. A holding that large next to its own pool cannot leave at anything near the screen price, whatever the price says.`
+      };
+    }
+    if (lost >= 2e3) {
+      return {
+        level: "stop",
+        text: `Selling this size into ${q2.venue} realises ${pct3(q2.realisedBps)} of the screen price \u2014 ${pct3(lost)} of it goes to slippage, fees and tax on the way out.`
+      };
+    }
+    if (lost >= 500) {
+      return {
+        level: "watch",
+        text: `Selling this size into ${q2.venue} costs ${pct3(lost)} against the screen price, in slippage and fees.`
+      };
+    }
+    return {
+      level: "info",
+      text: `Selling this size into ${q2.venue} realises ${pct3(q2.realisedBps)} of the screen price. The pool is deep enough that a position this size is not what moves it.`
+    };
+  }
+
   // src/bouncer/demo.ts
   init_abi();
   init_keccak();
@@ -7321,6 +7423,11 @@
     const proxy = proxyBase();
     return new BlockscoutClient({ baseUrl: proxy ? `${proxy}/api/${c.key}` : c.blockscout, memo });
   }
+  function factoryOrFail() {
+    const f = factoryFor();
+    if (!f) throw new Error(`no launchpad factory is known for ${chain().name}, and this read is built on a launchpad curve's events`);
+    return f;
+  }
   function factoryFor() {
     const c = chain();
     const f = (mode === "live" ? factoryInput.value.trim() : "") || c.factory || "";
@@ -7644,8 +7751,8 @@
       const factory = factoryFor();
       const head = await rpc.blockNumber();
       const launch = await new PonsReader(rpc, factory).launchedToken(token, head);
-      const launchBlock = await findLaunchBlock(rpc, launch.token, head, mode === "demo" ? 4e5 : Math.round(30 * 86400 * chain().blocksPerSecond), factory, mode === "demo" ? 1e5 : void 0);
-      const p = await readPosition(rpc, launch, wallet, launchBlock ?? 0, head, factory, mode === "demo" ? 1e5 : void 0);
+      const launchBlock = await findLaunchBlock(rpc, launch.token, head, mode === "demo" ? 4e5 : Math.round(30 * 86400 * chain().blocksPerSecond), factoryOrFail(), mode === "demo" ? 1e5 : void 0);
+      const p = await readPosition(rpc, launch, wallet, launchBlock ?? 0, head, factoryOrFail(), mode === "demo" ? 1e5 : void 0);
       done(`block ${head}`);
       renderPosition(p, head);
     } catch (error) {
@@ -7659,7 +7766,7 @@
     if (!hash.startsWith("0x")) return bad("Paste a transaction hash.");
     busy("decoding the trade\u2026");
     try {
-      const receipts = await readTradeReceipt(rpcFor(), hash, factoryFor());
+      const receipts = await readTradeReceipt(rpcFor(), hash, factoryOrFail());
       done(`block ${receipts[0].block}`);
       out.innerHTML = `<div class="slip">${receipts.map(receiptSection).join("")}</div>`;
     } catch (error) {
@@ -7676,7 +7783,7 @@
       const c = chain();
       const buy = params.get("buy");
       const plan = await readLaunchPlan(rpc, {
-        factory: factoryFor(),
+        factory: factoryOrFail(),
         block: await rpc.blockNumber(),
         nativeSymbol: c.native.symbol,
         creatorTaxBps: BigInt(taxBps),
@@ -7927,7 +8034,13 @@
     const missing = missingVenues(chainKey);
     const gap = missing.length ? `<p class="buy-gap">${esc2(missing.join(" and "))} ${missing.length === 1 ? "is" : "are"} not linked on this chain: BOUNCER has no confirmed address for ${missing.length === 1 ? "it" : "them"} here, and a guessed link is a dead one.</p>` : "";
     const head = verdict === "stop" ? "Open it on a venue anyway?" : "Open it on a venue";
-    const lead = verdict === "stop" ? "The slip above says STOP: something here can cost you money outright. The links are not hidden \u2014 this page does not decide for anybody \u2014 but read the red lines first, because nothing on the other side of them will." : verdict === "watch" ? "The slip above has things worth reading first. These open the token on someone else's venue; BOUNCER cannot trade and holds no key." : "BOUNCER cannot trade and holds no key. These open the token on someone else's venue. Read the slip above first; nothing here changes what it says.";
+    const lead = verdict === "stop" ? "The slip above says STOP: something here can cost you money outright. The links are not hidden \u2014 this page does not decide for anybody \u2014 but read the red lines first, because nothing on the other side of them will." : verdict === "incomplete" ? (
+      // Without this branch an incomplete reading got the CLEAR
+      // wording — "nothing here changes what it says" — over a slip
+      // that had just admitted it could not finish. The first
+      // typecheck of this file is what caught it.
+      "The check above did not finish: part of what decides whether you could sell was not read. These links still work; what is missing above is not."
+    ) : verdict === "watch" ? "The slip above has things worth reading first. These open the token on someone else's venue; BOUNCER cannot trade and holds no key." : "BOUNCER cannot trade and holds no key. These open the token on someone else's venue. Read the slip above first; nothing here changes what it says.";
     const disclosure = `<p class="buy-disc"><strong>These are referral links.</strong> BOUNCER earns a share if you trade through one. Nothing on this page is ordered, worded or coloured because of that \u2014 the venues are listed in a fixed order, no venue paid to be here, and a venue with no confirmed address for this chain is named as missing rather than dropped.</p>`;
     return `<section class="buy${verdict === "stop" ? " buy-stop" : ""}">
     <div class="buy-head"><h2>${head}</h2></div>
@@ -7936,6 +8049,71 @@
     <div class="buy-links">${links}</div>
     ${gap}
   </section>`;
+  }
+  function exitCalcBody(supply) {
+    const presets = supply && supply > 0n ? [
+      { label: "0.1% of supply", value: supply / 1000n },
+      { label: "1%", value: supply / 100n },
+      { label: "5%", value: supply / 20n }
+    ] : [];
+    return `<div class="calc">
+    <div class="calc-row">
+      <input id="calc-size" inputmode="decimal" spellcheck="false" placeholder="how many tokens do you hold?" aria-label="Position size in tokens">
+      <button class="ghost" id="calc-go" type="button">What would I get?</button>
+    </div>
+    ${presets.length ? `<div class="calc-presets">${presets.map((x) => `<button class="chip" type="button" data-size="${x.value}">${esc2(x.label)}</button>`).join("")}</div>` : ""}
+    <div class="calc-out" id="calc-out"></div>
+    <p class="calc-foot">Priced against the reserves read above, at the same moment as everything else on this slip \u2014 not a fresh quote, and not a promise about later. It is the venue's own arithmetic on balances that anybody can move between now and when you sell.</p>
+  </div>`;
+  }
+  function wireExitCalc(decimals, quoteFor) {
+    const input = document.getElementById("calc-size");
+    const out2 = document.getElementById("calc-out");
+    if (!input || !out2) return;
+    const run = () => {
+      const raw = input.value.trim().replace(/[\s,_]/g, "");
+      if (!raw) {
+        out2.innerHTML = "";
+        return;
+      }
+      const [whole, frac = ""] = raw.split(".");
+      if (!/^\d*$/.test(whole) || !/^\d*$/.test(frac)) {
+        out2.innerHTML = `<p class="calc-no">That is not a number of tokens.</p>`;
+        return;
+      }
+      const tokens = BigInt(whole || "0") * 10n ** BigInt(decimals) + BigInt((frac + "0".repeat(decimals)).slice(0, decimals) || "0");
+      const answer = quoteFor(tokens);
+      if (!answer.ok) {
+        out2.innerHTML = `<p class="calc-no">${esc2(answer.why.replace(/^./, (c) => c.toUpperCase()))}.</p>`;
+        return;
+      }
+      const q2 = answer.quote;
+      const said = readSizeQuote(q2);
+      out2.innerHTML = `<div class="calc-res calc-${said.level}">
+      <div class="calc-fig">
+        <b class="num">${esc2(formatUnits(q2.out, q2.quoteDecimals))}</b>
+        <span>${esc2(q2.quoteSymbol)} in hand</span>
+      </div>
+      <div class="calc-side">
+        <div class="calc-kv"><span>you keep</span><b>${(q2.realisedBps / 100).toFixed(1)}%</b><span>of the screen price</span></div>
+        <div class="calc-kv"><span>your size is</span><b>${(q2.shareOfPoolBps / 100).toFixed(2)}%</b><span>of the pool's token side</span></div>
+      </div>
+      <p class="calc-say">${esc2(said.text)}</p>
+    </div>`;
+    };
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        run();
+      }
+    });
+    document.getElementById("calc-go")?.addEventListener("click", run);
+    for (const b of document.querySelectorAll(".calc-presets .chip")) {
+      b.addEventListener("click", () => {
+        input.value = formatUnits(BigInt(b.dataset.size ?? "0"), decimals, 0);
+        run();
+      });
+    }
   }
   function section(id, title, what, body, open) {
     return `<details class="sec" id="${id}"${open ? " open" : ""}><summary><h2>${title}</h2><span class="chev" aria-hidden="true"></span></summary><div class="body"><p class="what">${what}</p>${body}</div></details>`;
@@ -8030,6 +8208,7 @@
       ${section("s-id", "Is it real?", "What this address actually is, who can print more of it, and who can freeze what you hold.", idBody, false)}
       ${extBody ? section("s-ext", "Token-2022 extensions", "The rules the token program itself enforces on every transfer.", extBody, false) : ""}
       ${holdersBodyText ? section("s-holders", "Who holds it", "The largest token accounts and the wallets behind them.", holdersBodyText, false) : ""}
+      ${m ? section("s-calc", "Could you get out?", "Your own position size, priced against the pool reserves read above. A price is not an exit: the two come apart exactly when it matters.", exitCalcBody(m.supply), false) : ""}
     </div>
     ${buyStrip(slip.chain.key, slip.subject, Boolean(slip.mint), verdictOf(slip.notes, "done", coverage).kind)}
   </div>`;
@@ -8348,6 +8527,7 @@
       ${r ? section("s-rules", "Fees and rules", "What every trade costs, where the creator's cut goes, what buyback really does.", rulesBody, false) : ""}
       ${v1 ? section("s-v1", "Rules (Pons V1)", "How this older kind of launch works: pool from block one, launch caps, locked liquidity.", `<ol class="rules">${v1.rules.map((x) => `<li>${esc2(x)}</li>`).join("")}</ol>`, false) : ""}
       ${e ? section("s-exit", "Cash out now", "What you would actually get for selling part or all of a position right now.", exitBody, false) : ""}
+      ${section("s-calc", "Could you get out?", "Your own position size, priced against the reserves above. A price is not an exit: the two come apart exactly when it matters.", exitCalcBody(slip.id.meta?.totalSupply ?? null), false)}
       ${room ? section("s-room", "Who is inside", "Every buyer since launch, how much the creator's own wallets put in, buys landing in the same block.", roomBody, false) : ""}
       ${crew ? section("s-crew", "Same funder?", "Where the first buyers got their money. Wallets funded by one address before the launch are one group.", crewBody, false) : ""}
       ${l ? section("s-look", "Same name", "Other tokens with this ticker on the chain, and which one launched first.", lookBody, false) : ""}
@@ -8394,6 +8574,7 @@
       }
     });
     wireRetry();
+    wireExitCalc(slip.id.meta?.decimals ?? 18, (tokens) => evmExitFor(slip, tokens));
     const walletGo = document.getElementById("wallet-go");
     if (walletGo) {
       walletGo.addEventListener("click", () => {
@@ -8569,7 +8750,7 @@
     const c = chain();
     const u = (v, f = 4) => `${formatUnits(v, qd.decimals, f)} ${esc2(qd.symbol)}`;
     out.innerHTML = `<div class="slip">
-    <div class="stamp-row"><div class="who"><div class="sym">PLAN</div><div class="name">${esc2(c.name)} \xB7 ${esc2(c.launchpad)} \xB7 config ${plan.configId}${plan.configEnabled ? "" : " (disabled)"} \xB7 quote ${esc2(qd.symbol)}</div><div class="at">block ${plan.block}</div>
+    <div class="stamp-row"><div class="who"><div class="sym">PLAN</div><div class="name">${esc2(c.name)} \xB7 ${esc2(c.launchpad ?? "no launchpad")} \xB7 config ${plan.configId}${plan.configEnabled ? "" : " (disabled)"} \xB7 quote ${esc2(qd.symbol)}</div><div class="at">block ${plan.block}</div>
       <form class="row" id="plan-form" style="margin-top:12px"><input class="short" id="plan-tax" placeholder="creator tax bps" value="${plan.creatorTaxBps}"><input class="short" id="plan-buy" placeholder="sample buy (${esc2(qd.symbol)})" value="${formatUnits(plan.sampleBuy, qd.decimals)}"><input class="short" id="plan-quote" placeholder="quote token 0x\u2026 (blank = ${esc2(c.native.symbol)})" value="${plan.pairToken === "0x0000000000000000000000000000000000000000" ? "" : plan.pairToken}"><button class="ghost" type="submit">Recalculate</button></form></div>
       <div class="stamp">${formatBps(plan.creatorTaxBps)} TAX</div></div>
     <div class="grid">

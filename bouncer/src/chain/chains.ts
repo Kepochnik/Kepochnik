@@ -337,6 +337,19 @@ export function featureBlocker(chain: ChainConfig, feature: Feature): string | n
       return null;
     case "wallet":
     case "tx":
+      // These read a wallet's buys and sells off the launchpad curve's
+      // events, so they need the same factory the board does. Typechecking
+      // the website for the first time is what surfaced it: the factory
+      // was passed straight through as `string | undefined` into readers
+      // that require a string, so on an EVM chain with no launchpad these
+      // went out with no factory at all.
+      if (chain.family !== "evm") {
+        return `${chain.name} is not an EVM chain, and this read is built on EVM logs and receipts`;
+      }
+      if (!chain.factory || !chain.launchpad) {
+        return `this reads trades off a launchpad curve's events, and BOUNCER knows no launchpad on ${chain.name}`;
+      }
+      return null;
     case "dev":
       if (chain.family !== "evm") {
         return `${chain.name} is not an EVM chain, and this read is built on EVM logs and receipts`;
