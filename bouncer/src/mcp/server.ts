@@ -20,6 +20,7 @@ import { readSplDoor, splReceipt } from "../bouncer/spl.js";
 import { readCoverCharge } from "../bouncer/coverCharge.js";
 import { devReportLine, readDevReport } from "../bouncer/devReport.js";
 import { doorReceipt, findLaunchBlock, readDoor, slipJson } from "../bouncer/door.js";
+import { doorCoverage, splCoverage } from "../bouncer/coverage.js";
 import { readExitDoor } from "../bouncer/exitDoor.js";
 import { readBoard } from "../bouncer/leaderboard.js";
 import { readOneCrew } from "../bouncer/oneCrew.js";
@@ -116,11 +117,15 @@ export function createMcpServer(deps: McpDeps): { tools: ToolDef[]; handle: (mes
         if (chain.family === "solana") {
           if (!deps.solanaRpcFor) throw new Error("this server was started without a Solana endpoint");
           const slip = await readSplDoor(deps.solanaRpcFor(chain), str(args.address, "address"), chain);
-          return { text: renderReceipt(splReceipt(slip), "markdown"), structured: JSON.parse(slipJson({ stamp: slip.stamp, subject: slip.subject, chain: slip.chain, at: slip.at, notes: slip.notes, skipped: slip.skipped })) };
+          // `coverage` rides along with the notes, and it has to: an agent
+          // reading a slip with no findings needs the same warning a person
+          // gets from the page, or it will report a clean bill off a reading
+          // that never saw the holders or the pool.
+          return { text: renderReceipt(splReceipt(slip), "markdown"), structured: JSON.parse(slipJson({ stamp: slip.stamp, subject: slip.subject, chain: slip.chain, at: slip.at, notes: slip.notes, skipped: slip.skipped, coverage: splCoverage(slip) })) };
         }
         const { factory, rpc, blockscout } = ctx(args);
         const slip = await readDoor(rpc, str(args.address, "address"), { chain, factory, blockscout, devHours: typeof args.dev_hours === "number" ? args.dev_hours : deps.demo ? 8 : 24, ...demoWindow });
-        return { text: renderReceipt(doorReceipt(slip), "markdown"), structured: JSON.parse(slipJson({ stamp: slip.stamp, subject: slip.subject, chain: slip.chain, at: slip.at, notes: slip.notes, skipped: slip.skipped })) };
+        return { text: renderReceipt(doorReceipt(slip), "markdown"), structured: JSON.parse(slipJson({ stamp: slip.stamp, subject: slip.subject, chain: slip.chain, at: slip.at, notes: slip.notes, skipped: slip.skipped, coverage: doorCoverage(slip) })) };
       },
     },
     {
