@@ -462,10 +462,29 @@ details.sec>summary:hover h2{color:var(--brass)}
 .grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}
 @media (max-width:820px){.grid{grid-template-columns:1fr}}
 
-.kv{display:grid;grid-template-columns:auto 1fr;gap:8px 18px;font-size:14px}
-.kv dt{color:var(--dim);font:12px var(--mono);white-space:nowrap}
-.kv dd{margin:0;min-width:0;word-break:break-word;font-variant-numeric:tabular-nums}
-.kv dd .mono{font:13px var(--mono)}
+/* The readings, as a ruled table rather than two columns floating apart.
+   A fixed label column means every value on the page starts at the same
+   x, which is what makes a column of readings scannable; `auto` sized it
+   to the longest label and left a gutter you could park in. */
+.kv{display:grid;grid-template-columns:168px minmax(0,1fr);gap:0;font-size:13.5px;
+  border-top:1px solid var(--line)}
+.kv dt{color:var(--dim);font:11.5px/1.6 var(--mono);white-space:nowrap;padding:9px 14px 9px 0;border-bottom:1px solid var(--line)}
+.kv dd{margin:0;min-width:0;word-break:break-word;font-variant-numeric:tabular-nums;padding:9px 0;border-bottom:1px solid var(--line);color:var(--text)}
+.kv dd .mono{font:12.5px var(--mono)}
+@media (max-width:560px){
+  .kv{grid-template-columns:1fr}
+  .kv dt{padding:9px 0 0;border-bottom:0}
+  .kv dd{padding:2px 0 9px}
+}
+
+/* A caption over a table: which of the three things in this section you
+   are now looking at. Sections used to run a readings block, a list of
+   what the code can do and a log of what happened when it was tried
+   straight into one another with nothing between them. */
+.cap{margin:20px 0 0;font:400 10.5px/1 var(--mono);letter-spacing:.2em;text-transform:uppercase;color:var(--dimmer);
+  padding:0 0 8px;border-bottom:1px solid var(--line)}
+.cap:first-child{margin-top:0}
+.cap b{color:var(--dim);font-weight:400}
 .big{display:flex;align-items:baseline;gap:12px;margin:6px 0 12px}
 .big b{font:900 60px/0.9 var(--display);letter-spacing:.02em;font-variant-numeric:tabular-nums}
 .big b.open{color:var(--watch)}
@@ -476,7 +495,7 @@ details.sec>summary:hover h2{color:var(--brass)}
 
 .tbl{overflow-x:auto;margin:0 -2px}
 .buys{width:100%;border-collapse:collapse;font:12px var(--mono);margin-top:4px}
-.buys th{text-align:left;color:var(--dim);font-weight:400;padding:7px 14px 7px 0;border-bottom:1px solid var(--line-2);white-space:nowrap;text-transform:uppercase;letter-spacing:.08em;font-size:10px}
+.buys th{text-align:left;color:var(--dimmer);font-weight:400;padding:8px 14px 8px 0;border-bottom:1px solid var(--line-2);white-space:nowrap;text-transform:uppercase;letter-spacing:.14em;font-size:10px}
 .buys td{padding:8px 12px 8px 0;border-bottom:1px solid var(--line);white-space:nowrap;font-variant-numeric:tabular-nums}
 .buys tr:last-child td{border-bottom:0}
 .buys tbody tr:hover td{background:var(--surface-2)}

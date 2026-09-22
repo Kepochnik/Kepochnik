@@ -1819,8 +1819,8 @@ function renderSlip(slip: DoorSlip, opts: { stage?: Stage } = {}): void {
     : "";
 
   const lookBody = l
-    ? `<dl class="kv"><dt>${esc(l.query)}</dt><dd>${esc(lookalikeLine(l))}</dd></dl>
-        <div class="tbl"><table class="buys"><thead><tr><th>address</th><th>from the factory?</th><th>stage</th><th>launch block</th></tr></thead><tbody>${l.candidates.slice(0, 8).map((x) => `<tr><td><a href="#/${mode === "demo" ? "demo" : "t"}/${x.address}${routeChain()}">${shortAddress(x.address)}</a>${x.address === l.subject ? " · this one" : ""}</td><td>${x.registered ? '<span class="flag ok">yes</span>' : '<span class="flag bad">no</span>'}</td><td>${x.phase !== null ? PHASE_LABEL[x.phase] : "—"}</td><td>${x.launchBlock ?? "—"}</td></tr>`).join("")}</tbody></table></div>`
+    ? `<h3 class="cap">Tokens carrying this ticker</h3><dl class="kv"><dt>${esc(l.query)}</dt><dd>${esc(lookalikeLine(l))}</dd></dl>
+        <h3 class="cap">Every one found <b>· the factory decides, not the name</b></h3><div class="tbl"><table class="buys"><thead><tr><th>address</th><th>from the factory?</th><th>stage</th><th>launch block</th></tr></thead><tbody>${l.candidates.slice(0, 8).map((x) => `<tr><td><a href="#/${mode === "demo" ? "demo" : "t"}/${x.address}${routeChain()}">${shortAddress(x.address)}</a>${x.address === l.subject ? " · this one" : ""}</td><td>${x.registered ? '<span class="flag ok">yes</span>' : '<span class="flag bad">no</span>'}</td><td>${x.phase !== null ? PHASE_LABEL[x.phase] : "—"}</td><td>${x.launchBlock ?? "—"}</td></tr>`).join("")}</tbody></table></div>`
     : "";
 
   const watchBody = `<div class="watchbar"><button class="ghost" id="act-watch" type="button" aria-pressed="false">Start watching</button><span style="color:var(--muted);font-size:13px">Checks every ${mode === "demo" ? "5" : "15"} s while this tab is open: the dev selling or moving tokens, the tax recipient changing, buyback switching, graduation${crew?.crews.length ? `, and ${crew.crews.flatMap((x) => x.wallets).length} grouped wallets leaving together` : ""}. Browser notifications if you allow them.</span></div><div class="events"></div>`;
@@ -1989,13 +1989,17 @@ function openDoorTiles(slip: DoorSlip): string {
 
 function controlBody(slip: DoorSlip): string {
   const o = slip.open!;
+  // Three different kinds of thing live in this section and they used to
+  // run into each other: what the chain answered, what the code CAN do,
+  // and what actually happened when a transfer was tried. Each gets a
+  // caption saying which it is.
   const powers = o.powers.length
-    ? `<div class="tbl"><table class="buys"><thead><tr><th>function in the code</th><th>lets whoever may call it</th></tr></thead><tbody>${o.powers.map((p) => `<tr><td><span class="mono">${esc(p.signature)}</span></td><td>${esc(POWER_MEANING[p.kind])}</td></tr>`).join("")}</tbody></table></div><p style="color:var(--dim);font-size:12px;margin:6px 0 0">A name in the dispatcher is not a permission. Whether each is guarded by the owner, by a role, or by nothing at all is not readable from bytecode.</p>`
+    ? `<h3 class="cap">What the code can do <b>· read off the bytecode</b></h3><div class="tbl"><table class="buys"><thead><tr><th>function in the code</th><th>lets whoever may call it</th></tr></thead><tbody>${o.powers.map((p) => `<tr><td><span class="mono">${esc(p.signature)}</span></td><td>${esc(POWER_MEANING[p.kind])}</td></tr>`).join("")}</tbody></table></div><p style="color:var(--dim);font-size:12px;margin:6px 0 0">A name in the dispatcher is not a permission. Whether each is guarded by the owner, by a role, or by nothing at all is not readable from bytecode.</p>`
     : o.surfaceFrom === "implementation-unreadable"
       ? `<p style="color:var(--muted);font-size:13px;margin:8px 0 0">The code this proxy points at could not be read, so no function list is shown. Its switches are unknown, not absent.</p>`
       : `<p style="color:var(--muted);font-size:13px;margin:8px 0 0">No mint, pause, blacklist, fee, limit, trading or upgrade function was seen among the ${o.selectors} four-byte selectors in the code.</p>`;
   const probeRows = o.probes.length
-    ? `<div class="tbl"><table class="buys"><thead><tr><th>simulated</th><th>from</th><th>result</th></tr></thead><tbody>${o.probes
+    ? `<h3 class="cap">What happened when it was tried <b>· simulated, nothing signed</b></h3><div class="tbl"><table class="buys"><thead><tr><th>simulated</th><th>from</th><th>result</th></tr></thead><tbody>${o.probes
         .map(
           (p) =>
             `<tr><td>${p.target === "pool" ? "sale into the pool" : "transfer to a fresh wallet"}</td><td><span class="mono">${shortAddress(p.from)}</span>${p.source === "deployer" ? ' <span class="flag">deployer</span>' : ""}</td><td>${p.status === "ok" ? '<span class="flag ok">goes through</span>' : p.status === "reverts" ? `<span class="flag bad">reverts</span> ${esc(clean(p.reason ?? ""))}` : `<span class="flag">not run</span> ${esc(clean(p.reason ?? ""))}`}</td></tr>`,
@@ -2004,7 +2008,7 @@ function controlBody(slip: DoorSlip): string {
     : o.probesSkipped
       ? `<p style="color:var(--muted);font-size:13px;margin:8px 0 0">No transfer was simulated: ${esc(o.probesSkipped)}.</p>`
       : "";
-  return `<dl class="kv">
+  return `<h3 class="cap">What the chain answered</h3><dl class="kv">
     <dt>owner</dt><dd>${o.ownerUnread ? "owner() is in the code but the chain would not answer it" : o.owner === null ? "no owner() function in the code" : o.owner.renounced ? '<span class="flag ok">renounced</span> nobody can call owner-only functions' : `<span class="mono">${esc(o.owner.address)}</span>${o.owner.isContract ? " (a contract)" : ""}${o.ownerBalance?.bps != null ? ` · holds ${pctText(o.ownerBalance.bps)}` : ""}${o.ownable ? "" : " · no renounceOwnership()"}`}</dd>
     ${o.paused !== null ? `<dt>paused</dt><dd>${o.paused ? '<span class="flag bad">yes</span>' : '<span class="flag ok">no</span>'}</dd>` : ""}
     ${o.tradingOpen ? `<dt>${esc(o.tradingOpen.view)}</dt><dd>${o.tradingOpen.open ? '<span class="flag ok">true</span> trading is open' : '<span class="flag bad">false</span> trading is switched off'}</dd>` : ""}
@@ -2049,14 +2053,14 @@ function holdersBody(slip: DoorSlip): string {
                 ? `<span class="flag">${esc(x.name ?? "contract")}</span>`
                 : "";
   const explorer = chain().blockscout;
-  return `<dl class="kv">
+  return `<h3 class="cap">The shares <b>· from the explorer's holder list</b></h3><dl class="kv">
     ${o.deployer ? `<dt>deployer</dt><dd><span class="mono">${esc(o.deployer.address)}</span> · holds ${pctText(o.deployer.bps)}${o.deployer.createdAt ? ` · deployed ${isoUtc(o.deployer.createdAt)} (${formatDuration(Math.max(0, slip.at.timestamp - o.deployer.createdAt))} ago)` : ""}</dd>` : ""}
     ${h ? `<dt>holders</dt><dd>${h.count ?? "unknown"}${h.transfers !== null ? ` · ${h.transfers} transfers indexed` : ""}</dd>
     <dt>top 10 wallets</dt><dd>${pctText(h.top10WalletsBps)} of supply, over the ${h.rows} rows the explorer returned. Contracts and burn addresses are not counted; wallets that delegated under EIP-7702 are.</dd>
     <dt>in contracts</dt><dd>${pctText(h.contractsBps)} (pools, lockers, vaults, the token itself)${h.burnedBps ? ` · burned ${pctText(h.burnedBps)}` : ""}</dd>` : ""}
     ${o.activity ? `<dt>last transfer</dt><dd>${o.activity.lastTransferAt ? `${formatDuration(Math.max(0, slip.at.timestamp - o.activity.lastTransferAt))} ago · ${o.activity.recentWallets} wallets in the last ${o.activity.recent} transfers` : "none indexed by the explorer"}</dd>` : ""}
   </dl>
-  ${h && h.top.length ? `<div class="tbl"><table class="buys"><thead><tr><th>#</th><th>holder</th><th>share</th></tr></thead><tbody>${h.top.slice(0, 15).map((x, i) => `<tr><td>${i + 1}</td><td>${explorer && mode !== "demo" ? `<a href="${esc(explorer)}/address/${esc(x.address)}" target="_blank" rel="noopener"><span class="mono">${shortAddress(x.address)}</span></a>` : `<span class="mono">${shortAddress(x.address)}</span>`} ${role(x)}</td><td>${pctText(x.bps)}</td></tr>`).join("")}</tbody></table></div>` : ""}`;
+  ${h && h.top.length ? `<h3 class="cap">The biggest wallets</h3><div class="tbl"><table class="buys"><thead><tr><th>#</th><th>holder</th><th>share</th></tr></thead><tbody>${h.top.slice(0, 15).map((x, i) => `<tr><td>${i + 1}</td><td>${explorer && mode !== "demo" ? `<a href="${esc(explorer)}/address/${esc(x.address)}" target="_blank" rel="noopener"><span class="mono">${shortAddress(x.address)}</span></a>` : `<span class="mono">${shortAddress(x.address)}</span>`} ${role(x)}</td><td>${pctText(x.bps)}</td></tr>`).join("")}</tbody></table></div>` : ""}`;
 }
 
 function devSection(d: DevReport, subject: string | null, standalone: boolean, bodyOnly = false): string {
