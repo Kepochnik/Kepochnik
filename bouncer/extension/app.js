@@ -3433,218 +3433,9 @@
     return digits.replace(/\B(?=(\d{3})+(?!\d))/g, ",");
   }
 
-  // src/bouncer/card.ts
-  var CARD_COLORS = {
-    ink: "#07090a",
-    panel: "#0b0e10",
-    panel2: "#0f1315",
-    line: "#1a2220",
-    brass: "#e8b84b",
-    rope: "#c0122e",
-    text: "#eef3f1",
-    muted: "#cfd6d3",
-    stop: "#ff6b5e",
-    watch: "#e8b84b",
-    ok: "#7fd6a9",
-    info: "#7d9aa8",
-    dim: "#6d7a76",
-    dimmer: "#4e5a57"
-  };
-  function cardVerdict(notes) {
-    const c = CARD_COLORS;
-    const stop = notes.filter((n) => n.level === "stop").length;
-    const watch = notes.filter((n) => n.level === "watch").length;
-    if (stop) return { word: "STOP", kind: "stop", color: c.stop, line: `${stop} thing${stop === 1 ? "" : "s"} here can cost you money outright` };
-    if (watch) return { word: "WATCH", kind: "watch", color: c.watch, line: `${watch} thing${watch === 1 ? "" : "s"} worth reading before you buy` };
-    return { word: "CLEAR", kind: "clear", color: c.ok, line: "nothing in what was read stands out" };
-  }
-  function facts(slip) {
-    const o = slip.open;
-    const out2 = [];
-    if (o) {
-      const owner = o.ownerUnread ? "UNREAD" : o.owner === null ? "NONE" : o.owner.renounced ? "RENOUNCED" : "HAS KEYS";
-      out2.push({
-        label: "OWNER",
-        value: owner,
-        bad: Boolean(o.owner && !o.owner.renounced),
-        note: o.ownerUnread ? "owner() would not answer" : o.owner === null ? "no owner() in the code" : o.owner.renounced ? "nobody can call owner-only code" : shortAddress(o.owner.address)
-      });
-      const kinds = o.powers.filter((p) => p.kind !== "exempt" && p.kind !== "sweep");
-      const names = [...new Set(kinds.map((p) => p.kind))];
-      out2.push({ label: "CODE CAN", value: String(kinds.length), bad: kinds.length > 0, note: names.length ? names.join(", ") : "nothing owner-only found" });
-      const sells = o.probes.filter((p) => p.target === "pool");
-      const ok = sells.filter((p) => p.status === "ok").length;
-      const sale = !sells.length ? "NOT RUN" : sells.every((p) => p.status === "ok") ? "ALL PASS" : sells.some((p) => p.status === "reverts") ? `${ok}/${sells.length}` : "UNREAD";
-      out2.push({
-        label: "TRANSFER TO POOL",
-        value: sale,
-        bad: sells.some((p) => p.status === "reverts"),
-        note: !sells.length ? "not simulated" : `${sells.length} wallet${sells.length === 1 ? "" : "s"} \xB7 not a router swap`
-      });
-      const top = o.holders?.top10WalletsBps ?? null;
-      out2.push({
-        label: "TOP 10 WALLETS",
-        value: top === null ? "UNKNOWN" : `${(top / 100).toFixed(0)}%`,
-        bad: top !== null && top >= 5e3,
-        note: o.holders?.count ? `of supply \xB7 ${o.holders.count} holders` : "explorer not reachable"
-      });
-    } else if (slip.rules) {
-      out2.push({ label: "TRADE FEE", value: formatBps(slip.rules.totalTradeBps), bad: slip.rules.totalTradeBps >= 1e3, note: "on every buy and sell" });
-      out2.push({ label: "CREATOR TAX", value: formatBps(slip.rules.creatorTaxBps), bad: slip.rules.creatorTaxBps >= 500, note: "of the fee, to the creator" });
-      out2.push({ label: "DEV HOLDS", value: `${(slip.rules.deployerShareBps / 100).toFixed(1)}%`, bad: slip.rules.deployerShareBps >= 2e3, note: "of supply" });
-      out2.push({ label: "BUYBACK", value: slip.rules.buybackEnabled ? "VESTS" : "NONE", bad: slip.rules.buybackEnabled, note: slip.rules.buybackEnabled ? "bought back, not burned" : "no buyback in the rules" });
-    }
-    return out2.slice(0, 4);
-  }
-  function doorCard(slip, options) {
-    const meta = slip.id.meta;
-    return renderCard(
-      {
-        chain: slip.chain.name,
-        at: `block ${slip.at.block}`,
-        timestamp: slip.at.timestamp,
-        ticker: meta ? clip(meta.symbol, 12) : shortAddress(slip.subject),
-        name: meta ? clip(meta.name, 34) : slip.known ? "known contract" : "no name on chain",
-        lead: options.lead,
-        address: slip.subject,
-        stamp: slip.stamp,
-        notes: slip.notes,
-        facts: facts(slip),
-        coverage: doorCoverage(slip)
-      },
-      options
-    );
-  }
-  function splCard(slip, options) {
-    const m = slip.mint;
-    const fee = m?.extensions.find((e) => e.kind === "transfer-fee");
-    const top = slip.holders?.top10Bps ?? null;
-    return renderCard(
-      {
-        chain: slip.chain.name,
-        // The range the reading covered, not the slot it started at. See
-        // SplSlip.at for why those differ on this chain.
-        at: slip.at.span && slip.at.span.spread > 4 ? `slots ${slip.at.span.first}-${slip.at.span.last}` : `slot ${slip.at.span?.last ?? slip.at.slot}`,
-        timestamp: slip.at.timestamp,
-        ticker: clip(slip.metadata?.symbol || shortAddress(slip.subject), 12),
-        lead: options.lead,
-        name: clip(slip.metadata?.name || slip.whatItIs || "no name on chain", 34),
-        address: slip.subject,
-        stamp: slip.stamp,
-        notes: slip.notes,
-        facts: [
-          { label: "FREEZE YOU", value: m?.freezeAuthority ? "YES" : m ? "NO" : "UNREAD", bad: Boolean(m?.freezeAuthority), note: m?.freezeAuthority ? "a freeze authority is set" : m ? "no freeze authority" : "the mint would not answer" },
-          { label: "PRINT MORE", value: m?.mintAuthority ? "YES" : m ? "NO" : "UNREAD", bad: Boolean(m?.mintAuthority), note: m?.mintAuthority ? "a mint authority is set" : m ? "supply is fixed" : "the mint would not answer" },
-          {
-            label: "TAX PER TRANSFER",
-            value: fee?.kind === "transfer-fee" ? `${(fee.feeBps / 100).toFixed(2)}%` : m ? "0%" : "UNREAD",
-            bad: fee?.kind === "transfer-fee" && fee.feeBps >= 500,
-            note: fee?.kind === "transfer-fee" ? "taken on every transfer" : m ? "no transfer fee extension" : "the mint would not answer"
-          },
-          { label: "TOP 10 HOLDERS", value: top === null ? "UNKNOWN" : `${(top / 100).toFixed(0)}%`, bad: top !== null && top >= 5e3, note: top === null ? "the holder list did not answer" : "of supply" }
-        ],
-        coverage: splCoverage(slip)
-      },
-      options
-    );
-  }
-  function coverageFoot(cov) {
-    if (!cov || cov.state === "complete") return "read from the chain \xB7 nothing here is scored, predicted or advised";
-    const names = cov.gaps.map((g) => g.label).join(", ");
-    return clip(`${cov.read} of ${cov.asked} checks answered \xB7 unread: ${names}`, 74);
-  }
-  function renderCard(model, options) {
-    const c = CARD_COLORS;
-    const v0 = cardVerdict(model.notes);
-    const cov = model.coverage;
-    const qualified = cov ? qualify(v0.kind, cov) : v0.kind;
-    const v = qualified === "incomplete" ? { ...v0, word: "INCOMPLETE", color: c.info, line: "Nothing stood out in what was read, and part of it was not read." } : v0;
-    const rank = { stop: 0, watch: 1, info: 2 };
-    const shown = [...model.notes].sort((a, b) => rank[a.level] - rank[b.level]).slice(0, 3);
-    const levelColor = (l) => l === "stop" ? c.stop : l === "watch" ? c.watch : c.info;
-    const ROWS = { bar: 44, subject: 104, verdict: 288, head: 320, facts: 408, foot: 560 };
-    const L = 40;
-    const R = 1160;
-    const line = (y) => `<line x1="0" y1="${y}" x2="1200" y2="${y}" stroke="${c.line}"/>`;
-    const cols = model.facts.length;
-    const colW = (R - L) / cols;
-    const factCells = model.facts.map((f, i) => {
-      const x = L + i * colW;
-      const long = f.value.length > 9;
-      return `${i ? `<line x1="${x}" y1="${ROWS.head}" x2="${x}" y2="${ROWS.facts}" stroke="${c.line}"/>` : ""}
-      <text x="${x + 16}" y="${ROWS.head - 11}" font-size="12" letter-spacing="2.2" fill="${c.dimmer}">${esc(f.label)}</text>
-      <text x="${x + 16}" y="${ROWS.head + 44}" font-size="${long ? 24 : 32}" font-weight="700" fill="${f.bad ? c.stop : c.text}">${esc(f.value)}</text>
-      <text x="${x + 16}" y="${ROWS.head + 70}" font-size="13" fill="${c.dim}">${esc(clip(f.note ?? "", Math.floor(colW / 7.6)))}</text>`;
-    }).join("");
-    const rowH = Math.floor((ROWS.foot - ROWS.facts) / Math.max(1, shown.length));
-    const noteRows = shown.map((n, i) => {
-      const top = ROWS.facts + i * rowH;
-      const mid = top + rowH / 2 + 6;
-      return `${i ? line(top) : ""}
-      <line x1="150" y1="${top}" x2="150" y2="${top + rowH}" stroke="${c.line}"/>
-      <text x="${L}" y="${mid}" font-size="13" letter-spacing="1.6" fill="${levelColor(n.level)}">${n.level.toUpperCase()}</text>
-      <text x="170" y="${mid}" font-size="17" fill="${n.level === "info" ? c.muted : c.text}">${esc(clip(n.text, 98))}</text>`;
-    }).join("");
-    const stamp = model.stamp;
-    const stampColor = stamp === "ON THE LIST" ? c.ok : stamp === "NOT A LAUNCH" ? c.watch : c.stop;
-    const stampW = stamp.length * 8.4 + 22;
-    const found = model.notes.filter((n) => topicOf(n.code) !== "unread").length;
-    const counts = `${found} finding${found === 1 ? "" : "s"}`;
-    return `<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">
-  <defs>
-    <pattern id="hatch" width="12" height="12" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
-      <rect width="12" height="12" fill="${c.panel}"/>
-      <rect width="6" height="12" fill="${c.panel2}"/>
-    </pattern>
-  </defs>
-  <rect width="1200" height="630" fill="${c.panel}"/>
-  <rect width="1200" height="2" fill="${c.rope}"/>
-
-  <g transform="translate(14 10) scale(0.66)">${options.mascotSvg}</g>
-  <text x="56" y="${ROWS.bar - 15}" font-size="15" font-weight="700" letter-spacing="5" fill="${c.text}">BOUNCER</text>
-  <line x1="168" y1="2" x2="168" y2="${ROWS.bar}" stroke="${c.line}"/>
-  <text x="186" y="${ROWS.bar - 15}" font-size="14" fill="${c.dim}">read-only \xB7 no key \xB7 no signer</text>
-  <text x="${R}" y="${ROWS.bar - 15}" text-anchor="end" font-size="14" fill="${c.dim}">${esc(model.chain)} \xB7 ${esc(model.at)}${model.timestamp ? ` \xB7 ${esc(isoUtc(model.timestamp))}` : ""}</text>
-  ${line(ROWS.bar)}
-
-  <text x="${L}" y="${ROWS.subject - 22}" font-size="26" font-weight="700" letter-spacing="1.5" fill="${c.text}">${esc(model.ticker)}</text>
-  <text x="${L + model.ticker.length * 17 + 22}" y="${ROWS.subject - 22}" font-size="17" fill="${c.dim}">${esc(model.name)}</text>
-  <g transform="translate(${R - stampW} ${ROWS.subject - 42})">
-    <rect x="0" y="0" width="${stampW}" height="26" fill="none" stroke="${stampColor}"/>
-    <text x="${stampW / 2}" y="18" text-anchor="middle" font-size="12" letter-spacing="2" fill="${stampColor}">${esc(stamp)}</text>
-  </g>
-  ${line(ROWS.subject)}
-
-  <rect x="0" y="${ROWS.subject}" width="340" height="${ROWS.verdict - ROWS.subject}" fill="url(#hatch)"/>
-  <line x1="340" y1="${ROWS.subject}" x2="340" y2="${ROWS.verdict}" stroke="${c.line}"/>
-  <text x="${L}" y="${ROWS.subject + 34}" font-size="13" letter-spacing="3.4" fill="${c.dimmer}">VERDICT</text>
-  <text x="${L}" y="${ROWS.subject + 110}" font-size="${v.word.length > 6 ? 34 : 64}" font-weight="700" fill="${v.color}">${v.word}</text>
-  <text x="${L}" y="${ROWS.subject + 145}" font-size="14" fill="${c.dim}">${esc(counts)}</text>
-  <text x="380" y="${ROWS.subject + 44}" font-size="21" fill="${c.text}">${esc(clip(model.lead || v.line, 62))}</text>
-  ${model.lead ? `<text x="380" y="${ROWS.subject + 74}" font-size="17" fill="${c.dim}">${esc(clip(v.line, 74))}</text>` : ""}
-  <text x="380" y="${ROWS.subject + 118}" font-size="15" fill="${c.dimmer}">${esc(model.address)}</text>
-  <text x="380" y="${ROWS.subject + 144}" font-size="14" fill="${cov && cov.state !== "complete" ? c.info : c.dimmer}">${esc(coverageFoot(cov))}</text>
-  ${line(ROWS.verdict)}
-  ${line(ROWS.head)}
-  ${factCells}
-  ${line(ROWS.facts)}
-  ${noteRows}
-  ${line(ROWS.foot)}
-
-  <text x="${L}" y="${ROWS.foot + 44}" font-size="15" fill="${c.brass}">${esc(options.checkUrl ?? options.repoUrl)}</text>
-  <text x="${R}" y="${ROWS.foot + 44}" text-anchor="end" font-size="15" fill="${c.dim}">check it yourself before you buy</text>
-</svg>
-`;
-  }
-  function esc(text) {
-    return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
-  }
-  function clip(text, max) {
-    if (text.length <= max) return text;
-    const cut = text.slice(0, max - 1);
-    const space = cut.lastIndexOf(" ");
-    return `${(space > max - 18 ? cut.slice(0, space) : cut).trimEnd()}\u2026`;
-  }
+  // src/bouncer/door.ts
+  init_abi();
+  init_tape();
 
   // src/bouncer/coverCharge.ts
   init_abi();
@@ -3732,106 +3523,79 @@
     return `closed \xB7 ${c.observed.length} buy${c.observed.length === 1 ? "" : "s"} inside the ${c.terms.seconds} s window${paid}`;
   }
 
-  // src/bouncer/demo.ts
+  // src/bouncer/devReport.ts
   init_abi();
-
-  // src/chain/code.ts
-  init_keccak();
-  var OP_SELFDESTRUCT = 255;
-  var OP_DELEGATECALL = 244;
-  var OP_CALLCODE = 242;
-  var OP_CREATE = 240;
-  var OP_CREATE2 = 245;
-  var OP_PUSH1 = 96;
-  var OP_PUSH32 = 127;
-  var EIP1967_IMPLEMENTATION_SLOT = "0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc";
-  var EIP1967_BEACON_SLOT = "0xa3f0ad74e5423aebfd80d3ef4346578335a9a72aeaee59ff6cb3582b35133d50";
-  function scanBytecode(code) {
-    const bytes = hexToBytes(code);
-    const read = readSelectors(code);
-    const scan = {
-      bytes: bytes.length,
-      codeHash: keccak256Hex(bytes),
-      empty: bytes.length === 0,
-      metadataBytes: metadataTrailerLength(bytes),
-      opcodes: { selfdestruct: 0, delegatecall: 0, callcode: 0, create: 0, create2: 0 },
-      minimalProxyTarget: minimalProxyTarget(bytes),
-      selectors: read.all,
-      dispatcherSelectors: read.push4,
-      delegatedTo: delegationTarget(bytes)
+  init_tape();
+  async function readDevReport(rpc, deployer, options) {
+    const address = normalizeAddress(deployer);
+    const factory = options.factory ?? PONS_V2_FACTORY;
+    const tape = await readTapeAdaptive(
+      rpc,
+      { fromBlock: options.fromBlock, toBlock: options.toBlock, address: factory, events: [FACTORY_EVENTS.TokenLaunched], topics: [null, null, addressTopic(address)] },
+      options.chunking
+    );
+    const all = tape.logs.slice().reverse();
+    const limit = options.limit ?? 40;
+    const detailed = all.slice(0, limit);
+    const records = detailed.length ? await rpc.callBatch(
+      detailed.map((l) => ({ to: factory, data: encodeCall(FACTORY_FUNCTIONS.getLaunchedToken, [String(l.args.token)]) })),
+      options.toBlock
+    ) : [];
+    const symbols = detailed.length ? await rpc.callBatch(detailed.map((l) => ({ to: String(l.args.token), data: encodeCall(ERC20_FUNCTIONS.symbol, []) })), options.toBlock) : [];
+    const launches = [];
+    for (let i = 0; i < detailed.length; i++) {
+      const log = detailed[i];
+      const record = decodeLaunchedToken(decodeOutputs(FACTORY_FUNCTIONS.getLaunchedToken, records[i]));
+      let symbol = "?";
+      try {
+        symbol = decodeOutputs(ERC20_FUNCTIONS.symbol, symbols[i])[0];
+      } catch {
+        symbol = "?";
+      }
+      const header = await rpc.getBlock(log.blockNumber);
+      const sweptAt = Number(record.sweptAt);
+      launches.push({
+        token: String(log.args.token).toLowerCase(),
+        curve: String(log.args.curve).toLowerCase(),
+        symbol,
+        launchedBlock: log.blockNumber,
+        launchedAt: header.timestamp,
+        phase: record.phase,
+        creatorTaxBps: record.creatorTaxBps,
+        sweptAt,
+        secondsToSweep: sweptAt > 0 ? Math.max(0, sweptAt - header.timestamp) : null
+      });
+    }
+    const counts = { launched: all.length, graduated: 0, swept: 0, onCurve: 0 };
+    for (const l of launches) {
+      if (l.phase === 2 /* PoolCreated */ || l.phase === 3 /* Rescued */) counts.graduated++;
+      else if (l.phase === 1 /* Swept */) counts.swept++;
+      else counts.onCurve++;
+    }
+    const sweeps = launches.map((l) => l.secondsToSweep).filter((s) => s !== null).sort((a, b) => a - b);
+    const seen = /* @__PURE__ */ new Map();
+    for (const l of launches) seen.set(l.symbol.toUpperCase(), (seen.get(l.symbol.toUpperCase()) ?? 0) + 1);
+    const taxes = launches.map((l) => l.creatorTaxBps);
+    return {
+      deployer: address,
+      window: { fromBlock: options.fromBlock, toBlock: options.toBlock },
+      launches,
+      truncated: all.length > detailed.length,
+      counts,
+      medianSecondsToSweep: sweeps.length ? sweeps[Math.floor(sweeps.length / 2)] : null,
+      repeatedSymbols: [...seen.entries()].filter(([, n]) => n > 1).map(([s]) => s),
+      taxRangeBps: taxes.length ? [taxes.reduce((a, b) => a < b ? a : b), taxes.reduce((a, b) => a > b ? a : b)] : null
     };
-    const end = bytes.length - scan.metadataBytes;
-    for (let i = 0; i < end; i++) {
-      const op = bytes[i];
-      if (op >= OP_PUSH1 && op <= OP_PUSH32) {
-        i += op - OP_PUSH1 + 1;
-        continue;
-      }
-      if (op === OP_SELFDESTRUCT) scan.opcodes.selfdestruct++;
-      else if (op === OP_DELEGATECALL) scan.opcodes.delegatecall++;
-      else if (op === OP_CALLCODE) scan.opcodes.callcode++;
-      else if (op === OP_CREATE) scan.opcodes.create++;
-      else if (op === OP_CREATE2) scan.opcodes.create2++;
-    }
-    return scan;
   }
-  function metadataTrailerLength(bytes) {
-    if (bytes.length < 4) return 0;
-    const length = bytes[bytes.length - 2] << 8 | bytes[bytes.length - 1];
-    if (length === 0 || length + 2 > bytes.length) return 0;
-    const start2 = bytes.length - 2 - length;
-    const first = bytes[start2];
-    if (first < 161 || first > 163) return 0;
-    const keyHeader = bytes[start2 + 1];
-    if (keyHeader === void 0 || keyHeader < 97 || keyHeader > 111) return 0;
-    const keyLength = keyHeader - 96;
-    for (let i = 0; i < keyLength; i++) {
-      const c = bytes[start2 + 2 + i];
-      if (c === void 0 || !(c >= 97 && c <= 122 || c >= 48 && c <= 57)) return 0;
-    }
-    return length + 2;
+  function devReportLine(d) {
+    const c = d.counts;
+    if (c.launched === 0) return "first launch from this address in the window";
+    const parts = [`${c.launched} launch${c.launched === 1 ? "" : "es"}`, `${c.graduated} graduated`];
+    if (c.swept) parts.push(`${c.swept} swept, no pool`);
+    if (c.onCurve) parts.push(`${c.onCurve} still on the curve`);
+    if (d.repeatedSymbols.length) parts.push(`same ticker ${d.repeatedSymbols.length}\xD7`);
+    return parts.join(" \xB7 ");
   }
-  function delegationTarget(bytes) {
-    if (bytes.length !== 23 || bytes[0] !== 239 || bytes[1] !== 1 || bytes[2] !== 0) return null;
-    return `0x${Array.from(bytes.slice(3), (b) => b.toString(16).padStart(2, "0")).join("")}`;
-  }
-  var MINIMAL_PROXY_PREFIX = "363d3d373d3d3d363d73";
-  var MINIMAL_PROXY_SUFFIX = "5af43d82803e903d91602b57fd5bf3";
-  function minimalProxyTarget(bytes) {
-    if (bytes.length !== 45) return null;
-    const hex = Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
-    if (!hex.startsWith(MINIMAL_PROXY_PREFIX) || !hex.endsWith(MINIMAL_PROXY_SUFFIX)) return null;
-    return `0x${hex.slice(MINIMAL_PROXY_PREFIX.length, MINIMAL_PROXY_PREFIX.length + 40)}`;
-  }
-  function storageWordIsSet(word) {
-    return /[1-9a-f]/i.test(word.replace(/^0x/, ""));
-  }
-  function storageWordAddress(word) {
-    return `0x${word.replace(/^0x/, "").padStart(64, "0").slice(24)}`;
-  }
-  function readSelectors(code) {
-    const bytes = hexToBytes(code);
-    const end = bytes.length - metadataTrailerLength(bytes);
-    const all = /* @__PURE__ */ new Set();
-    const push4 = /* @__PURE__ */ new Set();
-    for (let i = 0; i < end; i++) {
-      const op = bytes[i];
-      if (op < OP_PUSH1 || op > OP_PUSH32) continue;
-      const size = op - OP_PUSH1 + 1;
-      if (size <= 4 && i + size < end) {
-        let hex = "";
-        for (let j = 1; j <= size; j++) hex += bytes[i + j].toString(16).padStart(2, "0");
-        const padded = `0x${hex.padStart(8, "0")}`;
-        all.add(padded);
-        if (size === 4) push4.add(padded);
-      }
-      i += size;
-    }
-    return { all, push4 };
-  }
-
-  // src/bouncer/demo.ts
-  init_keccak();
 
   // src/bouncer/exitDoor.ts
   init_abi();
@@ -3947,540 +3711,6 @@
     };
   }
 
-  // src/bouncer/demo.ts
-  init_tape();
-  var ETH = 10n ** 18n;
-  var HEAD = 31337500;
-  var DEV_A = "0x0000000000000000000000000000000000d0e5e1";
-  var DEV_B = "0x00000000000000000000000000000000000000b7";
-  var DEV_C = "0x000000000000000000000000000000000000c0c0";
-  var buyer = (n) => `0x${(45056 + n).toString(16).padStart(40, "0")}`;
-  var DEMO_POOL_MANAGER = "0x00000000000000000000000000000000000900a1";
-  var DEMO_HOOK = "0x0000000000000000000000000000000000900c00";
-  var DEMO_FUNDER = "0x000000000000000000000000000000000000feed";
-  var DEMO_BLOCKSCOUT = "https://demo.blockscout.invalid";
-  var DEMO_V1 = { token: "0x0000000000000000000000000000000000001d1e", deployer: "0x00000000000000000000000000000000000001d1", positionId: 777n, restrictionsEndBlock: BigInt(HEAD + 40), name: "Old School", symbol: "OLDIE" };
-  var DEMO_IMPOSTOR = {
-    token: "0x00000000000000000000000000000000000bad01",
-    implementation: "0x00000000000000000000000000000000000bad02",
-    deployer: "0x00000000000000000000000000000000000bad03",
-    creationTx: "0xdemoimpostorcreate",
-    /** Deployed after the real SPRINT launch, which is what makes it the copy. */
-    createdAt: HEAD - 900
-  };
-  var DEMO_PLAIN = {
-    token: "0x0000000000000000000000000000000000f1a1a1",
-    owner: "0x00000000000000000000000000000000000000f1",
-    pool: "0x000000000000000000000000000000000000900f",
-    name: "Robin Rocket",
-    symbol: "ROCKET",
-    createdAt: HEAD - 5e4,
-    creationTx: "0xdemoplaincreate",
-    supply: 10n ** 27n,
-    /** [holder, share in bps, is contract, explorer label, EIP-7702 delegated]. */
-    holders: [
-      ["0x000000000000000000000000000000000000900f", 3e3, true, "UniswapV3Pool", false],
-      ["0x00000000000000000000000000000000000000f1", 2500, false, null, false],
-      ["0x000000000000000000000000000000000000c500", 800, false, null, false],
-      ["0x000000000000000000000000000000000000c501", 500, false, null, false],
-      ["0x000000000000000000000000000000000000c502", 300, false, null, false],
-      // A wallet whose owner signed an EIP-7702 delegation. The explorer calls it a
-      // contract; it is a person, and counting it as a pool would understate how
-      // concentrated this token is.
-      ["0x000000000000000000000000000000000000c503", 400, true, null, true],
-      ["0x000000000000000000000000000000000000dead", 200, false, null, false]
-    ],
-    blacklisted: "0x000000000000000000000000000000000000c501",
-    /** What the pool holds in the wrapped native coin. */
-    poolWeth: 12n * 10n ** 18n,
-    /** Every function in the dispatcher, not only the dangerous ones. */
-    powers: ["mint(address,uint256)", "pause()", "unpause()", "paused()", "owner()", "renounceOwnership()", "transferOwnership(address)", "setFees(uint256,uint256)", "blacklist(address,bool)", "tradingOpen()", "excludeFromFees(address,bool)", "transfer(address,uint256)", "balanceOf(address)", "totalSupply()", "name()", "symbol()", "decimals()"]
-  };
-  var freshBuys = [[1, DEV_C, 400n * 10n ** 15n], [22, buyer(900), 300n * 10n ** 15n, 6e3], [70, buyer(901), 100n * 10n ** 15n, 1900]];
-  var sprintBuys = [[3, DEV_A, 2600n * 10n ** 15n]];
-  for (let i = 1; i <= 8; i++) sprintBuys.push([100 + i * 250, buyer(i), 200n * 10n ** 15n]);
-  var slowBuys = [[10, DEV_B, 340n * 10n ** 15n]];
-  for (let i = 1; i <= 39; i++) slowBuys.push([600 + i * 900, buyer(100 + i), 100n * 10n ** 15n]);
-  var DEMO = {
-    head: HEAD,
-    genesisTimestamp: 1789430400 - HEAD * 0.1,
-    threshold: 42n * 10n ** 17n,
-    tokens: {
-      sprint: { token: "0x00c0ffee0000000000000000000000000000600d", curve: "0x0000c0a70000000000000000000000000000600d", deployer: DEV_A, name: "Sprint", symbol: "SPRINT", launched: HEAD - 2600, swept: HEAD - 2600 + 2120, graduated: HEAD - 2600 + 2121, raised: 42n * 10n ** 17n, supplyToPool: 2n * 10n ** 26n, positionId: 4663n, taxBps: 300n, real: 42n * 10n ** 17n, tokenReserve: 0n, buys: sprintBuys, sells: [], recipientMoves: [[2300, "0x000000000000000000000000000000000000f0f0"]] },
-      slow: { token: "0x0000000000000000000000000000000000005107", curve: "0x0000c0a70000000000000000000000000000a107", deployer: DEV_B, name: "Slow and Steady", symbol: "SLOW", launched: HEAD - 4e4, swept: HEAD - 2800, graduated: HEAD - 2799, raised: 42n * 10n ** 17n, supplyToPool: 2n * 10n ** 26n, positionId: 4664n, taxBps: 100n, real: 42n * 10n ** 17n, tokenReserve: 0n, buys: slowBuys, sells: [[2e4, buyer(105), 50n * 10n ** 15n]] },
-      late: { token: "0x00000000000000000000000000000000000000a7", curve: "0x0000c0a7000000000000000000000000000000a7", deployer: DEV_B, name: "Late Bloomer", symbol: "LATE", launched: HEAD - 17500, raised: 0n, taxBps: 200n, real: 31n * 10n ** 17n, tokenReserve: 3n * 10n ** 26n, buys: Array.from({ length: 60 }, (_, i) => [i * 290, buyer(200 + i % 25), 50n * 10n ** 15n]), sells: [[9e3, buyer(201), 20n * 10n ** 15n], [15e3, buyer(202), 20n * 10n ** 15n], [17450, DEV_B, 40n * 10n ** 15n]], buybackFlips: [[17470, false]], transfers: [[17400, DEV_B, "0x0000000000000000000000000000000000000ca5", 10n ** 25n], [17450, DEV_B, "0x0000c0a7000000000000000000000000000000a7", 2n * 10n ** 24n]] },
-      fresh: { token: "0x00000000000000000000000000000000000f2e54", curve: "0x0000c0a7000000000000000000000000000f2e54", deployer: DEV_C, name: "Fresh Off The Curve", symbol: "FRESH", launched: HEAD - 90, raised: 0n, taxBps: 1000n, real: 8n * 10n ** 17n, tokenReserve: 8n * 10n ** 26n, buys: freshBuys, sells: [[85, buyer(900), 120n * 10n ** 15n], [88, buyer(901), 40n * 10n ** 15n]] },
-      nap: { token: "0x0000000000000000000000000000000000000d0e", curve: "0x0000c0a70000000000000000000000000000ad0e", deployer: DEV_B, name: "Nap Time", symbol: "NAP", launched: HEAD - 237500, raised: 0n, taxBps: 500n, real: 3n * 10n ** 17n, tokenReserve: 9n * 10n ** 26n, buys: [[5, DEV_B, 300n * 10n ** 15n]], sells: [] }
-    }
-  };
-  function encodeString(value) {
-    const bytes = new TextEncoder().encode(value);
-    const hex = Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
-    return [encodeWord("uint256", 32n), encodeWord("uint256", BigInt(bytes.length)), hex.padEnd(Math.ceil(hex.length / 64) * 64, "0")].join("");
-  }
-  function blockTime(block) {
-    return DEMO.genesisTimestamp + block * 0.1;
-  }
-  function launchedRecord(t) {
-    const phase = t.graduated ? 2n : t.swept ? 1n : 0n;
-    return [
-      encodeWord("address", t.token),
-      encodeWord("address", t.curve),
-      encodeWord("address", t.deployer),
-      encodeWord("address", t.deployer),
-      encodeWord("address", ZERO_ADDRESS),
-      encodeWord("uint256", DEMO.threshold),
-      encodeWord("uint24", 10000n),
-      encodeWord("int24", 200n),
-      encodeWord("uint16", t.taxBps),
-      encodeWord("bool", true),
-      encodeWord("uint8", phase),
-      encodeWord("uint256", t.graduated ? t.raised : 0n),
-      encodeWord("uint256", t.graduated ? t.supplyToPool ?? 0n : 0n),
-      encodeWord("uint256", t.swept ? BigInt(Math.round(blockTime(t.swept))) : 0n),
-      encodeWord("bool", true)
-    ].join("");
-  }
-  function factoryLogs(from, to) {
-    const logs = [];
-    for (const t of Object.values(DEMO.tokens)) {
-      if (t.launched >= from && t.launched <= to) {
-        logs.push({ address: PONS_V2_FACTORY, topics: [eventTopic(FACTORY_EVENTS.TokenLaunched), addressTopic(t.token), addressTopic(t.curve), addressTopic(t.deployer)], data: `0x${encodeWord("address", ZERO_ADDRESS)}${encodeWord("uint256", 1n)}${encodeWord("uint256", DEMO.threshold)}`, blockNumber: `0x${t.launched.toString(16)}`, transactionHash: `0xdemo${t.symbol.toLowerCase()}launch`, logIndex: "0x0" });
-      }
-      if (t.swept && t.swept >= from && t.swept <= to) {
-        logs.push({ address: PONS_V2_FACTORY, topics: [eventTopic(FACTORY_EVENTS.LaunchSwept), addressTopic(t.token)], data: `0x${encodeWord("uint256", t.raised)}${encodeWord("uint256", t.supplyToPool ?? 0n)}`, blockNumber: `0x${t.swept.toString(16)}`, transactionHash: `0xdemo${t.symbol.toLowerCase()}sweep`, logIndex: "0x1" });
-      }
-      for (const [offset, enabled] of t.buybackFlips ?? []) {
-        const b = t.launched + offset;
-        if (b < from || b > to) continue;
-        logs.push({ address: PONS_V2_FACTORY, topics: [eventTopic(FACTORY_EVENTS.BuybackEnabledUpdated), addressTopic(t.token), addressTopic(t.deployer)], data: `0x${encodeWord("bool", enabled)}`, blockNumber: `0x${b.toString(16)}`, transactionHash: `0xdemo${t.symbol.toLowerCase()}buyback${b}`, logIndex: "0x4" });
-      }
-      for (const [offset, to_] of t.recipientMoves ?? []) {
-        const b = t.launched + offset;
-        if (b < from || b > to) continue;
-        logs.push({ address: PONS_V2_FACTORY, topics: [eventTopic(FACTORY_EVENTS.CreatorFeeRecipientUpdated), addressTopic(t.token), addressTopic(t.deployer), addressTopic(to_)], data: "0x", blockNumber: `0x${b.toString(16)}`, transactionHash: `0xdemo${t.symbol.toLowerCase()}move`, logIndex: "0x3" });
-      }
-      if (t.graduated && t.graduated >= from && t.graduated <= to) {
-        logs.push({ address: PONS_V2_FACTORY, topics: [eventTopic(FACTORY_EVENTS.PoolGraduated), addressTopic(t.token)], data: `0x${encodeWord("uint256", t.positionId ?? 0n)}${encodeWord("uint256", t.supplyToPool ?? 0n)}${encodeWord("uint256", t.raised)}`, blockNumber: `0x${t.graduated.toString(16)}`, transactionHash: `0xdemo${t.symbol.toLowerCase()}grad`, logIndex: "0x2" });
-      }
-    }
-    return logs;
-  }
-  function curveLogs(t, from, to) {
-    const buy = eventTopic(CURVE_EVENTS.CurveBuy);
-    const sell = eventTopic(CURVE_EVENTS.CurveSell);
-    const logs = [];
-    let index = 0;
-    for (const [offset, who, quoteIn, doorBps] of t.buys) {
-      const b = t.launched + offset;
-      if (b < from || b > to) continue;
-      const fee = quoteIn / 100n;
-      const tax = quoteIn * (t.taxBps + BigInt(doorBps ?? 0)) / 10000n;
-      logs.push({ address: t.curve, topics: [buy, addressTopic(who), addressTopic(who)], data: `0x${encodeWord("uint256", quoteIn)}${encodeWord("uint256", 10n ** 24n)}${encodeWord("uint256", fee)}${encodeWord("uint256", tax)}`, blockNumber: `0x${b.toString(16)}`, transactionHash: `0xdemo${t.symbol}${b}`, logIndex: `0x${(index++).toString(16)}` });
-    }
-    for (const [offset, who, quoteOut] of t.sells) {
-      const b = t.launched + offset;
-      if (b < from || b > to) continue;
-      logs.push({ address: t.curve, topics: [sell, addressTopic(who), addressTopic(who)], data: `0x${encodeWord("uint256", 10n ** 24n)}${encodeWord("uint256", quoteOut)}${encodeWord("uint256", quoteOut / 100n)}${encodeWord("uint256", 0n)}`, blockNumber: `0x${b.toString(16)}`, transactionHash: `0xdemo${t.symbol}${b}s`, logIndex: `0x${(index++).toString(16)}` });
-    }
-    return logs;
-  }
-  function demoFetch() {
-    const byToken = /* @__PURE__ */ new Map();
-    const byCurve = /* @__PURE__ */ new Map();
-    for (const t of Object.values(DEMO.tokens)) {
-      byToken.set(t.token, t);
-      byCurve.set(t.curve, t);
-    }
-    const sel = (sig) => selector(sig);
-    const poolSlots = /* @__PURE__ */ new Map();
-    for (const t of Object.values(DEMO.tokens)) {
-      if (!t.graduated) continue;
-      const { poolId, tokenIsCurrency0 } = poolIdFor(t.token, ZERO_ADDRESS, 10000n, 200n, DEMO_HOOK);
-      const token = t.supplyToPool ?? 0n;
-      const quote = t.raised;
-      const [amount0, amount1] = tokenIsCurrency0 ? [token, quote] : [quote, token];
-      const sqrtPriceX96 = isqrt(amount1 * 2n ** 192n / amount0);
-      const liquidity = isqrt(amount0 * amount1);
-      const stateSlot = keccak256Hex(hexToBytesLocal(`${poolId.slice(2)}${encodeWord("uint256", 6n)}`));
-      poolSlots.set(stateSlot, `0x${encodeWord("uint256", sqrtPriceX96)}`);
-      poolSlots.set(`0x${(BigInt(stateSlot) + 3n).toString(16).padStart(64, "0")}`, `0x${encodeWord("uint256", liquidity)}`);
-    }
-    return (async (_url, init) => {
-      const body = JSON.parse(String(init?.body));
-      const requests = Array.isArray(body) ? body : [body];
-      const responses = requests.map((request) => {
-        const ok = (result) => ({ jsonrpc: "2.0", id: request.id, result });
-        const err = (message) => ({ jsonrpc: "2.0", id: request.id, error: { code: -32e3, message } });
-        switch (request.method) {
-          case "eth_chainId":
-            return ok(`0x${ROBINHOOD_CHAIN_ID.toString(16)}`);
-          case "eth_blockNumber":
-            return ok(`0x${DEMO.head.toString(16)}`);
-          case "eth_getBlockByNumber": {
-            const tag = request.params[0];
-            const n = tag === "latest" ? DEMO.head : Number(BigInt(tag));
-            return ok({ number: `0x${n.toString(16)}`, timestamp: `0x${Math.round(blockTime(n)).toString(16)}`, hash: `0xdemo${n}` });
-          }
-          case "eth_getLogs": {
-            const f = request.params[0];
-            const from = Number(BigInt(f.fromBlock));
-            const to = Number(BigInt(f.toBlock));
-            const address = f.address ? String(f.address).toLowerCase() : void 0;
-            const all = !address ? [...factoryLogs(from, to), ...plainTokenLogs(from, to), ...Object.values(DEMO.tokens).flatMap((t) => [...curveLogs(t, from, to), ...tokenLogs(t, from, to)])] : address === PONS_V2_FACTORY ? factoryLogs(from, to) : address === DEMO_PLAIN.token ? plainTokenLogs(from, to) : byCurve.has(address) ? curveLogs(byCurve.get(address), from, to) : byToken.has(address) ? tokenLogs(byToken.get(address), from, to) : [];
-            return ok(all.filter((log) => matchesTopics(log.topics, f.topics)));
-          }
-          case "eth_getCode": {
-            const who = request.params[0].toLowerCase();
-            if (who === PONS_V2_FACTORY) return ok(DEMO_CODE.factory);
-            if (byToken.has(who)) return ok(DEMO_CODE.ponsToken);
-            if (byCurve.has(who)) return ok(DEMO_CODE.ponsCurve);
-            if (who === DEMO_IMPOSTOR.token) return ok(DEMO_CODE.impostor);
-            if (who === DEMO_V1.token || who === PONS_V1_FACTORY) return ok(DEMO_CODE.ponsToken);
-            if (who === DEMO_PLAIN.token) return ok(DEMO_CODE.plain);
-            if (who === DEMO_PLAIN.pool) return ok(DEMO_CODE.factory);
-            return ok("0x");
-          }
-          case "eth_getTransactionReceipt": {
-            const hash = request.params[0];
-            if (hash === DEMO_PLAIN.creationTx) return ok({ transactionHash: hash, blockNumber: `0x${DEMO_PLAIN.createdAt.toString(16)}`, from: DEMO_PLAIN.owner, status: "0x1", logs: [] });
-            if (hash === DEMO_IMPOSTOR.creationTx) return ok({ transactionHash: hash, blockNumber: `0x${DEMO_IMPOSTOR.createdAt.toString(16)}`, from: DEMO_IMPOSTOR.deployer, status: "0x1", logs: [] });
-            for (const t of Object.values(DEMO.tokens)) {
-              const logs = curveLogs(t, 0, DEMO.head);
-              const hit = logs.filter((l) => l.transactionHash === hash);
-              if (hit.length) return ok({ transactionHash: hash, blockNumber: hit[0].blockNumber, from: hit[0], status: "0x1", logs: hit });
-            }
-            return ok(null);
-          }
-          case "eth_getStorageAt": {
-            const [who, slot] = request.params;
-            if (who.toLowerCase() === DEMO_IMPOSTOR.token && slot === EIP1967_IMPLEMENTATION_SLOT) return ok(`0x${encodeWord("address", DEMO_IMPOSTOR.implementation)}`);
-            return ok(`0x${"0".repeat(64)}`);
-          }
-          case "eth_call": {
-            const call = request.params[0];
-            const to = call.to.toLowerCase();
-            const s = call.data.slice(0, 10);
-            if (to === PONS_V2_FACTORY) {
-              if (s === sel("getLaunchedToken(address)")) {
-                const t2 = byToken.get(`0x${call.data.slice(34)}`);
-                return ok(`0x${t2 ? launchedRecord(t2) : new Array(15).fill(encodeWord("uint256", 0n)).join("")}`);
-              }
-              if (s === sel("snipeTaxStartBps()")) return ok(`0x${encodeWord("uint256", 9900n)}`);
-              if (s === sel("snipeTaxSeconds()")) return ok(`0x${encodeWord("uint256", 15n)}`);
-              if (s === sel("maxCreatorTaxBps()")) return ok(`0x${encodeWord("uint256", 1000n)}`);
-              if (s === sel("poolManager()")) return ok(`0x${encodeWord("address", DEMO_POOL_MANAGER)}`);
-              if (s === sel("memeHook()")) return ok(`0x${encodeWord("address", DEMO_HOOK)}`);
-              if (s === sel("launchFee()")) return ok(`0x${encodeWord("uint256", 10n ** 15n)}`);
-              if (s === sel("launchConfigCount()")) return ok(`0x${encodeWord("uint256", 1n)}`);
-              if (s === sel("getLaunchConfig(uint256)")) {
-                return ok(`0x${[encodeWord("uint256", 10n ** 27n), encodeWord("uint256", 100n), encodeWord("uint256", 9n * 10n ** 17n), encodeWord("uint256", DEMO.threshold), encodeWord("uint24", 10000n), encodeWord("int24", 200n), encodeWord("bool", true)].join("")}`);
-              }
-              if (s === sel("pairTokenEconomics(address)")) return ok(`0x${[encodeWord("uint256", 0n), encodeWord("uint256", 0n), encodeWord("uint8", 18n)].join("")}`);
-            }
-            if (to === DEMO_HOOK && s === sel("currentFeePolicy()")) {
-              return ok(`0x${[encodeWord("address", "0x0000000000000000000000000000000000000fee"), encodeWord("uint16", 3000n), encodeWord("uint16", 5000n), encodeWord("uint16", 100n), encodeWord("uint16", 300n)].join("")}`);
-            }
-            if (to === DEMO_POOL_MANAGER && s === sel("extsload(bytes32)")) {
-              const slot = `0x${call.data.slice(10, 74)}`;
-              const word = poolSlots.get(slot);
-              return ok(word ?? `0x${"0".repeat(64)}`);
-            }
-            const t = byToken.get(to);
-            if (t) {
-              if (s === sel("name()")) return ok(`0x${encodeString(t.name)}`);
-              if (s === sel("symbol()")) return ok(`0x${encodeString(t.symbol)}`);
-              if (s === sel("decimals()")) return ok(`0x${encodeWord("uint8", 18n)}`);
-              if (s === sel("totalSupply()")) return ok(`0x${encodeWord("uint256", 10n ** 27n)}`);
-              if (s === sel("balanceOf(address)")) {
-                const who = `0x${call.data.slice(34)}`;
-                if (who === t.deployer) return ok(`0x${encodeWord("uint256", 3n * 10n ** 25n)}`);
-                if (who === t.curve) return ok(`0x${encodeWord("uint256", t.tokenReserve)}`);
-                return ok(`0x${encodeWord("uint256", 0n)}`);
-              }
-            }
-            if (to === PONS_V1_FACTORY) {
-              if (s === sel("getLaunchedToken(address)")) {
-                const who = `0x${call.data.slice(34)}`;
-                if (who !== DEMO_V1.token) return ok(`0x${new Array(13).fill(encodeWord("uint256", 0n)).join("")}`);
-                return ok(`0x${[encodeWord("address", DEMO_V1.token), encodeWord("address", DEMO_V1.deployer), encodeWord("address", ZERO_ADDRESS), encodeWord("address", "0x0000000000000000000000000000000000009051"), encodeWord("uint256", DEMO_V1.positionId), encodeWord("uint256", 0n), encodeWord("uint256", 0n), encodeWord("uint256", DEMO_V1.restrictionsEndBlock), encodeWord("uint256", 10n ** 27n), encodeWord("bool", false), encodeWord("uint24", 10000n), encodeWord("bool", true), encodeWord("uint256", 5n * 10n ** 16n)].join("")}`);
-              }
-              if (s === sel("graduationStatus(address)")) return ok(`0x${[encodeWord("uint256", 12n * 10n ** 17n), encodeWord("uint256", 3n * 10n ** 18n), encodeWord("bool", false)].join("")}`);
-              if (s === sel("getLaunchConfig(uint256)")) return ok(`0x${[encodeWord("address", ZERO_ADDRESS), encodeWord("uint256", 3n * 10n ** 18n), encodeWord("int24", -200000n), encodeWord("uint256", 10n ** 27n), encodeWord("uint16", 200n), encodeWord("uint16", 100n), encodeWord("uint32", 300n), encodeWord("uint24", 10000n), encodeWord("bool", true), encodeWord("bool", false)].join("")}`);
-              if (s === sel("locker()")) return ok(`0x${encodeWord("address", "0x00000000000000000000000000000000000010c4")}`);
-            }
-            if (to === DEMO_V1.token) {
-              if (s === sel("name()")) return ok(`0x${encodeString(DEMO_V1.name)}`);
-              if (s === sel("symbol()")) return ok(`0x${encodeString(DEMO_V1.symbol)}`);
-              if (s === sel("decimals()")) return ok(`0x${encodeWord("uint8", 18n)}`);
-              if (s === sel("totalSupply()")) return ok(`0x${encodeWord("uint256", 10n ** 27n)}`);
-            }
-            const dex = CHAINS.robinhood.dex;
-            if ((dex.v3Factories ?? []).some((f) => f.address === to) && s === sel("getPool(address,address,uint24)")) {
-              const [a, , fee] = [`0x${call.data.slice(34, 74)}`, 0, BigInt(`0x${call.data.slice(138, 202)}`)];
-              return ok(`0x${encodeWord("address", a === DEMO_PLAIN.token && fee === 3000n ? DEMO_PLAIN.pool : ZERO_ADDRESS)}`);
-            }
-            if (to === dex.weth && s === sel("balanceOf(address)")) {
-              const who = `0x${call.data.slice(34)}`;
-              return ok(`0x${encodeWord("uint256", who === DEMO_PLAIN.pool ? DEMO_PLAIN.poolWeth : 0n)}`);
-            }
-            if (to === DEMO_PLAIN.pool) {
-              const tokens = DEMO_PLAIN.supply * 3000n / 10000n;
-              if (s === sel("token0()")) return ok(`0x${encodeWord("address", DEMO_PLAIN.token)}`);
-              if (s === sel("fee()")) return ok(`0x${encodeWord("uint24", 3000n)}`);
-              if (s === sel("liquidity()")) return ok(`0x${encodeWord("uint128", isqrt(tokens * DEMO_PLAIN.poolWeth))}`);
-              if (s === sel("slot0()")) {
-                const sqrtPriceX96 = isqrt(DEMO_PLAIN.poolWeth * 2n ** 192n / tokens);
-                return ok(
-                  `0x${[
-                    encodeWord("uint160", sqrtPriceX96),
-                    encodeWord("int24", 0n),
-                    encodeWord("uint16", 0n),
-                    encodeWord("uint16", 1n),
-                    encodeWord("uint16", 1n),
-                    encodeWord("uint8", 0n),
-                    encodeWord("bool", true)
-                  ].join("")}`
-                );
-              }
-            }
-            if (to === DEMO_PLAIN.token) {
-              const from = call.from?.toLowerCase();
-              if (s === sel("name()")) return ok(`0x${encodeString(DEMO_PLAIN.name)}`);
-              if (s === sel("symbol()")) return ok(`0x${encodeString(DEMO_PLAIN.symbol)}`);
-              if (s === sel("decimals()")) return ok(`0x${encodeWord("uint8", 18n)}`);
-              if (s === sel("totalSupply()")) return ok(`0x${encodeWord("uint256", DEMO_PLAIN.supply)}`);
-              if (s === sel("owner()")) return ok(`0x${encodeWord("address", DEMO_PLAIN.owner)}`);
-              if (s === sel("paused()")) return ok(`0x${encodeWord("bool", false)}`);
-              if (s === sel("tradingOpen()")) return ok(`0x${encodeWord("bool", true)}`);
-              if (s === sel("balanceOf(address)")) {
-                const who = `0x${call.data.slice(34)}`;
-                const row = DEMO_PLAIN.holders.find((h) => h[0] === who);
-                return ok(`0x${encodeWord("uint256", row ? DEMO_PLAIN.supply * BigInt(row[1]) / 10000n : 0n)}`);
-              }
-              if (s === sel("transfer(address,uint256)")) {
-                if (from === DEMO_PLAIN.blacklisted) return { jsonrpc: "2.0", id: request.id, error: { code: 3, message: "execution reverted: Blacklisted", data: `0x08c379a0${encodeString("Blacklisted")}` } };
-                return ok(`0x${encodeWord("bool", true)}`);
-              }
-            }
-            if (to === DEMO_IMPOSTOR.token) {
-              if (s === sel("name()")) return ok(`0x${encodeString("Sprint")}`);
-              if (s === sel("symbol()")) return ok(`0x${encodeString("SPRINT")}`);
-              if (s === sel("decimals()")) return ok(`0x${encodeWord("uint8", 18n)}`);
-              if (s === sel("totalSupply()")) return ok(`0x${encodeWord("uint256", 10n ** 27n)}`);
-            }
-            const c = byCurve.get(to);
-            if (c) {
-              const one = (v, type) => ok(`0x${encodeWord(type, v)}`);
-              if (s === sel("token()")) return ok(`0x${encodeWord("address", c.token)}`);
-              if (s === sel("getReserves()")) return ok(`0x${encodeWord("uint256", c.real + 9n * 10n ** 17n)}${encodeWord("uint256", c.tokenReserve)}`);
-              if (s === sel("realQuoteReserve()")) return one(c.real, "uint256");
-              if (s === sel("graduationThreshold()")) return one(DEMO.threshold, "uint256");
-              if (s === sel("phantomQuote()")) return one(9n * 10n ** 17n, "uint256");
-              if (s === sel("feeBps()")) return one(100n, "uint256");
-              if (s === sel("creatorTaxBps()")) return one(c.taxBps, "uint256");
-              if (s === sel("readyToGraduate()")) return one(c.tokenReserve === 0n, "bool");
-              if (s === sel("graduated()")) return one(Boolean(c.swept), "bool");
-              if (s === sel("quoteFeeBalance()")) return one(10n ** 16n, "uint256");
-              if (s === sel("creatorTaxBalance()")) return one(3n * 10n ** 16n, "uint256");
-              if (s === sel("buybackQuoteBalance()")) return one(2n * 10n ** 16n, "uint256");
-              if (s === sel("isNativeQuote()")) return one(true, "bool");
-            }
-            return { jsonrpc: "2.0", id: request.id, error: { code: 3, message: "execution reverted", data: "0x" } };
-          }
-          default:
-            return err(`demo chain does not serve ${request.method}`);
-        }
-      });
-      return new Response(JSON.stringify(Array.isArray(body) ? responses : responses[0]), { headers: { "content-type": "application/json" } });
-    });
-  }
-  function isqrt(n) {
-    if (n < 2n) return n;
-    let x = n;
-    let y = (x + 1n) / 2n;
-    while (y < x) {
-      x = y;
-      y = (x + n / x) / 2n;
-    }
-    return x;
-  }
-  function hexToBytesLocal(hex) {
-    const out2 = new Uint8Array(hex.length / 2);
-    for (let i = 0; i < out2.length; i++) out2[i] = parseInt(hex.slice(i * 2, i * 2 + 2), 16);
-    return out2;
-  }
-  function demoBlockscoutFetch() {
-    const tokens = Object.values(DEMO.tokens);
-    return (async (input) => {
-      const url = new URL(String(input instanceof Request ? input.url : input));
-      const json = (body) => new Response(JSON.stringify(body), { headers: { "content-type": "application/json" } });
-      const m = url.pathname.match(/^\/api\/v2\/addresses\/(0x[0-9a-f]{40})\/transactions$/i);
-      if (m) {
-        const who = m[1].toLowerCase();
-        const fresh = DEMO.tokens.fresh;
-        const funded = /* @__PURE__ */ new Set([buyer(900), buyer(901)]);
-        const items = funded.has(who) ? [{ hash: `0xdemofund${who.slice(-4)}`, value: (10n ** 18n).toString(), block_number: fresh.launched - 400, from: { hash: DEMO_FUNDER }, to: { hash: who } }] : [];
-        return json({ items, next_page_params: null });
-      }
-      if (url.pathname === "/api/v2/search") {
-        const q2 = (url.searchParams.get("q") ?? "").toUpperCase();
-        const items = tokens.filter((t) => t.symbol.toUpperCase() === q2).map((t) => ({ type: "token", address: t.token, name: t.name, symbol: t.symbol }));
-        if (q2 === "SPRINT") items.push({ type: "token", address: DEMO_IMPOSTOR.token, name: "Sprint", symbol: "SPRINT" });
-        return json({ items });
-      }
-      const v = url.pathname.match(/^\/api\/v2\/smart-contracts\/(0x[0-9a-f]{40})$/i);
-      if (v) return json({ is_verified: tokens.some((t) => t.token === v[1].toLowerCase() || t.curve === v[1].toLowerCase()) });
-      const plain = DEMO_PLAIN;
-      if (url.pathname === `/api/v2/addresses/${plain.token}`) return json({ is_contract: true, is_verified: false, name: null, creator_address_hash: plain.owner, creation_transaction_hash: plain.creationTx });
-      if (url.pathname === `/api/v2/addresses/${DEMO_IMPOSTOR.token}`) {
-        return json({ is_contract: true, is_verified: false, is_scam: false, name: null, creator_address_hash: DEMO_IMPOSTOR.deployer, creation_transaction_hash: DEMO_IMPOSTOR.creationTx });
-      }
-      if (url.pathname === `/api/v2/tokens/${plain.token}`) return json({ holders_count: "143", type: "ERC-20", name: plain.name, symbol: plain.symbol });
-      if (url.pathname === `/api/v2/tokens/${plain.token}/counters`) return json({ token_holders_count: "143", transfers_count: "2210" });
-      if (url.pathname === `/api/v2/tokens/${plain.token}/holders`) {
-        return json({
-          items: plain.holders.map(([hash, bps3, is_contract, name, delegated]) => ({
-            address: { hash, is_contract, name, proxy_type: delegated ? "eip7702" : null },
-            value: (plain.supply * BigInt(bps3) / 10000n).toString()
-          })),
-          next_page_params: null
-        });
-      }
-      if (url.pathname === `/api/v2/tokens/${plain.token}/transfers`) {
-        const at = (block) => new Date(Math.round(DEMO.genesisTimestamp + block * 0.1) * 1e3).toISOString();
-        const items = [DEMO.head - 1200, DEMO.head - 4e3, DEMO.head - 9e3].map((block, i) => ({ block_number: block, timestamp: at(block), from: { hash: plain.pool }, to: { hash: buyer(500 + i) }, total: { value: (10n ** 24n).toString() }, transaction_hash: `0xdemoplainxfer${i}` }));
-        return json({ items, next_page_params: null });
-      }
-      return new Response("not found", { status: 404 });
-    });
-  }
-  function plainTokenLogs(from, to) {
-    const logs = [];
-    const recipients = DEMO_PLAIN.holders.filter(([, , isContract]) => !isContract).map(([hash]) => hash);
-    recipients.forEach((who, i) => {
-      const b = DEMO.head - 40 + i;
-      if (b < from || b > to) return;
-      logs.push({
-        address: DEMO_PLAIN.token,
-        topics: [eventTopic(ERC20_EVENTS.Transfer), addressTopic(DEMO_PLAIN.pool), addressTopic(who)],
-        data: `0x${encodeWord("uint256", 10n ** 21n)}`,
-        blockNumber: `0x${b.toString(16)}`,
-        transactionHash: `0xdemoplainxfer${i}`,
-        logIndex: `0x${i.toString(16)}`
-      });
-    });
-    return logs;
-  }
-  function tokenLogs(t, from, to) {
-    const logs = [];
-    let index = 0;
-    for (const [offset, from_, to_, amount] of t.transfers ?? []) {
-      const b = t.launched + offset;
-      if (b < from || b > to) continue;
-      logs.push({ address: t.token, topics: [eventTopic(ERC20_EVENTS.Transfer), addressTopic(from_), addressTopic(to_)], data: `0x${encodeWord("uint256", amount)}`, blockNumber: `0x${b.toString(16)}`, transactionHash: `0xdemo${t.symbol}xfer${b}`, logIndex: `0x${(index++).toString(16)}` });
-    }
-    return logs;
-  }
-  function matchesTopics(topics, filter) {
-    if (!filter) return true;
-    return filter.every((want, i) => {
-      if (want === null || want === void 0) return true;
-      const have = (topics[i] ?? "").toLowerCase();
-      return Array.isArray(want) ? want.some((w) => w.toLowerCase() === have) : want.toLowerCase() === have;
-    });
-  }
-  var CBOR_TRAILER = "a2646970667358221220" + "ff".repeat(4) + "f4".repeat(4) + "ab".repeat(26) + "64736f6c63430008260035";
-  var DEMO_CODE = {
-    factory: `0x6080604052${"5b".repeat(40)}00${CBOR_TRAILER}`,
-    ponsToken: `0x60806040527f${"ff".repeat(16)}${"f4".repeat(16)}5b${"5b".repeat(200)}00${CBOR_TRAILER}`,
-    ponsCurve: `0x60806040527f${"00".repeat(32)}5b${"5b".repeat(900)}00${CBOR_TRAILER}`,
-    impostor: `0x6080604052${"5b".repeat(20)}f4${"5b".repeat(20)}ff00${CBOR_TRAILER}`,
-    /** A dispatcher: PUSH4 <selector> EQ PUSH2 <dest> JUMPI for each function the plain token has. */
-    plain: `0x6080604052${DEMO_PLAIN.powers.map((sig) => `63${selector(sig).slice(2)}1461${"0000"}57`).join("")}${"5b".repeat(60)}00${CBOR_TRAILER}`
-  };
-  function demoRpc(memo = false) {
-    return new RpcClient({ urls: ["demo://robinhood-chain"], expectedChainId: ROBINHOOD_CHAIN_ID, fetchImpl: demoFetch(), minSpacingMs: 0, memo });
-  }
-
-  // src/bouncer/devReport.ts
-  init_abi();
-  init_tape();
-  async function readDevReport(rpc, deployer, options) {
-    const address = normalizeAddress(deployer);
-    const factory = options.factory ?? PONS_V2_FACTORY;
-    const tape = await readTapeAdaptive(
-      rpc,
-      { fromBlock: options.fromBlock, toBlock: options.toBlock, address: factory, events: [FACTORY_EVENTS.TokenLaunched], topics: [null, null, addressTopic(address)] },
-      options.chunking
-    );
-    const all = tape.logs.slice().reverse();
-    const limit = options.limit ?? 40;
-    const detailed = all.slice(0, limit);
-    const records = detailed.length ? await rpc.callBatch(
-      detailed.map((l) => ({ to: factory, data: encodeCall(FACTORY_FUNCTIONS.getLaunchedToken, [String(l.args.token)]) })),
-      options.toBlock
-    ) : [];
-    const symbols = detailed.length ? await rpc.callBatch(detailed.map((l) => ({ to: String(l.args.token), data: encodeCall(ERC20_FUNCTIONS.symbol, []) })), options.toBlock) : [];
-    const launches = [];
-    for (let i = 0; i < detailed.length; i++) {
-      const log = detailed[i];
-      const record = decodeLaunchedToken(decodeOutputs(FACTORY_FUNCTIONS.getLaunchedToken, records[i]));
-      let symbol = "?";
-      try {
-        symbol = decodeOutputs(ERC20_FUNCTIONS.symbol, symbols[i])[0];
-      } catch {
-        symbol = "?";
-      }
-      const header = await rpc.getBlock(log.blockNumber);
-      const sweptAt = Number(record.sweptAt);
-      launches.push({
-        token: String(log.args.token).toLowerCase(),
-        curve: String(log.args.curve).toLowerCase(),
-        symbol,
-        launchedBlock: log.blockNumber,
-        launchedAt: header.timestamp,
-        phase: record.phase,
-        creatorTaxBps: record.creatorTaxBps,
-        sweptAt,
-        secondsToSweep: sweptAt > 0 ? Math.max(0, sweptAt - header.timestamp) : null
-      });
-    }
-    const counts = { launched: all.length, graduated: 0, swept: 0, onCurve: 0 };
-    for (const l of launches) {
-      if (l.phase === 2 /* PoolCreated */ || l.phase === 3 /* Rescued */) counts.graduated++;
-      else if (l.phase === 1 /* Swept */) counts.swept++;
-      else counts.onCurve++;
-    }
-    const sweeps = launches.map((l) => l.secondsToSweep).filter((s) => s !== null).sort((a, b) => a - b);
-    const seen = /* @__PURE__ */ new Map();
-    for (const l of launches) seen.set(l.symbol.toUpperCase(), (seen.get(l.symbol.toUpperCase()) ?? 0) + 1);
-    const taxes = launches.map((l) => l.creatorTaxBps);
-    return {
-      deployer: address,
-      window: { fromBlock: options.fromBlock, toBlock: options.toBlock },
-      launches,
-      truncated: all.length > detailed.length,
-      counts,
-      medianSecondsToSweep: sweeps.length ? sweeps[Math.floor(sweeps.length / 2)] : null,
-      repeatedSymbols: [...seen.entries()].filter(([, n]) => n > 1).map(([s]) => s),
-      taxRangeBps: taxes.length ? [taxes.reduce((a, b) => a < b ? a : b), taxes.reduce((a, b) => a > b ? a : b)] : null
-    };
-  }
-  function devReportLine(d) {
-    const c = d.counts;
-    if (c.launched === 0) return "first launch from this address in the window";
-    const parts = [`${c.launched} launch${c.launched === 1 ? "" : "es"}`, `${c.graduated} graduated`];
-    if (c.swept) parts.push(`${c.swept} swept, no pool`);
-    if (c.onCurve) parts.push(`${c.onCurve} still on the curve`);
-    if (d.repeatedSymbols.length) parts.push(`same ticker ${d.repeatedSymbols.length}\xD7`);
-    return parts.join(" \xB7 ");
-  }
-
-  // src/bouncer/door.ts
-  init_abi();
-  init_tape();
-
   // src/bouncer/houseRules.ts
   init_tape();
   async function readHouseRules(rpc, launch, options) {
@@ -4551,6 +3781,101 @@
 
   // src/bouncer/idCheck.ts
   init_abi();
+
+  // src/chain/code.ts
+  init_keccak();
+  var OP_SELFDESTRUCT = 255;
+  var OP_DELEGATECALL = 244;
+  var OP_CALLCODE = 242;
+  var OP_CREATE = 240;
+  var OP_CREATE2 = 245;
+  var OP_PUSH1 = 96;
+  var OP_PUSH32 = 127;
+  var EIP1967_IMPLEMENTATION_SLOT = "0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc";
+  var EIP1967_BEACON_SLOT = "0xa3f0ad74e5423aebfd80d3ef4346578335a9a72aeaee59ff6cb3582b35133d50";
+  function scanBytecode(code) {
+    const bytes = hexToBytes(code);
+    const read = readSelectors(code);
+    const scan = {
+      bytes: bytes.length,
+      codeHash: keccak256Hex(bytes),
+      empty: bytes.length === 0,
+      metadataBytes: metadataTrailerLength(bytes),
+      opcodes: { selfdestruct: 0, delegatecall: 0, callcode: 0, create: 0, create2: 0 },
+      minimalProxyTarget: minimalProxyTarget(bytes),
+      selectors: read.all,
+      dispatcherSelectors: read.push4,
+      delegatedTo: delegationTarget(bytes)
+    };
+    const end = bytes.length - scan.metadataBytes;
+    for (let i = 0; i < end; i++) {
+      const op = bytes[i];
+      if (op >= OP_PUSH1 && op <= OP_PUSH32) {
+        i += op - OP_PUSH1 + 1;
+        continue;
+      }
+      if (op === OP_SELFDESTRUCT) scan.opcodes.selfdestruct++;
+      else if (op === OP_DELEGATECALL) scan.opcodes.delegatecall++;
+      else if (op === OP_CALLCODE) scan.opcodes.callcode++;
+      else if (op === OP_CREATE) scan.opcodes.create++;
+      else if (op === OP_CREATE2) scan.opcodes.create2++;
+    }
+    return scan;
+  }
+  function metadataTrailerLength(bytes) {
+    if (bytes.length < 4) return 0;
+    const length = bytes[bytes.length - 2] << 8 | bytes[bytes.length - 1];
+    if (length === 0 || length + 2 > bytes.length) return 0;
+    const start2 = bytes.length - 2 - length;
+    const first = bytes[start2];
+    if (first < 161 || first > 163) return 0;
+    const keyHeader = bytes[start2 + 1];
+    if (keyHeader === void 0 || keyHeader < 97 || keyHeader > 111) return 0;
+    const keyLength = keyHeader - 96;
+    for (let i = 0; i < keyLength; i++) {
+      const c = bytes[start2 + 2 + i];
+      if (c === void 0 || !(c >= 97 && c <= 122 || c >= 48 && c <= 57)) return 0;
+    }
+    return length + 2;
+  }
+  function delegationTarget(bytes) {
+    if (bytes.length !== 23 || bytes[0] !== 239 || bytes[1] !== 1 || bytes[2] !== 0) return null;
+    return `0x${Array.from(bytes.slice(3), (b) => b.toString(16).padStart(2, "0")).join("")}`;
+  }
+  var MINIMAL_PROXY_PREFIX = "363d3d373d3d3d363d73";
+  var MINIMAL_PROXY_SUFFIX = "5af43d82803e903d91602b57fd5bf3";
+  function minimalProxyTarget(bytes) {
+    if (bytes.length !== 45) return null;
+    const hex = Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+    if (!hex.startsWith(MINIMAL_PROXY_PREFIX) || !hex.endsWith(MINIMAL_PROXY_SUFFIX)) return null;
+    return `0x${hex.slice(MINIMAL_PROXY_PREFIX.length, MINIMAL_PROXY_PREFIX.length + 40)}`;
+  }
+  function storageWordIsSet(word) {
+    return /[1-9a-f]/i.test(word.replace(/^0x/, ""));
+  }
+  function storageWordAddress(word) {
+    return `0x${word.replace(/^0x/, "").padStart(64, "0").slice(24)}`;
+  }
+  function readSelectors(code) {
+    const bytes = hexToBytes(code);
+    const end = bytes.length - metadataTrailerLength(bytes);
+    const all = /* @__PURE__ */ new Set();
+    const push4 = /* @__PURE__ */ new Set();
+    for (let i = 0; i < end; i++) {
+      const op = bytes[i];
+      if (op < OP_PUSH1 || op > OP_PUSH32) continue;
+      const size = op - OP_PUSH1 + 1;
+      if (size <= 4 && i + size < end) {
+        let hex = "";
+        for (let j = 1; j <= size; j++) hex += bytes[i + j].toString(16).padStart(2, "0");
+        const padded = `0x${hex.padStart(8, "0")}`;
+        all.add(padded);
+        if (size === 4) push4.add(padded);
+      }
+      i += size;
+    }
+    return { all, push4 };
+  }
 
   // src/chain/batch.ts
   var ReadBatch = class {
@@ -6244,6 +5569,16 @@
   }
 
   // src/bouncer/door.ts
+  function stampLabel(stamp, launchpad) {
+    if (stamp === "ON THE LIST") return launchpad ? `${launchpad.toUpperCase()} LAUNCH` : "ON THE LIST";
+    if (stamp === "NOT ON THE LIST") return "NOT ON THE LIST";
+    return launchpad ? `NOT A ${launchpad.toUpperCase()} LAUNCH` : "ORDINARY TOKEN";
+  }
+  function stampTone(stamp) {
+    if (stamp === "ON THE LIST") return "yes";
+    if (stamp === "NOT A LAUNCH") return "flat";
+    return "no";
+  }
   async function readDoor(rpc, input, options = {}) {
     const chain2 = options.chain ?? DEFAULT_CHAIN;
     const factory = (options.factory ?? chain2.factory ?? "").toLowerCase();
@@ -6807,6 +6142,679 @@
   }
   function slipJson(value) {
     return JSON.stringify(value, (_k, v) => typeof v === "bigint" ? v.toString() : v instanceof Set ? void 0 : v, 2);
+  }
+
+  // src/bouncer/card.ts
+  var CARD_COLORS = {
+    ink: "#07090a",
+    panel: "#0b0e10",
+    panel2: "#0f1315",
+    line: "#1a2220",
+    brass: "#e8b84b",
+    rope: "#c0122e",
+    text: "#eef3f1",
+    muted: "#cfd6d3",
+    stop: "#ff6b5e",
+    watch: "#e8b84b",
+    ok: "#7fd6a9",
+    info: "#7d9aa8",
+    dim: "#6d7a76",
+    dimmer: "#4e5a57"
+  };
+  function cardVerdict(notes) {
+    const c = CARD_COLORS;
+    const stop = notes.filter((n) => n.level === "stop").length;
+    const watch = notes.filter((n) => n.level === "watch").length;
+    if (stop) return { word: "STOP", kind: "stop", color: c.stop, line: `${stop} thing${stop === 1 ? "" : "s"} here can cost you money outright` };
+    if (watch) return { word: "WATCH", kind: "watch", color: c.watch, line: `${watch} thing${watch === 1 ? "" : "s"} worth reading before you buy` };
+    return { word: "CLEAR", kind: "clear", color: c.ok, line: "nothing in what was read stands out" };
+  }
+  function facts(slip) {
+    const o = slip.open;
+    const out2 = [];
+    if (o) {
+      const owner = o.ownerUnread ? "UNREAD" : o.owner === null ? "NONE" : o.owner.renounced ? "RENOUNCED" : "HAS KEYS";
+      out2.push({
+        label: "OWNER",
+        value: owner,
+        bad: Boolean(o.owner && !o.owner.renounced),
+        note: o.ownerUnread ? "owner() would not answer" : o.owner === null ? "no owner() in the code" : o.owner.renounced ? "nobody can call owner-only code" : shortAddress(o.owner.address)
+      });
+      const kinds = o.powers.filter((p) => p.kind !== "exempt" && p.kind !== "sweep");
+      const names = [...new Set(kinds.map((p) => p.kind))];
+      out2.push({ label: "CODE CAN", value: String(kinds.length), bad: kinds.length > 0, note: names.length ? names.join(", ") : "nothing owner-only found" });
+      const sells = o.probes.filter((p) => p.target === "pool");
+      const ok = sells.filter((p) => p.status === "ok").length;
+      const sale = !sells.length ? "NOT RUN" : sells.every((p) => p.status === "ok") ? "ALL PASS" : sells.some((p) => p.status === "reverts") ? `${ok}/${sells.length}` : "UNREAD";
+      out2.push({
+        label: "TRANSFER TO POOL",
+        value: sale,
+        bad: sells.some((p) => p.status === "reverts"),
+        note: !sells.length ? "not simulated" : `${sells.length} wallet${sells.length === 1 ? "" : "s"} \xB7 not a router swap`
+      });
+      const top = o.holders?.top10WalletsBps ?? null;
+      out2.push({
+        label: "TOP 10 WALLETS",
+        value: top === null ? "UNKNOWN" : `${(top / 100).toFixed(0)}%`,
+        bad: top !== null && top >= 5e3,
+        note: o.holders?.count ? `of supply \xB7 ${o.holders.count} holders` : "explorer not reachable"
+      });
+    } else if (slip.rules) {
+      out2.push({ label: "TRADE FEE", value: formatBps(slip.rules.totalTradeBps), bad: slip.rules.totalTradeBps >= 1e3, note: "on every buy and sell" });
+      out2.push({ label: "CREATOR TAX", value: formatBps(slip.rules.creatorTaxBps), bad: slip.rules.creatorTaxBps >= 500, note: "of the fee, to the creator" });
+      out2.push({ label: "DEV HOLDS", value: `${(slip.rules.deployerShareBps / 100).toFixed(1)}%`, bad: slip.rules.deployerShareBps >= 2e3, note: "of supply" });
+      out2.push({ label: "BUYBACK", value: slip.rules.buybackEnabled ? "VESTS" : "NONE", bad: slip.rules.buybackEnabled, note: slip.rules.buybackEnabled ? "bought back, not burned" : "no buyback in the rules" });
+    }
+    return out2.slice(0, 4);
+  }
+  function doorCard(slip, options) {
+    const meta = slip.id.meta;
+    return renderCard(
+      {
+        chain: slip.chain.name,
+        at: `block ${slip.at.block}`,
+        timestamp: slip.at.timestamp,
+        ticker: meta ? clip(meta.symbol, 12) : shortAddress(slip.subject),
+        name: meta ? clip(meta.name, 34) : slip.known ? "known contract" : "no name on chain",
+        lead: options.lead,
+        address: slip.subject,
+        stamp: stampLabel(slip.stamp, slip.chain.launchpad),
+        notes: slip.notes,
+        facts: facts(slip),
+        coverage: doorCoverage(slip)
+      },
+      options
+    );
+  }
+  function splCard(slip, options) {
+    const m = slip.mint;
+    const fee = m?.extensions.find((e) => e.kind === "transfer-fee");
+    const top = slip.holders?.top10Bps ?? null;
+    return renderCard(
+      {
+        chain: slip.chain.name,
+        // The range the reading covered, not the slot it started at. See
+        // SplSlip.at for why those differ on this chain.
+        at: slip.at.span && slip.at.span.spread > 4 ? `slots ${slip.at.span.first}-${slip.at.span.last}` : `slot ${slip.at.span?.last ?? slip.at.slot}`,
+        timestamp: slip.at.timestamp,
+        ticker: clip(slip.metadata?.symbol || shortAddress(slip.subject), 12),
+        lead: options.lead,
+        name: clip(slip.metadata?.name || slip.whatItIs || "no name on chain", 34),
+        // Solana has no launchpad BOUNCER knows, so every mint here is an
+        // ordinary token and stamping that as a shortfall is noise.
+        address: slip.subject,
+        stamp: stampLabel(slip.stamp, null),
+        notes: slip.notes,
+        facts: [
+          { label: "FREEZE YOU", value: m?.freezeAuthority ? "YES" : m ? "NO" : "UNREAD", bad: Boolean(m?.freezeAuthority), note: m?.freezeAuthority ? "a freeze authority is set" : m ? "no freeze authority" : "the mint would not answer" },
+          { label: "PRINT MORE", value: m?.mintAuthority ? "YES" : m ? "NO" : "UNREAD", bad: Boolean(m?.mintAuthority), note: m?.mintAuthority ? "a mint authority is set" : m ? "supply is fixed" : "the mint would not answer" },
+          {
+            label: "TAX PER TRANSFER",
+            value: fee?.kind === "transfer-fee" ? `${(fee.feeBps / 100).toFixed(2)}%` : m ? "0%" : "UNREAD",
+            bad: fee?.kind === "transfer-fee" && fee.feeBps >= 500,
+            note: fee?.kind === "transfer-fee" ? "taken on every transfer" : m ? "no transfer fee extension" : "the mint would not answer"
+          },
+          { label: "TOP 10 HOLDERS", value: top === null ? "UNKNOWN" : `${(top / 100).toFixed(0)}%`, bad: top !== null && top >= 5e3, note: top === null ? "the holder list did not answer" : "of supply" }
+        ],
+        coverage: splCoverage(slip)
+      },
+      options
+    );
+  }
+  function coverageFoot(cov) {
+    if (!cov || cov.state === "complete") return "read from the chain \xB7 nothing here is scored, predicted or advised";
+    const names = cov.gaps.map((g) => g.label).join(", ");
+    return clip(`${cov.read} of ${cov.asked} checks answered \xB7 unread: ${names}`, 74);
+  }
+  function renderCard(model, options) {
+    const c = CARD_COLORS;
+    const v0 = cardVerdict(model.notes);
+    const cov = model.coverage;
+    const qualified = cov ? qualify(v0.kind, cov) : v0.kind;
+    const v = qualified === "incomplete" ? { ...v0, word: "INCOMPLETE", color: c.info, line: "Nothing stood out in what was read, and part of it was not read." } : v0;
+    const rank = { stop: 0, watch: 1, info: 2 };
+    const shown = [...model.notes].sort((a, b) => rank[a.level] - rank[b.level]).slice(0, 3);
+    const levelColor = (l) => l === "stop" ? c.stop : l === "watch" ? c.watch : c.info;
+    const ROWS = { bar: 44, subject: 104, verdict: 288, head: 320, facts: 408, foot: 560 };
+    const L = 40;
+    const R = 1160;
+    const line = (y) => `<line x1="0" y1="${y}" x2="1200" y2="${y}" stroke="${c.line}"/>`;
+    const cols = model.facts.length;
+    const colW = (R - L) / cols;
+    const factCells = model.facts.map((f, i) => {
+      const x = L + i * colW;
+      const long = f.value.length > 9;
+      return `${i ? `<line x1="${x}" y1="${ROWS.head}" x2="${x}" y2="${ROWS.facts}" stroke="${c.line}"/>` : ""}
+      <text x="${x + 16}" y="${ROWS.head - 11}" font-size="12" letter-spacing="2.2" fill="${c.dimmer}">${esc(f.label)}</text>
+      <text x="${x + 16}" y="${ROWS.head + 44}" font-size="${long ? 24 : 32}" font-weight="700" fill="${f.bad ? c.stop : c.text}">${esc(f.value)}</text>
+      <text x="${x + 16}" y="${ROWS.head + 70}" font-size="13" fill="${c.dim}">${esc(clip(f.note ?? "", Math.floor(colW / 7.6)))}</text>`;
+    }).join("");
+    const rowH = Math.floor((ROWS.foot - ROWS.facts) / Math.max(1, shown.length));
+    const noteRows = shown.map((n, i) => {
+      const top = ROWS.facts + i * rowH;
+      const mid = top + rowH / 2 + 6;
+      return `${i ? line(top) : ""}
+      <line x1="150" y1="${top}" x2="150" y2="${top + rowH}" stroke="${c.line}"/>
+      <text x="${L}" y="${mid}" font-size="13" letter-spacing="1.6" fill="${levelColor(n.level)}">${n.level.toUpperCase()}</text>
+      <text x="170" y="${mid}" font-size="17" fill="${n.level === "info" ? c.muted : c.text}">${esc(clip(n.text, 98))}</text>`;
+    }).join("");
+    const stamp = model.stamp;
+    const stampColor = /NOT ON THE LIST/.test(stamp) ? c.stop : /ORDINARY TOKEN|^NOT A /.test(stamp) ? c.dim : c.ok;
+    const stampW = stamp.length * 8.4 + 22;
+    const found = model.notes.filter((n) => topicOf(n.code) !== "unread").length;
+    const counts = `${found} finding${found === 1 ? "" : "s"}`;
+    return `<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">
+  <defs>
+    <pattern id="hatch" width="12" height="12" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
+      <rect width="12" height="12" fill="${c.panel}"/>
+      <rect width="6" height="12" fill="${c.panel2}"/>
+    </pattern>
+  </defs>
+  <rect width="1200" height="630" fill="${c.panel}"/>
+  <rect width="1200" height="2" fill="${c.rope}"/>
+
+  <g transform="translate(14 10) scale(0.66)">${options.mascotSvg}</g>
+  <text x="56" y="${ROWS.bar - 15}" font-size="15" font-weight="700" letter-spacing="5" fill="${c.text}">BOUNCER</text>
+  <line x1="168" y1="2" x2="168" y2="${ROWS.bar}" stroke="${c.line}"/>
+  <text x="186" y="${ROWS.bar - 15}" font-size="14" fill="${c.dim}">read-only \xB7 no key \xB7 no signer</text>
+  <text x="${R}" y="${ROWS.bar - 15}" text-anchor="end" font-size="14" fill="${c.dim}">${esc(model.chain)} \xB7 ${esc(model.at)}${model.timestamp ? ` \xB7 ${esc(isoUtc(model.timestamp))}` : ""}</text>
+  ${line(ROWS.bar)}
+
+  <text x="${L}" y="${ROWS.subject - 22}" font-size="26" font-weight="700" letter-spacing="1.5" fill="${c.text}">${esc(model.ticker)}</text>
+  <text x="${L + model.ticker.length * 17 + 22}" y="${ROWS.subject - 22}" font-size="17" fill="${c.dim}">${esc(model.name)}</text>
+  <g transform="translate(${R - stampW} ${ROWS.subject - 42})">
+    <rect x="0" y="0" width="${stampW}" height="26" fill="none" stroke="${stampColor}"/>
+    <text x="${stampW / 2}" y="18" text-anchor="middle" font-size="12" letter-spacing="2" fill="${stampColor}">${esc(stamp)}</text>
+  </g>
+  ${line(ROWS.subject)}
+
+  <rect x="0" y="${ROWS.subject}" width="340" height="${ROWS.verdict - ROWS.subject}" fill="url(#hatch)"/>
+  <line x1="340" y1="${ROWS.subject}" x2="340" y2="${ROWS.verdict}" stroke="${c.line}"/>
+  <text x="${L}" y="${ROWS.subject + 34}" font-size="13" letter-spacing="3.4" fill="${c.dimmer}">VERDICT</text>
+  <text x="${L}" y="${ROWS.subject + 110}" font-size="${v.word.length > 6 ? 34 : 64}" font-weight="700" fill="${v.color}">${v.word}</text>
+  <text x="${L}" y="${ROWS.subject + 145}" font-size="14" fill="${c.dim}">${esc(counts)}</text>
+  <text x="380" y="${ROWS.subject + 44}" font-size="21" fill="${c.text}">${esc(clip(model.lead || v.line, 62))}</text>
+  ${model.lead ? `<text x="380" y="${ROWS.subject + 74}" font-size="17" fill="${c.dim}">${esc(clip(v.line, 74))}</text>` : ""}
+  <text x="380" y="${ROWS.subject + 118}" font-size="15" fill="${c.dimmer}">${esc(model.address)}</text>
+  <text x="380" y="${ROWS.subject + 144}" font-size="14" fill="${cov && cov.state !== "complete" ? c.info : c.dimmer}">${esc(coverageFoot(cov))}</text>
+  ${line(ROWS.verdict)}
+  ${line(ROWS.head)}
+  ${factCells}
+  ${line(ROWS.facts)}
+  ${noteRows}
+  ${line(ROWS.foot)}
+
+  <text x="${L}" y="${ROWS.foot + 44}" font-size="15" fill="${c.brass}">${esc(options.checkUrl ?? options.repoUrl)}</text>
+  <text x="${R}" y="${ROWS.foot + 44}" text-anchor="end" font-size="15" fill="${c.dim}">check it yourself before you buy</text>
+</svg>
+`;
+  }
+  function esc(text) {
+    return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+  }
+  function clip(text, max) {
+    if (text.length <= max) return text;
+    const cut = text.slice(0, max - 1);
+    const space = cut.lastIndexOf(" ");
+    return `${(space > max - 18 ? cut.slice(0, space) : cut).trimEnd()}\u2026`;
+  }
+
+  // src/bouncer/demo.ts
+  init_abi();
+  init_keccak();
+  init_tape();
+  var ETH = 10n ** 18n;
+  var HEAD = 31337500;
+  var DEV_A = "0x0000000000000000000000000000000000d0e5e1";
+  var DEV_B = "0x00000000000000000000000000000000000000b7";
+  var DEV_C = "0x000000000000000000000000000000000000c0c0";
+  var buyer = (n) => `0x${(45056 + n).toString(16).padStart(40, "0")}`;
+  var DEMO_POOL_MANAGER = "0x00000000000000000000000000000000000900a1";
+  var DEMO_HOOK = "0x0000000000000000000000000000000000900c00";
+  var DEMO_FUNDER = "0x000000000000000000000000000000000000feed";
+  var DEMO_BLOCKSCOUT = "https://demo.blockscout.invalid";
+  var DEMO_V1 = { token: "0x0000000000000000000000000000000000001d1e", deployer: "0x00000000000000000000000000000000000001d1", positionId: 777n, restrictionsEndBlock: BigInt(HEAD + 40), name: "Old School", symbol: "OLDIE" };
+  var DEMO_IMPOSTOR = {
+    token: "0x00000000000000000000000000000000000bad01",
+    implementation: "0x00000000000000000000000000000000000bad02",
+    deployer: "0x00000000000000000000000000000000000bad03",
+    creationTx: "0xdemoimpostorcreate",
+    /** Deployed after the real SPRINT launch, which is what makes it the copy. */
+    createdAt: HEAD - 900
+  };
+  var DEMO_PLAIN = {
+    token: "0x0000000000000000000000000000000000f1a1a1",
+    owner: "0x00000000000000000000000000000000000000f1",
+    pool: "0x000000000000000000000000000000000000900f",
+    name: "Robin Rocket",
+    symbol: "ROCKET",
+    createdAt: HEAD - 5e4,
+    creationTx: "0xdemoplaincreate",
+    supply: 10n ** 27n,
+    /** [holder, share in bps, is contract, explorer label, EIP-7702 delegated]. */
+    holders: [
+      ["0x000000000000000000000000000000000000900f", 3e3, true, "UniswapV3Pool", false],
+      ["0x00000000000000000000000000000000000000f1", 2500, false, null, false],
+      ["0x000000000000000000000000000000000000c500", 800, false, null, false],
+      ["0x000000000000000000000000000000000000c501", 500, false, null, false],
+      ["0x000000000000000000000000000000000000c502", 300, false, null, false],
+      // A wallet whose owner signed an EIP-7702 delegation. The explorer calls it a
+      // contract; it is a person, and counting it as a pool would understate how
+      // concentrated this token is.
+      ["0x000000000000000000000000000000000000c503", 400, true, null, true],
+      ["0x000000000000000000000000000000000000dead", 200, false, null, false]
+    ],
+    blacklisted: "0x000000000000000000000000000000000000c501",
+    /** What the pool holds in the wrapped native coin. */
+    poolWeth: 12n * 10n ** 18n,
+    /** Every function in the dispatcher, not only the dangerous ones. */
+    powers: ["mint(address,uint256)", "pause()", "unpause()", "paused()", "owner()", "renounceOwnership()", "transferOwnership(address)", "setFees(uint256,uint256)", "blacklist(address,bool)", "tradingOpen()", "excludeFromFees(address,bool)", "transfer(address,uint256)", "balanceOf(address)", "totalSupply()", "name()", "symbol()", "decimals()"]
+  };
+  var freshBuys = [[1, DEV_C, 400n * 10n ** 15n], [22, buyer(900), 300n * 10n ** 15n, 6e3], [70, buyer(901), 100n * 10n ** 15n, 1900]];
+  var sprintBuys = [[3, DEV_A, 2600n * 10n ** 15n]];
+  for (let i = 1; i <= 8; i++) sprintBuys.push([100 + i * 250, buyer(i), 200n * 10n ** 15n]);
+  var slowBuys = [[10, DEV_B, 340n * 10n ** 15n]];
+  for (let i = 1; i <= 39; i++) slowBuys.push([600 + i * 900, buyer(100 + i), 100n * 10n ** 15n]);
+  var DEMO = {
+    head: HEAD,
+    genesisTimestamp: 1789430400 - HEAD * 0.1,
+    threshold: 42n * 10n ** 17n,
+    tokens: {
+      sprint: { token: "0x00c0ffee0000000000000000000000000000600d", curve: "0x0000c0a70000000000000000000000000000600d", deployer: DEV_A, name: "Sprint", symbol: "SPRINT", launched: HEAD - 2600, swept: HEAD - 2600 + 2120, graduated: HEAD - 2600 + 2121, raised: 42n * 10n ** 17n, supplyToPool: 2n * 10n ** 26n, positionId: 4663n, taxBps: 300n, real: 42n * 10n ** 17n, tokenReserve: 0n, buys: sprintBuys, sells: [], recipientMoves: [[2300, "0x000000000000000000000000000000000000f0f0"]] },
+      slow: { token: "0x0000000000000000000000000000000000005107", curve: "0x0000c0a70000000000000000000000000000a107", deployer: DEV_B, name: "Slow and Steady", symbol: "SLOW", launched: HEAD - 4e4, swept: HEAD - 2800, graduated: HEAD - 2799, raised: 42n * 10n ** 17n, supplyToPool: 2n * 10n ** 26n, positionId: 4664n, taxBps: 100n, real: 42n * 10n ** 17n, tokenReserve: 0n, buys: slowBuys, sells: [[2e4, buyer(105), 50n * 10n ** 15n]] },
+      late: { token: "0x00000000000000000000000000000000000000a7", curve: "0x0000c0a7000000000000000000000000000000a7", deployer: DEV_B, name: "Late Bloomer", symbol: "LATE", launched: HEAD - 17500, raised: 0n, taxBps: 200n, real: 31n * 10n ** 17n, tokenReserve: 3n * 10n ** 26n, buys: Array.from({ length: 60 }, (_, i) => [i * 290, buyer(200 + i % 25), 50n * 10n ** 15n]), sells: [[9e3, buyer(201), 20n * 10n ** 15n], [15e3, buyer(202), 20n * 10n ** 15n], [17450, DEV_B, 40n * 10n ** 15n]], buybackFlips: [[17470, false]], transfers: [[17400, DEV_B, "0x0000000000000000000000000000000000000ca5", 10n ** 25n], [17450, DEV_B, "0x0000c0a7000000000000000000000000000000a7", 2n * 10n ** 24n]] },
+      fresh: { token: "0x00000000000000000000000000000000000f2e54", curve: "0x0000c0a7000000000000000000000000000f2e54", deployer: DEV_C, name: "Fresh Off The Curve", symbol: "FRESH", launched: HEAD - 90, raised: 0n, taxBps: 1000n, real: 8n * 10n ** 17n, tokenReserve: 8n * 10n ** 26n, buys: freshBuys, sells: [[85, buyer(900), 120n * 10n ** 15n], [88, buyer(901), 40n * 10n ** 15n]] },
+      nap: { token: "0x0000000000000000000000000000000000000d0e", curve: "0x0000c0a70000000000000000000000000000ad0e", deployer: DEV_B, name: "Nap Time", symbol: "NAP", launched: HEAD - 237500, raised: 0n, taxBps: 500n, real: 3n * 10n ** 17n, tokenReserve: 9n * 10n ** 26n, buys: [[5, DEV_B, 300n * 10n ** 15n]], sells: [] }
+    }
+  };
+  function encodeString(value) {
+    const bytes = new TextEncoder().encode(value);
+    const hex = Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+    return [encodeWord("uint256", 32n), encodeWord("uint256", BigInt(bytes.length)), hex.padEnd(Math.ceil(hex.length / 64) * 64, "0")].join("");
+  }
+  function blockTime(block) {
+    return DEMO.genesisTimestamp + block * 0.1;
+  }
+  function launchedRecord(t) {
+    const phase = t.graduated ? 2n : t.swept ? 1n : 0n;
+    return [
+      encodeWord("address", t.token),
+      encodeWord("address", t.curve),
+      encodeWord("address", t.deployer),
+      encodeWord("address", t.deployer),
+      encodeWord("address", ZERO_ADDRESS),
+      encodeWord("uint256", DEMO.threshold),
+      encodeWord("uint24", 10000n),
+      encodeWord("int24", 200n),
+      encodeWord("uint16", t.taxBps),
+      encodeWord("bool", true),
+      encodeWord("uint8", phase),
+      encodeWord("uint256", t.graduated ? t.raised : 0n),
+      encodeWord("uint256", t.graduated ? t.supplyToPool ?? 0n : 0n),
+      encodeWord("uint256", t.swept ? BigInt(Math.round(blockTime(t.swept))) : 0n),
+      encodeWord("bool", true)
+    ].join("");
+  }
+  function factoryLogs(from, to) {
+    const logs = [];
+    for (const t of Object.values(DEMO.tokens)) {
+      if (t.launched >= from && t.launched <= to) {
+        logs.push({ address: PONS_V2_FACTORY, topics: [eventTopic(FACTORY_EVENTS.TokenLaunched), addressTopic(t.token), addressTopic(t.curve), addressTopic(t.deployer)], data: `0x${encodeWord("address", ZERO_ADDRESS)}${encodeWord("uint256", 1n)}${encodeWord("uint256", DEMO.threshold)}`, blockNumber: `0x${t.launched.toString(16)}`, transactionHash: `0xdemo${t.symbol.toLowerCase()}launch`, logIndex: "0x0" });
+      }
+      if (t.swept && t.swept >= from && t.swept <= to) {
+        logs.push({ address: PONS_V2_FACTORY, topics: [eventTopic(FACTORY_EVENTS.LaunchSwept), addressTopic(t.token)], data: `0x${encodeWord("uint256", t.raised)}${encodeWord("uint256", t.supplyToPool ?? 0n)}`, blockNumber: `0x${t.swept.toString(16)}`, transactionHash: `0xdemo${t.symbol.toLowerCase()}sweep`, logIndex: "0x1" });
+      }
+      for (const [offset, enabled] of t.buybackFlips ?? []) {
+        const b = t.launched + offset;
+        if (b < from || b > to) continue;
+        logs.push({ address: PONS_V2_FACTORY, topics: [eventTopic(FACTORY_EVENTS.BuybackEnabledUpdated), addressTopic(t.token), addressTopic(t.deployer)], data: `0x${encodeWord("bool", enabled)}`, blockNumber: `0x${b.toString(16)}`, transactionHash: `0xdemo${t.symbol.toLowerCase()}buyback${b}`, logIndex: "0x4" });
+      }
+      for (const [offset, to_] of t.recipientMoves ?? []) {
+        const b = t.launched + offset;
+        if (b < from || b > to) continue;
+        logs.push({ address: PONS_V2_FACTORY, topics: [eventTopic(FACTORY_EVENTS.CreatorFeeRecipientUpdated), addressTopic(t.token), addressTopic(t.deployer), addressTopic(to_)], data: "0x", blockNumber: `0x${b.toString(16)}`, transactionHash: `0xdemo${t.symbol.toLowerCase()}move`, logIndex: "0x3" });
+      }
+      if (t.graduated && t.graduated >= from && t.graduated <= to) {
+        logs.push({ address: PONS_V2_FACTORY, topics: [eventTopic(FACTORY_EVENTS.PoolGraduated), addressTopic(t.token)], data: `0x${encodeWord("uint256", t.positionId ?? 0n)}${encodeWord("uint256", t.supplyToPool ?? 0n)}${encodeWord("uint256", t.raised)}`, blockNumber: `0x${t.graduated.toString(16)}`, transactionHash: `0xdemo${t.symbol.toLowerCase()}grad`, logIndex: "0x2" });
+      }
+    }
+    return logs;
+  }
+  function curveLogs(t, from, to) {
+    const buy = eventTopic(CURVE_EVENTS.CurveBuy);
+    const sell = eventTopic(CURVE_EVENTS.CurveSell);
+    const logs = [];
+    let index = 0;
+    for (const [offset, who, quoteIn, doorBps] of t.buys) {
+      const b = t.launched + offset;
+      if (b < from || b > to) continue;
+      const fee = quoteIn / 100n;
+      const tax = quoteIn * (t.taxBps + BigInt(doorBps ?? 0)) / 10000n;
+      logs.push({ address: t.curve, topics: [buy, addressTopic(who), addressTopic(who)], data: `0x${encodeWord("uint256", quoteIn)}${encodeWord("uint256", 10n ** 24n)}${encodeWord("uint256", fee)}${encodeWord("uint256", tax)}`, blockNumber: `0x${b.toString(16)}`, transactionHash: `0xdemo${t.symbol}${b}`, logIndex: `0x${(index++).toString(16)}` });
+    }
+    for (const [offset, who, quoteOut] of t.sells) {
+      const b = t.launched + offset;
+      if (b < from || b > to) continue;
+      logs.push({ address: t.curve, topics: [sell, addressTopic(who), addressTopic(who)], data: `0x${encodeWord("uint256", 10n ** 24n)}${encodeWord("uint256", quoteOut)}${encodeWord("uint256", quoteOut / 100n)}${encodeWord("uint256", 0n)}`, blockNumber: `0x${b.toString(16)}`, transactionHash: `0xdemo${t.symbol}${b}s`, logIndex: `0x${(index++).toString(16)}` });
+    }
+    return logs;
+  }
+  function demoFetch() {
+    const byToken = /* @__PURE__ */ new Map();
+    const byCurve = /* @__PURE__ */ new Map();
+    for (const t of Object.values(DEMO.tokens)) {
+      byToken.set(t.token, t);
+      byCurve.set(t.curve, t);
+    }
+    const sel = (sig) => selector(sig);
+    const poolSlots = /* @__PURE__ */ new Map();
+    for (const t of Object.values(DEMO.tokens)) {
+      if (!t.graduated) continue;
+      const { poolId, tokenIsCurrency0 } = poolIdFor(t.token, ZERO_ADDRESS, 10000n, 200n, DEMO_HOOK);
+      const token = t.supplyToPool ?? 0n;
+      const quote = t.raised;
+      const [amount0, amount1] = tokenIsCurrency0 ? [token, quote] : [quote, token];
+      const sqrtPriceX96 = isqrt(amount1 * 2n ** 192n / amount0);
+      const liquidity = isqrt(amount0 * amount1);
+      const stateSlot = keccak256Hex(hexToBytesLocal(`${poolId.slice(2)}${encodeWord("uint256", 6n)}`));
+      poolSlots.set(stateSlot, `0x${encodeWord("uint256", sqrtPriceX96)}`);
+      poolSlots.set(`0x${(BigInt(stateSlot) + 3n).toString(16).padStart(64, "0")}`, `0x${encodeWord("uint256", liquidity)}`);
+    }
+    return (async (_url, init) => {
+      const body = JSON.parse(String(init?.body));
+      const requests = Array.isArray(body) ? body : [body];
+      const responses = requests.map((request) => {
+        const ok = (result) => ({ jsonrpc: "2.0", id: request.id, result });
+        const err = (message) => ({ jsonrpc: "2.0", id: request.id, error: { code: -32e3, message } });
+        switch (request.method) {
+          case "eth_chainId":
+            return ok(`0x${ROBINHOOD_CHAIN_ID.toString(16)}`);
+          case "eth_blockNumber":
+            return ok(`0x${DEMO.head.toString(16)}`);
+          case "eth_getBlockByNumber": {
+            const tag = request.params[0];
+            const n = tag === "latest" ? DEMO.head : Number(BigInt(tag));
+            return ok({ number: `0x${n.toString(16)}`, timestamp: `0x${Math.round(blockTime(n)).toString(16)}`, hash: `0xdemo${n}` });
+          }
+          case "eth_getLogs": {
+            const f = request.params[0];
+            const from = Number(BigInt(f.fromBlock));
+            const to = Number(BigInt(f.toBlock));
+            const address = f.address ? String(f.address).toLowerCase() : void 0;
+            const all = !address ? [...factoryLogs(from, to), ...plainTokenLogs(from, to), ...Object.values(DEMO.tokens).flatMap((t) => [...curveLogs(t, from, to), ...tokenLogs(t, from, to)])] : address === PONS_V2_FACTORY ? factoryLogs(from, to) : address === DEMO_PLAIN.token ? plainTokenLogs(from, to) : byCurve.has(address) ? curveLogs(byCurve.get(address), from, to) : byToken.has(address) ? tokenLogs(byToken.get(address), from, to) : [];
+            return ok(all.filter((log) => matchesTopics(log.topics, f.topics)));
+          }
+          case "eth_getCode": {
+            const who = request.params[0].toLowerCase();
+            if (who === PONS_V2_FACTORY) return ok(DEMO_CODE.factory);
+            if (byToken.has(who)) return ok(DEMO_CODE.ponsToken);
+            if (byCurve.has(who)) return ok(DEMO_CODE.ponsCurve);
+            if (who === DEMO_IMPOSTOR.token) return ok(DEMO_CODE.impostor);
+            if (who === DEMO_V1.token || who === PONS_V1_FACTORY) return ok(DEMO_CODE.ponsToken);
+            if (who === DEMO_PLAIN.token) return ok(DEMO_CODE.plain);
+            if (who === DEMO_PLAIN.pool) return ok(DEMO_CODE.factory);
+            return ok("0x");
+          }
+          case "eth_getTransactionReceipt": {
+            const hash = request.params[0];
+            if (hash === DEMO_PLAIN.creationTx) return ok({ transactionHash: hash, blockNumber: `0x${DEMO_PLAIN.createdAt.toString(16)}`, from: DEMO_PLAIN.owner, status: "0x1", logs: [] });
+            if (hash === DEMO_IMPOSTOR.creationTx) return ok({ transactionHash: hash, blockNumber: `0x${DEMO_IMPOSTOR.createdAt.toString(16)}`, from: DEMO_IMPOSTOR.deployer, status: "0x1", logs: [] });
+            for (const t of Object.values(DEMO.tokens)) {
+              const logs = curveLogs(t, 0, DEMO.head);
+              const hit = logs.filter((l) => l.transactionHash === hash);
+              if (hit.length) return ok({ transactionHash: hash, blockNumber: hit[0].blockNumber, from: hit[0], status: "0x1", logs: hit });
+            }
+            return ok(null);
+          }
+          case "eth_getStorageAt": {
+            const [who, slot] = request.params;
+            if (who.toLowerCase() === DEMO_IMPOSTOR.token && slot === EIP1967_IMPLEMENTATION_SLOT) return ok(`0x${encodeWord("address", DEMO_IMPOSTOR.implementation)}`);
+            return ok(`0x${"0".repeat(64)}`);
+          }
+          case "eth_call": {
+            const call = request.params[0];
+            const to = call.to.toLowerCase();
+            const s = call.data.slice(0, 10);
+            if (to === PONS_V2_FACTORY) {
+              if (s === sel("getLaunchedToken(address)")) {
+                const t2 = byToken.get(`0x${call.data.slice(34)}`);
+                return ok(`0x${t2 ? launchedRecord(t2) : new Array(15).fill(encodeWord("uint256", 0n)).join("")}`);
+              }
+              if (s === sel("snipeTaxStartBps()")) return ok(`0x${encodeWord("uint256", 9900n)}`);
+              if (s === sel("snipeTaxSeconds()")) return ok(`0x${encodeWord("uint256", 15n)}`);
+              if (s === sel("maxCreatorTaxBps()")) return ok(`0x${encodeWord("uint256", 1000n)}`);
+              if (s === sel("poolManager()")) return ok(`0x${encodeWord("address", DEMO_POOL_MANAGER)}`);
+              if (s === sel("memeHook()")) return ok(`0x${encodeWord("address", DEMO_HOOK)}`);
+              if (s === sel("launchFee()")) return ok(`0x${encodeWord("uint256", 10n ** 15n)}`);
+              if (s === sel("launchConfigCount()")) return ok(`0x${encodeWord("uint256", 1n)}`);
+              if (s === sel("getLaunchConfig(uint256)")) {
+                return ok(`0x${[encodeWord("uint256", 10n ** 27n), encodeWord("uint256", 100n), encodeWord("uint256", 9n * 10n ** 17n), encodeWord("uint256", DEMO.threshold), encodeWord("uint24", 10000n), encodeWord("int24", 200n), encodeWord("bool", true)].join("")}`);
+              }
+              if (s === sel("pairTokenEconomics(address)")) return ok(`0x${[encodeWord("uint256", 0n), encodeWord("uint256", 0n), encodeWord("uint8", 18n)].join("")}`);
+            }
+            if (to === DEMO_HOOK && s === sel("currentFeePolicy()")) {
+              return ok(`0x${[encodeWord("address", "0x0000000000000000000000000000000000000fee"), encodeWord("uint16", 3000n), encodeWord("uint16", 5000n), encodeWord("uint16", 100n), encodeWord("uint16", 300n)].join("")}`);
+            }
+            if (to === DEMO_POOL_MANAGER && s === sel("extsload(bytes32)")) {
+              const slot = `0x${call.data.slice(10, 74)}`;
+              const word = poolSlots.get(slot);
+              return ok(word ?? `0x${"0".repeat(64)}`);
+            }
+            const t = byToken.get(to);
+            if (t) {
+              if (s === sel("name()")) return ok(`0x${encodeString(t.name)}`);
+              if (s === sel("symbol()")) return ok(`0x${encodeString(t.symbol)}`);
+              if (s === sel("decimals()")) return ok(`0x${encodeWord("uint8", 18n)}`);
+              if (s === sel("totalSupply()")) return ok(`0x${encodeWord("uint256", 10n ** 27n)}`);
+              if (s === sel("balanceOf(address)")) {
+                const who = `0x${call.data.slice(34)}`;
+                if (who === t.deployer) return ok(`0x${encodeWord("uint256", 3n * 10n ** 25n)}`);
+                if (who === t.curve) return ok(`0x${encodeWord("uint256", t.tokenReserve)}`);
+                return ok(`0x${encodeWord("uint256", 0n)}`);
+              }
+            }
+            if (to === PONS_V1_FACTORY) {
+              if (s === sel("getLaunchedToken(address)")) {
+                const who = `0x${call.data.slice(34)}`;
+                if (who !== DEMO_V1.token) return ok(`0x${new Array(13).fill(encodeWord("uint256", 0n)).join("")}`);
+                return ok(`0x${[encodeWord("address", DEMO_V1.token), encodeWord("address", DEMO_V1.deployer), encodeWord("address", ZERO_ADDRESS), encodeWord("address", "0x0000000000000000000000000000000000009051"), encodeWord("uint256", DEMO_V1.positionId), encodeWord("uint256", 0n), encodeWord("uint256", 0n), encodeWord("uint256", DEMO_V1.restrictionsEndBlock), encodeWord("uint256", 10n ** 27n), encodeWord("bool", false), encodeWord("uint24", 10000n), encodeWord("bool", true), encodeWord("uint256", 5n * 10n ** 16n)].join("")}`);
+              }
+              if (s === sel("graduationStatus(address)")) return ok(`0x${[encodeWord("uint256", 12n * 10n ** 17n), encodeWord("uint256", 3n * 10n ** 18n), encodeWord("bool", false)].join("")}`);
+              if (s === sel("getLaunchConfig(uint256)")) return ok(`0x${[encodeWord("address", ZERO_ADDRESS), encodeWord("uint256", 3n * 10n ** 18n), encodeWord("int24", -200000n), encodeWord("uint256", 10n ** 27n), encodeWord("uint16", 200n), encodeWord("uint16", 100n), encodeWord("uint32", 300n), encodeWord("uint24", 10000n), encodeWord("bool", true), encodeWord("bool", false)].join("")}`);
+              if (s === sel("locker()")) return ok(`0x${encodeWord("address", "0x00000000000000000000000000000000000010c4")}`);
+            }
+            if (to === DEMO_V1.token) {
+              if (s === sel("name()")) return ok(`0x${encodeString(DEMO_V1.name)}`);
+              if (s === sel("symbol()")) return ok(`0x${encodeString(DEMO_V1.symbol)}`);
+              if (s === sel("decimals()")) return ok(`0x${encodeWord("uint8", 18n)}`);
+              if (s === sel("totalSupply()")) return ok(`0x${encodeWord("uint256", 10n ** 27n)}`);
+            }
+            const dex = CHAINS.robinhood.dex;
+            if ((dex.v3Factories ?? []).some((f) => f.address === to) && s === sel("getPool(address,address,uint24)")) {
+              const [a, , fee] = [`0x${call.data.slice(34, 74)}`, 0, BigInt(`0x${call.data.slice(138, 202)}`)];
+              return ok(`0x${encodeWord("address", a === DEMO_PLAIN.token && fee === 3000n ? DEMO_PLAIN.pool : ZERO_ADDRESS)}`);
+            }
+            if (to === dex.weth && s === sel("balanceOf(address)")) {
+              const who = `0x${call.data.slice(34)}`;
+              return ok(`0x${encodeWord("uint256", who === DEMO_PLAIN.pool ? DEMO_PLAIN.poolWeth : 0n)}`);
+            }
+            if (to === DEMO_PLAIN.pool) {
+              const tokens = DEMO_PLAIN.supply * 3000n / 10000n;
+              if (s === sel("token0()")) return ok(`0x${encodeWord("address", DEMO_PLAIN.token)}`);
+              if (s === sel("fee()")) return ok(`0x${encodeWord("uint24", 3000n)}`);
+              if (s === sel("liquidity()")) return ok(`0x${encodeWord("uint128", isqrt(tokens * DEMO_PLAIN.poolWeth))}`);
+              if (s === sel("slot0()")) {
+                const sqrtPriceX96 = isqrt(DEMO_PLAIN.poolWeth * 2n ** 192n / tokens);
+                return ok(
+                  `0x${[
+                    encodeWord("uint160", sqrtPriceX96),
+                    encodeWord("int24", 0n),
+                    encodeWord("uint16", 0n),
+                    encodeWord("uint16", 1n),
+                    encodeWord("uint16", 1n),
+                    encodeWord("uint8", 0n),
+                    encodeWord("bool", true)
+                  ].join("")}`
+                );
+              }
+            }
+            if (to === DEMO_PLAIN.token) {
+              const from = call.from?.toLowerCase();
+              if (s === sel("name()")) return ok(`0x${encodeString(DEMO_PLAIN.name)}`);
+              if (s === sel("symbol()")) return ok(`0x${encodeString(DEMO_PLAIN.symbol)}`);
+              if (s === sel("decimals()")) return ok(`0x${encodeWord("uint8", 18n)}`);
+              if (s === sel("totalSupply()")) return ok(`0x${encodeWord("uint256", DEMO_PLAIN.supply)}`);
+              if (s === sel("owner()")) return ok(`0x${encodeWord("address", DEMO_PLAIN.owner)}`);
+              if (s === sel("paused()")) return ok(`0x${encodeWord("bool", false)}`);
+              if (s === sel("tradingOpen()")) return ok(`0x${encodeWord("bool", true)}`);
+              if (s === sel("balanceOf(address)")) {
+                const who = `0x${call.data.slice(34)}`;
+                const row = DEMO_PLAIN.holders.find((h) => h[0] === who);
+                return ok(`0x${encodeWord("uint256", row ? DEMO_PLAIN.supply * BigInt(row[1]) / 10000n : 0n)}`);
+              }
+              if (s === sel("transfer(address,uint256)")) {
+                if (from === DEMO_PLAIN.blacklisted) return { jsonrpc: "2.0", id: request.id, error: { code: 3, message: "execution reverted: Blacklisted", data: `0x08c379a0${encodeString("Blacklisted")}` } };
+                return ok(`0x${encodeWord("bool", true)}`);
+              }
+            }
+            if (to === DEMO_IMPOSTOR.token) {
+              if (s === sel("name()")) return ok(`0x${encodeString("Sprint")}`);
+              if (s === sel("symbol()")) return ok(`0x${encodeString("SPRINT")}`);
+              if (s === sel("decimals()")) return ok(`0x${encodeWord("uint8", 18n)}`);
+              if (s === sel("totalSupply()")) return ok(`0x${encodeWord("uint256", 10n ** 27n)}`);
+            }
+            const c = byCurve.get(to);
+            if (c) {
+              const one = (v, type) => ok(`0x${encodeWord(type, v)}`);
+              if (s === sel("token()")) return ok(`0x${encodeWord("address", c.token)}`);
+              if (s === sel("getReserves()")) return ok(`0x${encodeWord("uint256", c.real + 9n * 10n ** 17n)}${encodeWord("uint256", c.tokenReserve)}`);
+              if (s === sel("realQuoteReserve()")) return one(c.real, "uint256");
+              if (s === sel("graduationThreshold()")) return one(DEMO.threshold, "uint256");
+              if (s === sel("phantomQuote()")) return one(9n * 10n ** 17n, "uint256");
+              if (s === sel("feeBps()")) return one(100n, "uint256");
+              if (s === sel("creatorTaxBps()")) return one(c.taxBps, "uint256");
+              if (s === sel("readyToGraduate()")) return one(c.tokenReserve === 0n, "bool");
+              if (s === sel("graduated()")) return one(Boolean(c.swept), "bool");
+              if (s === sel("quoteFeeBalance()")) return one(10n ** 16n, "uint256");
+              if (s === sel("creatorTaxBalance()")) return one(3n * 10n ** 16n, "uint256");
+              if (s === sel("buybackQuoteBalance()")) return one(2n * 10n ** 16n, "uint256");
+              if (s === sel("isNativeQuote()")) return one(true, "bool");
+            }
+            return { jsonrpc: "2.0", id: request.id, error: { code: 3, message: "execution reverted", data: "0x" } };
+          }
+          default:
+            return err(`demo chain does not serve ${request.method}`);
+        }
+      });
+      return new Response(JSON.stringify(Array.isArray(body) ? responses : responses[0]), { headers: { "content-type": "application/json" } });
+    });
+  }
+  function isqrt(n) {
+    if (n < 2n) return n;
+    let x = n;
+    let y = (x + 1n) / 2n;
+    while (y < x) {
+      x = y;
+      y = (x + n / x) / 2n;
+    }
+    return x;
+  }
+  function hexToBytesLocal(hex) {
+    const out2 = new Uint8Array(hex.length / 2);
+    for (let i = 0; i < out2.length; i++) out2[i] = parseInt(hex.slice(i * 2, i * 2 + 2), 16);
+    return out2;
+  }
+  function demoBlockscoutFetch() {
+    const tokens = Object.values(DEMO.tokens);
+    return (async (input) => {
+      const url = new URL(String(input instanceof Request ? input.url : input));
+      const json = (body) => new Response(JSON.stringify(body), { headers: { "content-type": "application/json" } });
+      const m = url.pathname.match(/^\/api\/v2\/addresses\/(0x[0-9a-f]{40})\/transactions$/i);
+      if (m) {
+        const who = m[1].toLowerCase();
+        const fresh = DEMO.tokens.fresh;
+        const funded = /* @__PURE__ */ new Set([buyer(900), buyer(901)]);
+        const items = funded.has(who) ? [{ hash: `0xdemofund${who.slice(-4)}`, value: (10n ** 18n).toString(), block_number: fresh.launched - 400, from: { hash: DEMO_FUNDER }, to: { hash: who } }] : [];
+        return json({ items, next_page_params: null });
+      }
+      if (url.pathname === "/api/v2/search") {
+        const q2 = (url.searchParams.get("q") ?? "").toUpperCase();
+        const items = tokens.filter((t) => t.symbol.toUpperCase() === q2).map((t) => ({ type: "token", address: t.token, name: t.name, symbol: t.symbol }));
+        if (q2 === "SPRINT") items.push({ type: "token", address: DEMO_IMPOSTOR.token, name: "Sprint", symbol: "SPRINT" });
+        return json({ items });
+      }
+      const v = url.pathname.match(/^\/api\/v2\/smart-contracts\/(0x[0-9a-f]{40})$/i);
+      if (v) return json({ is_verified: tokens.some((t) => t.token === v[1].toLowerCase() || t.curve === v[1].toLowerCase()) });
+      const plain = DEMO_PLAIN;
+      if (url.pathname === `/api/v2/addresses/${plain.token}`) return json({ is_contract: true, is_verified: false, name: null, creator_address_hash: plain.owner, creation_transaction_hash: plain.creationTx });
+      if (url.pathname === `/api/v2/addresses/${DEMO_IMPOSTOR.token}`) {
+        return json({ is_contract: true, is_verified: false, is_scam: false, name: null, creator_address_hash: DEMO_IMPOSTOR.deployer, creation_transaction_hash: DEMO_IMPOSTOR.creationTx });
+      }
+      if (url.pathname === `/api/v2/tokens/${plain.token}`) return json({ holders_count: "143", type: "ERC-20", name: plain.name, symbol: plain.symbol });
+      if (url.pathname === `/api/v2/tokens/${plain.token}/counters`) return json({ token_holders_count: "143", transfers_count: "2210" });
+      if (url.pathname === `/api/v2/tokens/${plain.token}/holders`) {
+        return json({
+          items: plain.holders.map(([hash, bps3, is_contract, name, delegated]) => ({
+            address: { hash, is_contract, name, proxy_type: delegated ? "eip7702" : null },
+            value: (plain.supply * BigInt(bps3) / 10000n).toString()
+          })),
+          next_page_params: null
+        });
+      }
+      if (url.pathname === `/api/v2/tokens/${plain.token}/transfers`) {
+        const at = (block) => new Date(Math.round(DEMO.genesisTimestamp + block * 0.1) * 1e3).toISOString();
+        const items = [DEMO.head - 1200, DEMO.head - 4e3, DEMO.head - 9e3].map((block, i) => ({ block_number: block, timestamp: at(block), from: { hash: plain.pool }, to: { hash: buyer(500 + i) }, total: { value: (10n ** 24n).toString() }, transaction_hash: `0xdemoplainxfer${i}` }));
+        return json({ items, next_page_params: null });
+      }
+      return new Response("not found", { status: 404 });
+    });
+  }
+  function plainTokenLogs(from, to) {
+    const logs = [];
+    const recipients = DEMO_PLAIN.holders.filter(([, , isContract]) => !isContract).map(([hash]) => hash);
+    recipients.forEach((who, i) => {
+      const b = DEMO.head - 40 + i;
+      if (b < from || b > to) return;
+      logs.push({
+        address: DEMO_PLAIN.token,
+        topics: [eventTopic(ERC20_EVENTS.Transfer), addressTopic(DEMO_PLAIN.pool), addressTopic(who)],
+        data: `0x${encodeWord("uint256", 10n ** 21n)}`,
+        blockNumber: `0x${b.toString(16)}`,
+        transactionHash: `0xdemoplainxfer${i}`,
+        logIndex: `0x${i.toString(16)}`
+      });
+    });
+    return logs;
+  }
+  function tokenLogs(t, from, to) {
+    const logs = [];
+    let index = 0;
+    for (const [offset, from_, to_, amount] of t.transfers ?? []) {
+      const b = t.launched + offset;
+      if (b < from || b > to) continue;
+      logs.push({ address: t.token, topics: [eventTopic(ERC20_EVENTS.Transfer), addressTopic(from_), addressTopic(to_)], data: `0x${encodeWord("uint256", amount)}`, blockNumber: `0x${b.toString(16)}`, transactionHash: `0xdemo${t.symbol}xfer${b}`, logIndex: `0x${(index++).toString(16)}` });
+    }
+    return logs;
+  }
+  function matchesTopics(topics, filter) {
+    if (!filter) return true;
+    return filter.every((want, i) => {
+      if (want === null || want === void 0) return true;
+      const have = (topics[i] ?? "").toLowerCase();
+      return Array.isArray(want) ? want.some((w) => w.toLowerCase() === have) : want.toLowerCase() === have;
+    });
+  }
+  var CBOR_TRAILER = "a2646970667358221220" + "ff".repeat(4) + "f4".repeat(4) + "ab".repeat(26) + "64736f6c63430008260035";
+  var DEMO_CODE = {
+    factory: `0x6080604052${"5b".repeat(40)}00${CBOR_TRAILER}`,
+    ponsToken: `0x60806040527f${"ff".repeat(16)}${"f4".repeat(16)}5b${"5b".repeat(200)}00${CBOR_TRAILER}`,
+    ponsCurve: `0x60806040527f${"00".repeat(32)}5b${"5b".repeat(900)}00${CBOR_TRAILER}`,
+    impostor: `0x6080604052${"5b".repeat(20)}f4${"5b".repeat(20)}ff00${CBOR_TRAILER}`,
+    /** A dispatcher: PUSH4 <selector> EQ PUSH2 <dest> JUMPI for each function the plain token has. */
+    plain: `0x6080604052${DEMO_PLAIN.powers.map((sig) => `63${selector(sig).slice(2)}1461${"0000"}57`).join("")}${"5b".repeat(60)}00${CBOR_TRAILER}`
+  };
+  function demoRpc(memo = false) {
+    return new RpcClient({ urls: ["demo://robinhood-chain"], expectedChainId: ROBINHOOD_CHAIN_ID, fetchImpl: demoFetch(), minSpacingMs: 0, memo });
   }
 
   // src/bouncer/mascot.ts
@@ -7835,7 +7843,7 @@
   function verdictBlock(opts) {
     const stage = opts.stage ?? "done";
     const v = verdictOf(opts.notes, stage, opts.coverage);
-    const stampClass = opts.stamp === "ON THE LIST" ? "yes" : opts.stamp === "NOT A LAUNCH" ? "mid" : "no";
+    const stampClass = stampTone(opts.stamp);
     const pending = stage === "done" ? "" : `<span class="vpend">${esc2(opts.stillReading ?? STILL_READING[stage])}</span>`;
     const findings = opts.notes.filter((n) => topicOf(n.code) !== "unread").length;
     const counts = findings ? `${findings} finding${findings === 1 ? "" : "s"}` : "nothing to flag";
@@ -7918,11 +7926,13 @@
     ).join("");
     const missing = missingVenues(chainKey);
     const gap = missing.length ? `<p class="buy-gap">${esc2(missing.join(" and "))} ${missing.length === 1 ? "is" : "are"} not linked on this chain: BOUNCER has no confirmed address for ${missing.length === 1 ? "it" : "them"} here, and a guessed link is a dead one.</p>` : "";
-    const head = verdict === "stop" ? "Buy it anyway?" : "Buy it";
+    const head = verdict === "stop" ? "Open it on a venue anyway?" : "Open it on a venue";
     const lead = verdict === "stop" ? "The slip above says STOP: something here can cost you money outright. The links are not hidden \u2014 this page does not decide for anybody \u2014 but read the red lines first, because nothing on the other side of them will." : verdict === "watch" ? "The slip above has things worth reading first. These open the token on someone else's venue; BOUNCER cannot trade and holds no key." : "BOUNCER cannot trade and holds no key. These open the token on someone else's venue. Read the slip above first; nothing here changes what it says.";
+    const disclosure = `<p class="buy-disc"><strong>These are referral links.</strong> BOUNCER earns a share if you trade through one. Nothing on this page is ordered, worded or coloured because of that \u2014 the venues are listed in a fixed order, no venue paid to be here, and a venue with no confirmed address for this chain is named as missing rather than dropped.</p>`;
     return `<section class="buy${verdict === "stop" ? " buy-stop" : ""}">
     <div class="buy-head"><h2>${head}</h2></div>
     <p class="qblurb">${lead}</p>
+    ${disclosure}
     <div class="buy-links">${links}</div>
     ${gap}
   </section>`;
@@ -8004,7 +8014,7 @@
       sym,
       name,
       address: slip.subject,
-      stamp: slip.stamp,
+      stamp: stampLabel(slip.stamp, null),
       at: `${esc2(slip.chain.name)} \xB7 ${esc2(solanaWhen(slip))}${slip.at.timestamp ? ` \xB7 ${isoUtc(slip.at.timestamp)}` : ""}`,
       notes: slip.notes,
       lead: splSentence(slip, blocked),
@@ -8016,12 +8026,12 @@
     })}
     ${answerCards(slip.notes)}
     ${unreadStrip(slip.notes, slip.skipped)}
-    ${buyStrip(slip.chain.key, slip.subject, Boolean(slip.mint), verdictOf(slip.notes, "done", coverage).kind)}
     <div class="stack">
       ${section("s-id", "Is it real?", "What this address actually is, who can print more of it, and who can freeze what you hold.", idBody, false)}
       ${extBody ? section("s-ext", "Token-2022 extensions", "The rules the token program itself enforces on every transfer.", extBody, false) : ""}
       ${holdersBodyText ? section("s-holders", "Who holds it", "The largest token accounts and the wallets behind them.", holdersBodyText, false) : ""}
     </div>
+    ${buyStrip(slip.chain.key, slip.subject, Boolean(slip.mint), verdictOf(slip.notes, "done", coverage).kind)}
   </div>`;
     $("act-share").addEventListener("click", async (event) => {
       const button = event.currentTarget;
@@ -8316,7 +8326,7 @@
       sym,
       name,
       address: slip.subject,
-      stamp: slip.stamp,
+      stamp: stampLabel(slip.stamp, slip.chain.launchpad),
       at: `${mode === "demo" ? "DEMO \xB7 " : ""}${esc2(slip.chain.name)} \xB7 block ${slip.at.block} \xB7 ${isoUtc(slip.at.timestamp)}`,
       notes: slip.notes,
       lead: summarySentence(slip),
@@ -8328,7 +8338,6 @@
     <div class="card-wrap" id="card"></div>
     ${answerCards(slip.notes)}
     ${unreadStrip(slip.notes, slip.skipped)}
-    ${buyStrip(mode === "demo" ? "" : slip.chain.key, slip.subject, Boolean(slip.id.meta) && slip.open?.transferFunction !== false, verdictOf(slip.notes, "done", coverage).kind)}
     <h2 class="stack-head">The evidence</h2>
     <div class="stack">
       ${section("s-id", "Is it real?", "Did the launchpad's factory deploy this token, and can its code change later?", idBody, false)}
@@ -8345,6 +8354,7 @@
       ${d ? section("s-dev", "This dev before", `Everything this deployer launched in the last ${mode === "demo" ? "8" : "24"} h and how it went.`, devSection(d, slip.subject, false, true), false) : ""}
       ${registered && !v1 ? section("s-watch", "Watch for changes", "Get told when the dev moves, right in this tab.", watchBody, new URLSearchParams(location.hash.split("?")[1] ?? "").get("watch") === "1") : ""}
     </div>
+    ${buyStrip(mode === "demo" ? "" : slip.chain.key, slip.subject, Boolean(slip.id.meta) && slip.open?.transferFunction !== false, verdictOf(slip.notes, "done", coverage).kind)}
   </div>`;
     const cardSvg = () => {
       noteCard("door", slip.id.meta?.symbol ?? slip.subject);

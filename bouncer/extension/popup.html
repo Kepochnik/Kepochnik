@@ -322,7 +322,10 @@ body.answered .chips{display:none}
 .vname{color:var(--dim);font-size:13px}
 .vstamp{font:500 10px/1 var(--mono);letter-spacing:.16em;border:1px solid var(--watch-edge);color:var(--brass);border-radius:0;padding:4px 8px;white-space:nowrap;background:none}
 .vstamp.no{border-color:var(--stop-edge);color:var(--stop)}
-.vstamp.mid{border-color:var(--watch-edge);color:var(--watch)}
+/* An ordinary token is a fact, not a warning. This used to be amber, and
+   amber is this palette's WATCH — so "NOT A LAUNCH" on BONK and on USDC
+   read as a finding against two of the best-known tokens there are. */
+.vstamp.flat{border-color:var(--line-2);color:var(--muted)}
 .vstamp.yes{border-color:var(--ok-edge);color:var(--ok)}
 /* The address is a copy button that must not look like one: it is the
    reference line at the bottom of a reading, not a control. */

@@ -58,6 +58,8 @@ if (!url) {
   process.exit(1);
 }
 const live = url.startsWith("http");
+/** Walks that could not run here. Counted so the summary cannot claim them. */
+let skipped = 0;
 console.log(`flows: walking ${url}${live ? "" : " (local build: the two journeys that need an explorer are skipped)"}`);
 
 const browser = await chromium.launch({ executablePath });
@@ -94,6 +96,22 @@ async function walk(name, fn) {
     await page.close();
     await context.close();
   }
+}
+
+/**
+ * A walk that only means anything against the deployed site.
+ *
+ * Skipped loudly rather than quietly: a check that silently passes when it
+ * could not run is worse than no check, because the green is what gets
+ * believed.
+ */
+async function walkLive(name, fn) {
+  if (!live) {
+    skipped++;
+    console.log(`  --  ${name} (needs the deployed site; pass a URL to run it)`);
+    return;
+  }
+  return walk(name, fn);
 }
 
 /** Waits for a verdict word that is not the page saying it has none yet. */
@@ -412,10 +430,42 @@ await walk("a feature a chain cannot serve says why, not Method not found", asyn
   const ok = await page.$$eval(".more a", (els) => els.map((e) => e.textContent.trim()));
   if (!ok.some((l) => /board/i.test(l))) throw new Error(`Robinhood Chain lost its board too: ${JSON.stringify(ok)}`);
 });
+// The venue strip needs a real chain: the demo chain deliberately has no
+// venues, because linking somebody off to buy an invented token is the one
+// thing the demo must never do. So this is one of the walks that needs the
+// deployed site, and it says so rather than passing on an empty page.
+await walkLive("the paid links sit after the evidence and say they are paid", async (page) => {
+  // Two findings in one place. The strip was headed "Buy it" — the only
+  // imperative on a page whose whole claim is that it tells nobody what to
+  // do — and it sat above the evidence sections. And the links pay
+  // BOUNCER, which was disclosed to crawlers in rel="sponsored" and to no
+  // human anywhere.
+  await page.goto(`${url}#/demo/0x0000000000000000000000000000000000f1a1a1`, { waitUntil: "load" });
+  await waitForDone(page);
+
+  const buy = await page.$(".buy");
+  if (!buy) throw new Error("no venue strip to check");
+
+  const head = await page.$eval(".buy-head h2", (el) => el.textContent.trim());
+  if (/^buy it/i.test(head)) throw new Error(`the strip still tells the reader to buy: "${head}"`);
+
+  const disc = await page.$eval(".buy-disc", (el) => el.textContent.replace(/\s+/g, " ").trim()).catch(() => "");
+  if (!/referral/i.test(disc)) throw new Error(`the links do not say they are referral links: "${disc}"`);
+  if (!/earns|paid|share/i.test(disc)) throw new Error(`the disclosure does not say BOUNCER is paid: "${disc}"`);
+
+  // Below the evidence, measured rather than assumed.
+  const order = await page.evaluate(() => {
+    const y = (s) => { const e = document.querySelector(s); return e ? e.getBoundingClientRect().top + scrollY : null; };
+    return { buy: y(".buy"), stack: y(".stack"), verdict: y(".verdict") };
+  });
+  if (order.stack === null) throw new Error("no evidence stack on this slip");
+  if (order.buy < order.stack) throw new Error(`the paid links are above the evidence (${Math.round(order.buy)} vs ${Math.round(order.stack)})`);
+  if (order.buy < order.verdict) throw new Error("the paid links are above the verdict");
+});
 await browser.close();
 if (failures) {
   console.error(`\nflows: ${failures} journey${failures === 1 ? "" : "s"} broken.`);
   process.exit(1);
 }
-console.log("flows: every journey walked end to end");
+console.log(skipped ? `flows: every journey that could run here walked end to end; ${skipped} needed the deployed site` : "flows: every journey walked end to end");
 

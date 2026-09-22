@@ -42,6 +42,41 @@ export interface DoorNote {
  */
 export type Stamp = "ON THE LIST" | "NOT A LAUNCH" | "NOT ON THE LIST";
 
+/**
+ * The stamp in the words a reader should see, which are not the words the
+ * data uses.
+ *
+ * "NOT A LAUNCH" appeared on BONK and on USDC, boxed in amber — and in
+ * this palette amber means look at this. So the most ordinary fact a
+ * token can have, that a launchpad did not create it, was rendered as a
+ * finding against two of the best-known tokens there are. It is not a
+ * finding. It is not even unusual: on a chain with no launchpad BOUNCER
+ * knows, it is true of every token that will ever be pasted in.
+ *
+ * The stored value does not change — it is in JSON, in receipts and in
+ * whatever somebody already built on the MCP server — only what is shown.
+ * And what is shown says which check was run rather than which club the
+ * token failed to get into.
+ */
+export function stampLabel(stamp: Stamp, launchpad: string | null): string {
+  if (stamp === "ON THE LIST") return launchpad ? `${launchpad.toUpperCase()} LAUNCH` : "ON THE LIST";
+  if (stamp === "NOT ON THE LIST") return "NOT ON THE LIST";
+  // Where there is a launchpad, "not one of its launches" is worth
+  // saying, because the reader may have been told it was. Where there is
+  // none, saying it is noise, and the honest label is the check that
+  // actually ran.
+  return launchpad ? `NOT A ${launchpad.toUpperCase()} LAUNCH` : "ORDINARY TOKEN";
+}
+
+/** How loud the stamp should be. An ordinary token is not a warning. */
+export function stampTone(stamp: Stamp): "yes" | "flat" | "no" {
+  if (stamp === "ON THE LIST") return "yes";
+  // Amber used to live here, and amber is this palette's WATCH. A
+  // contract the launchpad did not make is a fact, not a thing to watch.
+  if (stamp === "NOT A LAUNCH") return "flat";
+  return "no";
+}
+
 export interface DoorSlip {
   chain: { key: string; name: string; chainId: number; launchpad: string | null; native: { symbol: string; decimals: number } };
   at: { block: number; timestamp: number };

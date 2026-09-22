@@ -60,3 +60,23 @@ test("the matrix is derived from the config, so a published factory turns its fe
   assert.equal(canDo(nowhere, "board"), false);
   assert.equal(canDo(somewhere, "board"), true, "publishing a factory must be all it takes");
 });
+
+test("an ordinary token is not stamped as a shortfall", async () => {
+  const { stampLabel, stampTone } = await import("../src/bouncer/door.js");
+  // The audit: "NOT A LAUNCH" appeared on BONK and on USDC, boxed in the
+  // palette's WATCH amber. On a chain with no launchpad BOUNCER knows it
+  // is true of every token that will ever be pasted in, so it carries no
+  // information and reads as an accusation.
+  assert.equal(stampLabel("NOT A LAUNCH", null), "ORDINARY TOKEN");
+  assert.equal(stampTone("NOT A LAUNCH"), "flat", "an ordinary token must not be coloured like a warning");
+  assert.notEqual(stampTone("NOT A LAUNCH"), "no");
+
+  // Where there IS a launchpad the distinction is worth drawing, because
+  // the reader may have been told this token was one of its launches.
+  assert.equal(stampLabel("NOT A LAUNCH", "Pons V2"), "NOT A PONS V2 LAUNCH");
+  assert.equal(stampLabel("ON THE LIST", "Pons V2"), "PONS V2 LAUNCH");
+
+  // The one stamp that IS a warning keeps its voice: a token wearing the
+  // ticker of a real launch is exactly what this tool exists to catch.
+  assert.equal(stampTone("NOT ON THE LIST"), "no");
+});

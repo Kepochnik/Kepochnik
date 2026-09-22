@@ -13,6 +13,7 @@
  */
 import { formatBps } from "../format.js";
 import { isoUtc, shortAddress } from "../format.js";
+import { stampLabel } from "./door.js";
 import type { DoorSlip } from "./door.js";
 import type { DoorNote, NoteLevel } from "./door.js";
 import type { SplSlip } from "./spl.js";
@@ -163,7 +164,7 @@ export function doorCard(slip: DoorSlip, options: CardOptions): string {
       name: meta ? clip(meta.name, 34) : slip.known ? "known contract" : "no name on chain",
       lead: options.lead,
       address: slip.subject,
-      stamp: slip.stamp,
+      stamp: stampLabel(slip.stamp, slip.chain.launchpad),
       notes: slip.notes,
       facts: facts(slip),
       coverage: doorCoverage(slip),
@@ -187,8 +188,10 @@ export function splCard(slip: SplSlip, options: CardOptions): string {
       ticker: clip(slip.metadata?.symbol || shortAddress(slip.subject), 12),
       lead: options.lead,
       name: clip(slip.metadata?.name || slip.whatItIs || "no name on chain", 34),
+      // Solana has no launchpad BOUNCER knows, so every mint here is an
+      // ordinary token and stamping that as a shortfall is noise.
       address: slip.subject,
-      stamp: slip.stamp,
+      stamp: stampLabel(slip.stamp, null),
       notes: slip.notes as DoorNote[],
       facts: [
         { label: "FREEZE YOU", value: m?.freezeAuthority ? "YES" : m ? "NO" : "UNREAD", bad: Boolean(m?.freezeAuthority), note: m?.freezeAuthority ? "a freeze authority is set" : m ? "no freeze authority" : "the mint would not answer" },
@@ -280,7 +283,11 @@ function renderCard(model: CardModel, options: CardOptions): string {
     .join("");
 
   const stamp = model.stamp;
-  const stampColor = stamp === "ON THE LIST" ? c.ok : stamp === "NOT A LAUNCH" ? c.watch : c.stop;
+  // Amber is this palette's WATCH, and it used to box "NOT A LAUNCH" —
+  // which appeared on BONK and on USDC. An ordinary token is a fact, not
+  // a thing to watch, so it is drawn in the same grey as the rest of the
+  // record line.
+  const stampColor = /NOT ON THE LIST/.test(stamp) ? c.stop : /ORDINARY TOKEN|^NOT A /.test(stamp) ? c.dim : c.ok;
   const stampW = stamp.length * 8.4 + 22;
   // Split the same way the page splits it. The card used to print one
   // total across findings AND the things that went unread, which is a

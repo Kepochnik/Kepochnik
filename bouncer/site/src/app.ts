@@ -24,7 +24,7 @@ import { doorCard, splCard } from "../../src/bouncer/card.js";
 import { coverChargeLine } from "../../src/bouncer/coverCharge.js";
 import { DEMO, DEMO_BLOCKSCOUT, DEMO_IMPOSTOR, DEMO_PLAIN, DEMO_V1, demoBlockscoutFetch, demoRpc } from "../../src/bouncer/demo.js";
 import { devReportLine, readDevReport, type DevReport } from "../../src/bouncer/devReport.js";
-import { findLaunchBlock, impostorOf, readDoor, slipJson, type DoorNote, type DoorSlip } from "../../src/bouncer/door.js";
+import { findLaunchBlock, impostorOf, readDoor, slipJson, stampLabel, stampTone, type DoorNote, type DoorSlip } from "../../src/bouncer/door.js";
 import { lookalikeLine, registeredLookalikes } from "../../src/bouncer/lookalike.js";
 import { MASCOT_SVG_INNER } from "../../src/bouncer/mascot.js";
 import { oneCrewLine } from "../../src/bouncer/oneCrew.js";
@@ -1221,7 +1221,7 @@ function verdictBlock(opts: {
 }): string {
   const stage = opts.stage ?? "done";
   const v = verdictOf(opts.notes, stage, opts.coverage);
-  const stampClass = opts.stamp === "ON THE LIST" ? "yes" : opts.stamp === "NOT A LAUNCH" ? "mid" : "no";
+  const stampClass = stampTone(opts.stamp as never);
   // The level counts are gone from here.
   //
   // They read "5 careful · 9 note" — fourteen — above a ledger showing two
@@ -1418,16 +1418,26 @@ function buyStrip(chainKey: string, address: string, sellable = true, verdict: "
   // The strip takes the verdict's word for it. A neutral "buy it" heading
   // under a red STOP reads as the page arguing with itself, and a reader who
   // scrolled straight here should meet the finding, not the links.
-  const head = verdict === "stop" ? "Buy it anyway?" : "Buy it";
+  // "Buy it" is the one imperative on a page whose whole claim is that it
+  // does not tell anybody what to do. It is an instruction, in a heading,
+  // above the evidence — and the links under it pay BOUNCER. Neither half
+  // was disclosed to the reader: rel="sponsored" is for crawlers, and no
+  // human has ever read one.
+  const head = verdict === "stop" ? "Open it on a venue anyway?" : "Open it on a venue";
   const lead =
     verdict === "stop"
       ? "The slip above says STOP: something here can cost you money outright. The links are not hidden — this page does not decide for anybody — but read the red lines first, because nothing on the other side of them will."
       : verdict === "watch"
         ? "The slip above has things worth reading first. These open the token on someone else's venue; BOUNCER cannot trade and holds no key."
         : "BOUNCER cannot trade and holds no key. These open the token on someone else's venue. Read the slip above first; nothing here changes what it says.";
+  // Said plainly, in the reader's line of sight, at the moment it is
+  // relevant. A tool whose only asset is that it sells you nothing cannot
+  // have a payment it did not mention.
+  const disclosure = `<p class="buy-disc"><strong>These are referral links.</strong> BOUNCER earns a share if you trade through one. Nothing on this page is ordered, worded or coloured because of that — the venues are listed in a fixed order, no venue paid to be here, and a venue with no confirmed address for this chain is named as missing rather than dropped.</p>`;
   return `<section class="buy${verdict === "stop" ? " buy-stop" : ""}">
     <div class="buy-head"><h2>${head}</h2></div>
     <p class="qblurb">${lead}</p>
+    ${disclosure}
     <div class="buy-links">${links}</div>
     ${gap}
   </section>`;
@@ -1565,7 +1575,7 @@ function renderSplSlip(slip: SplSlip, opts: { stage?: Stage } = {}): void {
       sym,
       name,
       address: slip.subject,
-      stamp: slip.stamp,
+      stamp: stampLabel(slip.stamp, null),
       at: `${esc(slip.chain.name)} · ${esc(solanaWhen(slip))}${slip.at.timestamp ? ` · ${isoUtc(slip.at.timestamp)}` : ""}`,
       notes: slip.notes as DoorNote[],
       lead: splSentence(slip, blocked),
@@ -1577,12 +1587,12 @@ function renderSplSlip(slip: SplSlip, opts: { stage?: Stage } = {}): void {
     })}
     ${answerCards(slip.notes as DoorNote[])}
     ${unreadStrip(slip.notes as DoorNote[], slip.skipped)}
-    ${buyStrip(slip.chain.key, slip.subject, Boolean(slip.mint), verdictOf(slip.notes as DoorNote[], "done", coverage).kind)}
     <div class="stack">
       ${section("s-id", "Is it real?", "What this address actually is, who can print more of it, and who can freeze what you hold.", idBody, false)}
       ${extBody ? section("s-ext", "Token-2022 extensions", "The rules the token program itself enforces on every transfer.", extBody, false) : ""}
       ${holdersBodyText ? section("s-holders", "Who holds it", "The largest token accounts and the wallets behind them.", holdersBodyText, false) : ""}
     </div>
+    ${buyStrip(slip.chain.key, slip.subject, Boolean(slip.mint), verdictOf(slip.notes as DoorNote[], "done", coverage).kind)}
   </div>`;
   // Copy card, on the renderer that draws the button.
   //
@@ -2059,7 +2069,7 @@ function renderSlip(slip: DoorSlip, opts: { stage?: Stage } = {}): void {
       sym,
       name,
       address: slip.subject,
-      stamp: slip.stamp,
+      stamp: stampLabel(slip.stamp, slip.chain.launchpad),
       at: `${mode === "demo" ? "DEMO · " : ""}${esc(slip.chain.name)} · block ${slip.at.block} · ${isoUtc(slip.at.timestamp)}`,
       notes: slip.notes,
       lead: summarySentence(slip),
@@ -2071,7 +2081,6 @@ function renderSlip(slip: DoorSlip, opts: { stage?: Stage } = {}): void {
     <div class="card-wrap" id="card"></div>
     ${answerCards(slip.notes)}
     ${unreadStrip(slip.notes, slip.skipped)}
-    ${buyStrip(mode === "demo" ? "" : slip.chain.key, slip.subject, Boolean(slip.id.meta) && slip.open?.transferFunction !== false, verdictOf(slip.notes, "done", coverage).kind)}
     <h2 class="stack-head">The evidence</h2>
     <div class="stack">
       ${section("s-id", "Is it real?", "Did the launchpad's factory deploy this token, and can its code change later?", idBody, false)}
@@ -2088,6 +2097,7 @@ function renderSlip(slip: DoorSlip, opts: { stage?: Stage } = {}): void {
       ${d ? section("s-dev", "This dev before", `Everything this deployer launched in the last ${mode === "demo" ? "8" : "24"} h and how it went.`, devSection(d, slip.subject, false, true), false) : ""}
       ${registered && !v1 ? section("s-watch", "Watch for changes", "Get told when the dev moves, right in this tab.", watchBody, new URLSearchParams(location.hash.split("?")[1] ?? "").get("watch") === "1") : ""}
     </div>
+    ${buyStrip(mode === "demo" ? "" : slip.chain.key, slip.subject, Boolean(slip.id.meta) && slip.open?.transferFunction !== false, verdictOf(slip.notes, "done", coverage).kind)}
   </div>`;
 
   const cardSvg = () => {

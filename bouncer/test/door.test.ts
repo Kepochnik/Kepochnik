@@ -120,7 +120,9 @@ test("the card leads with the verdict, because that is what gets read", async ()
   const slip = await readDoor(rpc, DEMO.tokens.fresh.token, opts);
   const svg = doorCard(slip, { repoUrl: "github.com/Kepochnik/bouncer", ticker: "$BOUNCER", mascotSvg: '<rect x="0" y="0" width="1" height="1"/>', checkUrl: "kepochnik.github.io/bouncer" });
   assert.match(svg, /^<svg xmlns/);
-  assert.match(svg, /ON THE LIST/, "the stamp is still on it");
+  // The stamp names the launchpad now rather than saying "ON THE LIST",
+  // which meant nothing to anybody who had not read the rest of the page.
+  assert.match(svg, /PONS V2 LAUNCH/, "the stamp is still on it, and now says which launchpad");
   assert.match(svg, /<rect x="0" y="0" width="1" height="1"\/>/, "and so is the gorilla");
   assert.match(svg, />(STOP|WATCH|CLEAR)</, "the verdict is the headline");
   assert.match(svg, /kepochnik\.github\.io\/bouncer/, "and a reader can go check it themselves");
