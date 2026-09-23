@@ -6089,9 +6089,9 @@
     if (o.deployer?.createdAt) notes.push({ level: "info", code: "deployed", text: `Deployed ${formatDuration(Math.max(0, slip.at.timestamp - o.deployer.createdAt))} ago by ${shortAddress(o.deployer.address)}.` });
     if (o.activity) {
       if (o.activity.lastTransferAt !== null) {
-        const ago = Math.max(0, slip.at.timestamp - o.activity.lastTransferAt);
-        if (ago > 7 * 86400) notes.push({ level: "watch", code: "quiet", text: `No transfer for ${formatDuration(ago)}: nothing is trading here.` });
-        else notes.push({ level: "info", code: "active", text: `Last transfer ${formatDuration(ago)} ago; ${o.activity.recentWallets} wallets in the last ${o.activity.recent} transfers.` });
+        const ago2 = Math.max(0, slip.at.timestamp - o.activity.lastTransferAt);
+        if (ago2 > 7 * 86400) notes.push({ level: "watch", code: "quiet", text: `No transfer for ${formatDuration(ago2)}: nothing is trading here.` });
+        else notes.push({ level: "info", code: "active", text: `Last transfer ${formatDuration(ago2)} ago; ${o.activity.recentWallets} wallets in the last ${o.activity.recent} transfers.` });
       } else if (o.activity.recent === 0) notes.push({ level: "watch", code: "quiet", text: "The explorer has indexed no transfers of this token at all." });
     }
     return notes;
@@ -6372,6 +6372,11 @@
     flat.sort((a, b) => b.quoteReserve > a.quoteReserve ? 1 : b.quoteReserve < a.quoteReserve ? -1 : 0);
     return flat[0] ?? null;
   }
+  function priceableSolanaPool(market) {
+    const flat = market.pools.filter((p) => !p.concentrated && p.tokenReserve > 0n && p.quoteReserve > 0n);
+    flat.sort((a, b) => b.quoteReserve > a.quoteReserve ? 1 : b.quoteReserve < a.quoteReserve ? -1 : 0);
+    return flat[0] ?? null;
+  }
   function shaped(tokensIn, out2, spotOut, tokenReserve, quoteReserve, rest) {
     return {
       ...rest,
@@ -6428,6 +6433,40 @@
     }
     return { ok: false, why: "the pools that were found have no readable balances, so a sale cannot be priced" };
   }
+  function splExitFor(slip, tokensIn) {
+    if (tokensIn <= 0n) return { ok: false, why: "enter a position size" };
+    const market = slip.market;
+    if (!market) return { ok: false, why: "the market section did not run, so there is nothing to price a sale against" };
+    if (market.unread) return { ok: false, why: `the venue search could not finish (${market.unread}), so an empty pool list here proves nothing` };
+    const curve = market.curve;
+    if (curve && !curve.complete) {
+      const out3 = quoteCurveSale(curve, tokensIn);
+      const spotOut2 = curve.virtualTokens > 0n ? tokensIn * curve.virtualSol / curve.virtualTokens : 0n;
+      return {
+        ok: true,
+        quote: shaped(tokensIn, out3, spotOut2, curve.virtualTokens, curve.realSol, {
+          quoteSymbol: "SOL",
+          quoteDecimals: 9,
+          venue: "the pump.fun bonding curve"
+        })
+      };
+    }
+    const pool = priceableSolanaPool(market);
+    if (!pool) {
+      if (!market.pools.length) return { ok: false, why: "no pool against SOL or USDC turned up, so there is nowhere for a sale of any size to go" };
+      return { ok: false, why: "every pool found here is concentrated, and its vault balances are not what a trade moves through \u2014 pricing a sale off them would overstate what you get" };
+    }
+    const out2 = quotePoolSale(pool, tokensIn);
+    const spotOut = tokensIn * pool.quoteReserve / pool.tokenReserve;
+    return {
+      ok: true,
+      quote: shaped(tokensIn, out2, spotOut, pool.tokenReserve, pool.quoteReserve, {
+        quoteSymbol: pool.quoteSymbol,
+        quoteDecimals: pool.quoteDecimals,
+        venue: pool.name
+      })
+    };
+  }
   function readSizeQuote(q2) {
     const lost = 1e4 - q2.realisedBps;
     const pct3 = (bps3) => `${(bps3 / 100).toFixed(bps3 < 100 ? 2 : 1)}%`;
@@ -6458,6 +6497,147 @@
     return {
       level: "info",
       text: `Selling this size into ${q2.venue} realises ${pct3(q2.realisedBps)} of the screen price. The pool is deep enough that a position this size is not what moves it.`
+    };
+  }
+
+  // src/bouncer/changes.ts
+  function verdictWordOf(notes) {
+    if (notes.some((n) => n.level === "stop")) return "STOP";
+    if (notes.some((n) => n.level === "watch")) return "WATCH";
+    return "CLEAR";
+  }
+  function snapshotOfDoor(slip) {
+    const o = slip.open;
+    const pool = (slip.open?.pools ?? []).filter((p) => (p.quoteReserve ?? 0n) > 0n).sort((a, b) => b.quoteReserve > a.quoteReserve ? 1 : -1)[0];
+    return {
+      v: 1,
+      chain: slip.chain.key,
+      address: slip.subject.toLowerCase(),
+      at: Math.floor(Date.now() / 1e3),
+      height: slip.at.block,
+      verdict: verdictWordOf(slip.notes),
+      stamp: slip.stamp,
+      symbol: slip.id.meta?.symbol ?? "",
+      codes: slip.notes.map((n) => ({ code: n.code, level: n.level })),
+      facts: {
+        owner: o?.ownerUnread ? null : o?.owner?.address ?? null,
+        canMint: o ? o.powers.some((p) => p.kind === "mint") : null,
+        canFreeze: o ? o.powers.some((p) => p.kind === "pause" || p.kind === "blacklist") : null,
+        // What a sale actually pays on the way out: the venue's fee plus
+        // the creator's cut. Null off a launch, because an ordinary ERC-20
+        // has no single number here and inventing a zero would report "the
+        // tax went up" the first time a real one became readable.
+        taxBps: slip.exit ? Number(slip.exit.feeBps + slip.exit.creatorTaxBps) : null,
+        top10Bps: o?.holders?.top10WalletsBps ?? null,
+        poolQuote: pool?.quoteReserve != null ? String(pool.quoteReserve) : null
+      },
+      coverage: doorCoverage(slip).state
+    };
+  }
+  function snapshotOfSpl(slip) {
+    const fee = slip.mint?.extensions.find((e) => e.kind === "transfer-fee");
+    const pool = slip.market?.pools.filter((p) => p.quoteReserve > 0n).sort((a, b) => b.quoteReserve > a.quoteReserve ? 1 : -1)[0];
+    return {
+      v: 1,
+      chain: slip.chain.key,
+      // base58 is case-sensitive: lower-casing a mint makes it another account.
+      address: slip.subject,
+      at: Math.floor(Date.now() / 1e3),
+      height: slip.at.span?.last ?? slip.at.slot,
+      verdict: verdictWordOf(slip.notes),
+      stamp: slip.stamp,
+      symbol: slip.metadata?.symbol ?? "",
+      codes: slip.notes.map((n) => ({ code: n.code, level: n.level })),
+      facts: {
+        owner: null,
+        canMint: slip.mint ? slip.mint.mintAuthority !== null : null,
+        canFreeze: slip.mint ? slip.mint.freezeAuthority !== null : null,
+        taxBps: fee?.kind === "transfer-fee" ? fee.feeBps : slip.mint ? 0 : null,
+        top10Bps: slip.holders?.top10Bps ?? null,
+        poolQuote: pool ? String(pool.quoteReserve) : null
+      },
+      coverage: splCoverage(slip).state
+    };
+  }
+  function movedBy(before, after2) {
+    if (before === 0n) return after2 === 0n ? 0 : 100;
+    const delta = after2 > before ? after2 - before : before - after2;
+    return Number(delta * 100n / before);
+  }
+  var LEVEL_RANK = { stop: 0, watch: 1, info: 2 };
+  function diffSnapshots(before, after2, codeText) {
+    const changes = [];
+    const was = new Map(before.codes.map((c) => [c.code, c.level]));
+    const now = new Map(after2.codes.map((c) => [c.code, c.level]));
+    const bothLooked = before.coverage !== "thin" && after2.coverage !== "thin";
+    for (const [code, level] of now) {
+      if (was.has(code)) continue;
+      if (level === "info" && topicOf(code) === "unread") continue;
+      const text = codeText(code);
+      changes.push({
+        level: level === "stop" ? "stop" : level === "watch" ? "watch" : "info",
+        kind: `new:${code}`,
+        text: `New since your last check: ${text ?? code}`
+      });
+    }
+    for (const [code, level] of was) {
+      if (now.has(code)) continue;
+      if (level === "info") continue;
+      if (!bothLooked) continue;
+      changes.push({
+        level: "info",
+        kind: `gone:${code}`,
+        text: `Gone since your last check: something that was flagged as ${level.toUpperCase()} is no longer on the slip.`
+      });
+    }
+    if (before.verdict !== after2.verdict) {
+      const worse = ["CLEAR", "WATCH", "STOP"].indexOf(after2.verdict) > ["CLEAR", "WATCH", "STOP"].indexOf(before.verdict);
+      changes.push({
+        level: worse ? "stop" : "info",
+        kind: "verdict",
+        text: worse ? `This was ${before.verdict} when you last checked it. It is ${after2.verdict} now.` : `This was ${before.verdict} when you last checked it and is ${after2.verdict} now.`
+      });
+    }
+    const b = before.facts;
+    const a = after2.facts;
+    if (b.owner !== null && a.owner !== null && b.owner !== a.owner) {
+      changes.push({ level: "stop", kind: "owner", text: `The owner changed: it was ${b.owner}, it is ${a.owner} now.` });
+    }
+    if (b.canMint === false && a.canMint === true) {
+      changes.push({ level: "stop", kind: "mint", text: "A mint power appeared that was not there when you last checked: more of this token can be created." });
+    }
+    if (b.canFreeze === false && a.canFreeze === true) {
+      changes.push({ level: "stop", kind: "freeze", text: "A power to stop holders selling appeared that was not there when you last checked." });
+    }
+    if (b.taxBps !== null && a.taxBps !== null && a.taxBps > b.taxBps) {
+      changes.push({ level: "stop", kind: "tax", text: `The tax on a trade went up: ${(b.taxBps / 100).toFixed(2)}% when you last checked, ${(a.taxBps / 100).toFixed(2)}% now.` });
+    }
+    if (b.taxBps !== null && a.taxBps !== null && a.taxBps < b.taxBps) {
+      changes.push({ level: "info", kind: "tax-down", text: `The tax on a trade went down: ${(b.taxBps / 100).toFixed(2)}% to ${(a.taxBps / 100).toFixed(2)}%.` });
+    }
+    if (b.poolQuote !== null && a.poolQuote !== null) {
+      const bq = BigInt(b.poolQuote);
+      const aq = BigInt(a.poolQuote);
+      const moved = movedBy(bq, aq);
+      if (aq < bq && moved >= 25) {
+        changes.push({
+          level: moved >= 60 ? "stop" : "watch",
+          kind: "liquidity",
+          // Deliberately not "the liquidity was pulled": a pool shrinks when
+          // somebody withdraws AND when the price moves, and this cannot
+          // tell those apart from balances alone.
+          text: `The deepest pool is ${moved}% smaller than when you last checked. That can be a withdrawal or a price move; the balances alone do not say which.`
+        });
+      }
+    }
+    if (b.top10Bps !== null && a.top10Bps !== null && a.top10Bps - b.top10Bps >= 500) {
+      changes.push({ level: "watch", kind: "concentration", text: `The top ten wallets hold more than they did: ${(b.top10Bps / 100).toFixed(1)}% then, ${(a.top10Bps / 100).toFixed(1)}% now.` });
+    }
+    changes.sort((x, y) => LEVEL_RANK[x.level] - LEVEL_RANK[y.level]);
+    return {
+      ageSeconds: Math.max(0, after2.at - before.at),
+      changes,
+      confident: changes.length === 0 && bothLooked
     };
   }
 
@@ -7923,6 +8103,80 @@
     }
     return { ...base, kind, line: base.line };
   }
+  var HISTORY_KEY = "bouncer.seen.v1";
+  var HISTORY_MAX = 60;
+  function loadHistory() {
+    const raw = storage(HISTORY_KEY);
+    if (!raw) return [];
+    try {
+      const parsed = JSON.parse(raw);
+      if (!Array.isArray(parsed)) return [];
+      return parsed.filter((x) => Boolean(x) && x.v === 1 && typeof x.address === "string");
+    } catch {
+      return [];
+    }
+  }
+  function historyKeyOf(chain2, address) {
+    return `${chain2}|${address}`;
+  }
+  function historyChain(key) {
+    return mode === "demo" ? "demo" : key;
+  }
+  function lastSeen(chain2, address) {
+    const want = historyKeyOf(chain2, address);
+    return loadHistory().find((s) => historyKeyOf(s.chain, s.address) === want) ?? null;
+  }
+  function remember(snapshot) {
+    const want = historyKeyOf(snapshot.chain, snapshot.address);
+    const rest = loadHistory().filter((s) => historyKeyOf(s.chain, s.address) !== want);
+    const next = [snapshot, ...rest].slice(0, HISTORY_MAX);
+    storage(HISTORY_KEY, JSON.stringify(next));
+  }
+  function ago(seconds) {
+    const units = [
+      [86400 * 30, "month"],
+      [86400, "day"],
+      [3600, "hour"],
+      [60, "minute"]
+    ];
+    for (const [size, name] of units) {
+      const n = Math.floor(seconds / size);
+      if (n >= 1) return `${n} ${name}${n === 1 ? "" : "s"}`;
+    }
+    return "moments";
+  }
+  function changesBand(before, after2, key, codeText) {
+    const say = (why, n) => {
+      (window.__bouncerDiff ??= []).push({ why, changes: n, key, held: loadHistory().length, at: Math.round(performance.now()) });
+    };
+    if (!before) {
+      say("no previous visit under this key", 0);
+      return "";
+    }
+    const d = diffSnapshots(before, after2, codeText);
+    say(d.changes.length ? "changes" : d.confident ? "quiet" : "quiet but not confident", d.changes.length);
+    const when = `${ago(d.ageSeconds)} ago`;
+    if (!d.changes.length) {
+      if (!d.confident) return "";
+      return `<section class="chg chg-quiet"><div class="chghead"><span class="chgword">NO CHANGE</span><span class="chgwhen">since you last checked this, ${esc2(when)}</span></div></section>`;
+    }
+    const worst = d.changes[0].level;
+    const loud = d.changes.filter((c) => c.level !== "info");
+    const quiet = d.changes.filter((c) => c.level === "info");
+    const tag = (c) => c.kind.startsWith("new:") ? "NEW" : c.kind.startsWith("gone:") ? "GONE" : c.kind === "verdict" ? "VERDICT" : "CHANGED";
+    const row = (c) => `<li class="chgrow chg-${c.level}"><span class="chglvl">${tag(c)}</span><span class="chgtext">${esc2(c.text)}</span></li>`;
+    const shown = [...loud, ...quiet.slice(0, Math.max(0, 4 - loud.length))];
+    const rest = d.changes.length - shown.length;
+    const rows = shown.map(row).join("") + (rest ? `<li class="chgmore"><details><summary>${rest} more change${rest === 1 ? "" : "s"}, none of them urgent<span class="chev" aria-hidden="true"></span></summary><ul class="chgrows">${quiet.slice(shown.length - loud.length).map(row).join("")}</ul></details></li>` : "");
+    return `<section class="chg chg-${worst}" data-changes="${d.changes.length}">
+    <div class="chghead">
+      <span class="chgword">${d.changes.length} CHANGE${d.changes.length === 1 ? "" : "S"}</span>
+      <span class="chgwhen">since you last checked this, ${esc2(when)}${before.verdict !== after2.verdict ? "" : ` \xB7 it read ${esc2(before.verdict)} then and now`}</span>
+    </div>
+    <ul class="chgrows">${rows}</ul>
+    <p class="chgfoot">Compared against what this browser saw last time. There is no account and no server behind this, so another device of yours has its own history and knows nothing about this one.</p>
+  </section>`;
+  }
   function coverageBand(coverage, stage) {
     if (stage !== "done" || coverage.state === "complete") return "";
     const row = (g, limit) => `<li class="cgap${g.decisive && !limit ? " cgap-hard" : ""}${limit ? " cgap-limit" : ""}">
@@ -7972,6 +8226,7 @@
       </div>
     </div>
     ${opts.coverage ? coverageBand(opts.coverage, stage) : ""}
+    ${opts.changes ?? ""}
     ${opts.tiles ?? ""}
     <div class="vfoot">
       <button class="vaddr" type="button" data-copy="${esc2(opts.address)}" title="Copy the address">${esc2(opts.address)}</button>
@@ -8159,6 +8414,9 @@
   function renderSplSlip(slip, opts = {}) {
     const stage0 = opts.stage ?? "done";
     const coverage = stage0 === "done" ? splCoverage(slip) : void 0;
+    const before = stage0 === "done" ? lastSeen(historyChain(slip.chain.key), slip.subject) : null;
+    const after2 = stage0 === "done" ? snapshotOfSpl(slip) : null;
+    const changes = after2 ? changesBand(before, after2, historyKeyOf(historyChain(slip.chain.key), slip.subject), (code) => slip.notes.find((n) => n.code === code)?.text ?? null) : "";
     noteRender(stage0, verdictOf(slip.notes, stage0, coverage).word);
     const m = slip.mint;
     const sym = slip.metadata?.symbol ? esc2(slip.metadata.symbol) : shortSol(slip.subject);
@@ -8198,6 +8456,7 @@
       lead: splSentence(slip, blocked),
       stage: stage0,
       coverage,
+      changes,
       tiles,
       stillReading: SOL_STILL_READING,
       actions: `<button class="ghost primary" id="act-share" type="button">Copy card</button><button class="ghost" id="act-link" type="button">Copy link</button><button class="ghost" id="act-json" type="button">JSON</button>`
@@ -8243,6 +8502,8 @@
       }
     });
     wireRetry();
+    if (m) wireExitCalc(m.decimals, (tokens) => splExitFor(slip, tokens));
+    if (after2) remember({ ...after2, chain: historyChain(after2.chain) });
   }
   function wireRetry() {
     const button = document.getElementById("act-retry");
@@ -8421,6 +8682,9 @@
   function renderSlip(slip, opts = {}) {
     const stage0 = opts.stage ?? "done";
     const coverage = stage0 === "done" ? doorCoverage(slip) : void 0;
+    const before = stage0 === "done" ? lastSeen(historyChain(slip.chain.key), slip.subject.toLowerCase()) : null;
+    const after2 = stage0 === "done" ? snapshotOfDoor(slip) : null;
+    const changes = after2 ? changesBand(before, after2, historyKeyOf(historyChain(slip.chain.key), slip.subject.toLowerCase()), (code) => slip.notes.find((n) => n.code === code)?.text ?? null) : "";
     noteRender(stage0, verdictOf(slip.notes, stage0, coverage).word);
     const meta = slip.id.meta;
     const c0 = chain();
@@ -8511,6 +8775,7 @@
       lead: summarySentence(slip),
       stage: stage0,
       coverage,
+      changes,
       tiles,
       actions: `<button class="ghost primary" id="act-share" type="button">Copy card</button><button class="ghost" id="act-card" type="button">Preview</button><button class="ghost" id="act-link" type="button">Copy link</button><button class="ghost" id="act-json" type="button">JSON</button>`
     })}
@@ -8575,6 +8840,7 @@
     });
     wireRetry();
     wireExitCalc(slip.id.meta?.decimals ?? 18, (tokens) => evmExitFor(slip, tokens));
+    if (after2) remember({ ...after2, chain: historyChain(after2.chain) });
     const walletGo = document.getElementById("wallet-go");
     if (walletGo) {
       walletGo.addEventListener("click", () => {

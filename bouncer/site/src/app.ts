@@ -23,6 +23,7 @@ import { findBlockByTimestamp } from "../../src/chain/tape.js";
 import { doorCard, splCard } from "../../src/bouncer/card.js";
 import { coverChargeLine } from "../../src/bouncer/coverCharge.js";
 import { evmExitFor, splExitFor, readSizeQuote, type SizeAnswer } from "../../src/bouncer/exitSize.js";
+import { diffSnapshots, snapshotOfDoor, snapshotOfSpl, type Snapshot } from "../../src/bouncer/changes.js";
 import { DEMO, DEMO_BLOCKSCOUT, DEMO_IMPOSTOR, DEMO_PLAIN, DEMO_V1, demoBlockscoutFetch, demoRpc } from "../../src/bouncer/demo.js";
 import { devReportLine, readDevReport, type DevReport } from "../../src/bouncer/devReport.js";
 import { findLaunchBlock, impostorOf, readDoor, slipJson, stampLabel, stampTone, type DoorNote, type DoorSlip } from "../../src/bouncer/door.js";
@@ -1145,6 +1146,150 @@ function verdictOf(notes: DoorNote[], stage: Stage = "done", coverage?: Coverage
 }
 
 /**
+ * THE HISTORY, SUCH AS IT IS: this browser, this device, nothing else.
+ *
+ * There is no account and no server, so "your last check" means the last
+ * time this browser read this token. That is a real limitation and the
+ * page says it out loud rather than letting somebody assume their phone
+ * knows what their laptop saw.
+ *
+ * It is capped, and it is capped by count rather than by age. A cap by age
+ * would silently throw away the one snapshot somebody actually wanted —
+ * the token they looked at in March and are looking at again now, which is
+ * exactly the comparison worth having.
+ */
+const HISTORY_KEY = "bouncer.seen.v1";
+const HISTORY_MAX = 60;
+
+function loadHistory(): Snapshot[] {
+  const raw = storage(HISTORY_KEY);
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) return [];
+    // A snapshot from a schema this build does not know is dropped, not
+    // guessed at: a diff off a misread shape would invent changes.
+    return parsed.filter((x): x is Snapshot => Boolean(x) && (x as Snapshot).v === 1 && typeof (x as Snapshot).address === "string");
+  } catch {
+    return [];
+  }
+}
+
+function historyKeyOf(chain: string, address: string): string {
+  return `${chain}|${address}`;
+}
+
+/**
+ * Which shelf a snapshot lives on.
+ *
+ * The demo chain reuses Robinhood Chain's key, so demo readings and real
+ * ones would land under the same address and be compared against each
+ * other — an invented token's history diffed against a real token's. They
+ * get their own namespace instead, which also means the feature can be
+ * walked offline against the demo routes rather than only existing in
+ * production.
+ */
+function historyChain(key: string): string {
+  return mode === "demo" ? "demo" : key;
+}
+
+/** The last time this browser read this exact token on this exact chain. */
+function lastSeen(chain: string, address: string): Snapshot | null {
+  const want = historyKeyOf(chain, address);
+  return loadHistory().find((s) => historyKeyOf(s.chain, s.address) === want) ?? null;
+}
+
+function remember(snapshot: Snapshot): void {
+  const want = historyKeyOf(snapshot.chain, snapshot.address);
+  const rest = loadHistory().filter((s) => historyKeyOf(s.chain, s.address) !== want);
+  const next = [snapshot, ...rest].slice(0, HISTORY_MAX);
+  storage(HISTORY_KEY, JSON.stringify(next));
+}
+
+/** "3 minutes", "2 days" — the age of a comparison, which decides what it is worth. */
+function ago(seconds: number): string {
+  const units: [number, string][] = [
+    [86_400 * 30, "month"],
+    [86_400, "day"],
+    [3_600, "hour"],
+    [60, "minute"],
+  ];
+  for (const [size, name] of units) {
+    const n = Math.floor(seconds / size);
+    if (n >= 1) return `${n} ${name}${n === 1 ? "" : "s"}`;
+  }
+  return "moments";
+}
+
+/**
+ * What changed, drawn under the verdict — or nothing at all on a first
+ * visit, because "this is the first time you have looked at this" is not
+ * information anybody needs taking up the top of the page.
+ */
+function changesBand(before: Snapshot | null, after: Snapshot, key: string, codeText: (code: string) => string | null): string {
+  // The page says what it decided, the way it already reports its renders.
+  // A band that does not appear has three possible causes — no previous
+  // visit, a previous visit filed under a different key, or a diff that
+  // chose to stay quiet — and from the outside they look identical.
+  //
+  // It earned its place immediately. The band looked broken, and the bug
+  // was in the walk: page.goto() to a URL that differs only after the #
+  // is a same-document navigation, so the page never reloaded and the
+  // second "visit" was the first one still on screen. What gave it away
+  // was `at` being byte-identical across two supposedly separate loads.
+  const say = (why: string, n: number) => {
+    (window.__bouncerDiff ??= []).push({ why, changes: n, key, held: loadHistory().length, at: Math.round(performance.now()) });
+  };
+  if (!before) {
+    say("no previous visit under this key", 0);
+    return "";
+  }
+  const d = diffSnapshots(before, after, codeText);
+  say(d.changes.length ? "changes" : d.confident ? "quiet" : "quiet but not confident", d.changes.length);
+  const when = `${ago(d.ageSeconds)} ago`;
+  if (!d.changes.length) {
+    // Worth saying, quietly: an unchanged token is the answer somebody
+    // came back to check. But only when both readings could see enough
+    // for that to mean anything.
+    if (!d.confident) return "";
+    return `<section class="chg chg-quiet"><div class="chghead"><span class="chgword">NO CHANGE</span><span class="chgwhen">since you last checked this, ${esc(when)}</span></div></section>`;
+  }
+  const worst = d.changes[0].level;
+  // Everything that moved, but not all of it at full height.
+  //
+  // A token that has not been looked at for a while can produce a dozen
+  // new INFO lines — every finding that was not on the slip last time
+  // counts as new — and the three that matter end up below thirteen that
+  // do not. The loud ones are always open; the rest collapse behind their
+  // own count, the same way the unread strip does.
+  const loud = d.changes.filter((c) => c.level !== "info");
+  const quiet = d.changes.filter((c) => c.level === "info");
+  // The tag says what KIND of change it is, not how loud. A finding that
+  // appeared was labelled "MOVED" next to text reading "New since your
+  // last check", which is the page disagreeing with itself in the same
+  // row. Loudness is already carried by the rail and the colour.
+  const tag = (c: (typeof d.changes)[number]) =>
+    c.kind.startsWith("new:") ? "NEW" : c.kind.startsWith("gone:") ? "GONE" : c.kind === "verdict" ? "VERDICT" : "CHANGED";
+  const row = (c: (typeof d.changes)[number]) =>
+    `<li class="chgrow chg-${c.level}"><span class="chglvl">${tag(c)}</span><span class="chgtext">${esc(c.text)}</span></li>`;
+  const shown = [...loud, ...quiet.slice(0, Math.max(0, 4 - loud.length))];
+  const rest = d.changes.length - shown.length;
+  const rows =
+    shown.map(row).join("") +
+    (rest
+      ? `<li class="chgmore"><details><summary>${rest} more change${rest === 1 ? "" : "s"}, none of them urgent<span class="chev" aria-hidden="true"></span></summary><ul class="chgrows">${quiet.slice(shown.length - loud.length).map(row).join("")}</ul></details></li>`
+      : "");
+  return `<section class="chg chg-${worst}" data-changes="${d.changes.length}">
+    <div class="chghead">
+      <span class="chgword">${d.changes.length} CHANGE${d.changes.length === 1 ? "" : "S"}</span>
+      <span class="chgwhen">since you last checked this, ${esc(when)}${before.verdict !== after.verdict ? "" : ` · it read ${esc(before.verdict)} then and now`}</span>
+    </div>
+    <ul class="chgrows">${rows}</ul>
+    <p class="chgfoot">Compared against what this browser saw last time. There is no account and no server behind this, so another device of yours has its own history and knows nothing about this one.</p>
+  </section>`;
+}
+
+/**
  * The completeness band: what this reading covered, directly under the word.
  *
  * Under, and not in a strip at the bottom, because the bottom is where the
@@ -1227,6 +1372,8 @@ function verdictBlock(opts: {
   stillReading?: string;
   /** What this reading covered. Absent on the demo slips, which are complete by construction. */
   coverage?: Coverage;
+  /** What moved since this browser last read the same token, when it has. */
+  changes?: string;
   /**
    * The four numbers that decide it, rendered inside the block rather than
    * under it. They are the verdict said in figures; a separate row with its
@@ -1282,6 +1429,7 @@ function verdictBlock(opts: {
       </div>
     </div>
     ${opts.coverage ? coverageBand(opts.coverage, stage) : ""}
+    ${opts.changes ?? ""}
     ${opts.tiles ?? ""}
     <div class="vfoot">
       <button class="vaddr" type="button" data-copy="${esc(opts.address)}" title="Copy the address">${esc(opts.address)}</button>
@@ -1643,6 +1791,9 @@ function renderSplSlip(slip: SplSlip, opts: { stage?: Stage } = {}): void {
   // reported as an incomplete check.
   const stage0 = opts.stage ?? "done";
   const coverage = stage0 === "done" ? splCoverage(slip) : undefined;
+  const before = stage0 === "done" ? lastSeen(historyChain(slip.chain.key), slip.subject) : null;
+  const after = stage0 === "done" ? snapshotOfSpl(slip) : null;
+  const changes = after ? changesBand(before, after, historyKeyOf(historyChain(slip.chain.key), slip.subject), (code) => slip.notes.find((n) => n.code === code)?.text ?? null) : "";
   noteRender(stage0, verdictOf(slip.notes as DoorNote[], stage0, coverage).word);
   const m = slip.mint;
   const sym = slip.metadata?.symbol ? esc(slip.metadata.symbol) : shortSol(slip.subject);
@@ -1696,6 +1847,7 @@ function renderSplSlip(slip: SplSlip, opts: { stage?: Stage } = {}): void {
       lead: splSentence(slip, blocked),
       stage: stage0,
       coverage,
+      changes,
       tiles,
       stillReading: SOL_STILL_READING,
       actions: `<button class="ghost primary" id="act-share" type="button">Copy card</button><button class="ghost" id="act-link" type="button">Copy link</button><button class="ghost" id="act-json" type="button">JSON</button>`,
@@ -1741,6 +1893,8 @@ function renderSplSlip(slip: SplSlip, opts: { stage?: Stage } = {}): void {
     try { await navigator.clipboard.writeText(url); showToast("Link copied"); } catch { showToast(url); }
   });
   wireRetry();
+  if (m) wireExitCalc(m.decimals, (tokens) => splExitFor(slip, tokens));
+  if (after) remember({ ...after, chain: historyChain(after.chain) });
 }
 
 /**
@@ -1980,6 +2134,7 @@ declare global {
     __bouncerRenders?: { stage: Stage; at: number; word: string }[];
     __bouncerWire?: { url: string; at: number; ms: number; ok: boolean; done: boolean; status: number; why: string }[];
     __bouncerCards?: { kind: string; ticker: string; at: number }[];
+    __bouncerDiff?: { why: string; changes: number; key: string; held: number; at: number }[];
   }
 }
 
@@ -2071,6 +2226,11 @@ function renderSlip(slip: DoorSlip, opts: { stage?: Stage } = {}): void {
   // train a reader to ignore it. The stage line above already says what is
   // still coming.
   const coverage = stage0 === "done" ? doorCoverage(slip) : undefined;
+  // Read the previous visit BEFORE writing this one, or the diff compares
+  // the slip against itself and nothing ever changed.
+  const before = stage0 === "done" ? lastSeen(historyChain(slip.chain.key), slip.subject.toLowerCase()) : null;
+  const after = stage0 === "done" ? snapshotOfDoor(slip) : null;
+  const changes = after ? changesBand(before, after, historyKeyOf(historyChain(slip.chain.key), slip.subject.toLowerCase()), (code) => slip.notes.find((n) => n.code === code)?.text ?? null) : "";
   noteRender(stage0, verdictOf(slip.notes, stage0, coverage).word);
   const meta = slip.id.meta;
   const c0 = chain();
@@ -2191,6 +2351,7 @@ function renderSlip(slip: DoorSlip, opts: { stage?: Stage } = {}): void {
       lead: summarySentence(slip),
       stage: stage0,
       coverage,
+      changes,
       tiles,
       actions: `<button class="ghost primary" id="act-share" type="button">Copy card</button><button class="ghost" id="act-card" type="button">Preview</button><button class="ghost" id="act-link" type="button">Copy link</button><button class="ghost" id="act-json" type="button">JSON</button>`,
     })}
@@ -2246,6 +2407,10 @@ function renderSlip(slip: DoorSlip, opts: { stage?: Stage } = {}): void {
   });
   wireRetry();
   wireExitCalc(slip.id.meta?.decimals ?? 18, (tokens) => evmExitFor(slip, tokens));
+  // Written after the band was drawn off the PREVIOUS snapshot; writing
+  // first would compare the slip against itself and nothing would ever
+  // have changed.
+  if (after) remember({ ...after, chain: historyChain(after.chain) });
   const walletGo = document.getElementById("wallet-go");
   if (walletGo) {
     walletGo.addEventListener("click", () => {

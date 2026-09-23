@@ -506,6 +506,57 @@ await walk("the exit calculator answers for a size, or says why it cannot", asyn
   if (/^0\b/.test(said)) throw new Error(`a token it cannot price was quoted at zero: "${said.slice(0, 120)}"`);
   if (!/ranges|no pool|could not/i.test(said)) throw new Error(`the refusal does not say why: "${said.slice(0, 160)}"`);
 });
+await walk("a second look says what moved since the first", async (page) => {
+  // A slip is a photograph. It reads the same whether the token has sat
+  // still for a month or the owner took the mint authority back twenty
+  // minutes ago, and those are not the same situation for whoever holds
+  // it. This walk is also the one that catches the band being wired into
+  // one renderer and not the other, which is exactly what happened while
+  // it was being written.
+  const token = `${url}#/demo/0x0000000000000000000000000000000000f1a1a1`;
+
+  // First visit: no band at all. "This is the first time you have looked
+  // at this" is not worth the top of the page.
+  await page.goto(token, { waitUntil: "load" });
+  await waitForDone(page);
+  if (await page.$(".chg")) throw new Error("a first visit claimed something had changed");
+
+  const stored = await page.evaluate(() => localStorage.getItem("bouncer.seen.v1"));
+  if (!stored) throw new Error("the first reading was not remembered, so nothing can ever be compared");
+  if (!/"chain":"demo"/.test(stored)) throw new Error("a demo reading was filed under a real chain's key");
+
+  // reload(), not goto(). A goto to a URL that differs only after the #
+  // is a same-document navigation: the page does not reload, nothing
+  // re-renders, and the "second visit" is the first one still on screen.
+  // That cost an hour of looking for a bug in the feature.
+  await page.reload({ waitUntil: "load" });
+  await waitForDone(page);
+  const quiet = await page.$eval(".chg", (el) => el.textContent.replace(/\s+/g, " ").trim()).catch(() => "");
+  if (!/NO CHANGE/i.test(quiet)) throw new Error(`a second identical reading should say nothing changed; got "${quiet.slice(0, 120)}"`);
+  if (!/since you last checked/i.test(quiet)) throw new Error("the comparison does not say how old it is");
+
+  // Now rewrite the stored snapshot as if the token had been safe before,
+  // and check the page notices it is not any more. Reaching into storage
+  // is the only way to walk this without waiting for a real token to
+  // change under us.
+  await page.evaluate(() => {
+    const seen = JSON.parse(localStorage.getItem("bouncer.seen.v1"));
+    seen[0].verdict = "CLEAR";
+    seen[0].codes = [];
+    seen[0].at = Math.floor(Date.now() / 1000) - 7200;
+    seen[0].facts.canMint = false;
+    localStorage.setItem("bouncer.seen.v1", JSON.stringify(seen));
+  });
+  await page.reload({ waitUntil: "load" });
+  await waitForDone(page);
+  const band = await page.$(".chg");
+  if (!band) throw new Error("the token changed under the reader and the page said nothing");
+  const said = await page.$eval(".chg", (el) => el.textContent.replace(/\s+/g, " ").trim());
+  if (!/2 hours/.test(said)) throw new Error(`the age of the comparison is wrong or missing: "${said.slice(0, 140)}"`);
+  if (!/was CLEAR/.test(said)) throw new Error(`a verdict that got worse must be named: "${said.slice(0, 200)}"`);
+  const level = await page.$eval(".chg", (el) => el.className);
+  if (!/chg-stop/.test(level)) throw new Error(`a verdict falling to STOP is not a quiet change: "${level}"`);
+});
 await browser.close();
 if (failures) {
   console.error(`\nflows: ${failures} journey${failures === 1 ? "" : "s"} broken.`);

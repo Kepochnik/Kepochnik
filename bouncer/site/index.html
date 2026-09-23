@@ -732,6 +732,41 @@ footer a:hover{color:var(--brass-2)}
   .calc-res{grid-template-columns:1fr}
   .calc-fig{border-right:0;border-bottom:1px solid var(--line)}
 }
+
+/* ============================================================
+   WHAT CHANGED SINCE YOU LAST LOOKED
+
+   A slip is a photograph: it reads the same whether the token has sat
+   still for a month or the owner took the mint authority back twenty
+   minutes ago. This band is the difference, and it sits under the
+   completeness band for the same reason that one sits under the verdict
+   — it is about the reading, and it has to be where the reading is.
+   ============================================================ */
+.chg{border-top:1px solid var(--line);background:var(--surface-2);padding:16px 18px}
+.chg-stop{background:var(--stop-bg);border-top-color:var(--stop-edge)}
+.chg-watch{background:var(--watch-bg);border-top-color:var(--watch-edge)}
+.chg-quiet{padding:11px 18px;background:var(--surface)}
+.chghead{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap}
+.chgword{font:700 11px/1 var(--display);letter-spacing:.2em;color:var(--text)}
+.chg-stop .chgword{color:var(--stop)}
+.chg-watch .chgword{color:var(--watch)}
+.chg-quiet .chgword{color:var(--muted)}
+.chgwhen{font:11.5px var(--mono);color:var(--muted)}
+.chgrows{list-style:none;margin:12px 0 0;padding:0;display:grid;gap:1px;background:var(--line)}
+.chgrow{display:grid;grid-template-columns:92px 1fr;gap:12px;align-items:baseline;background:var(--surface);padding:10px 12px;font-size:13px;line-height:1.55}
+.chglvl{font:10px var(--mono);letter-spacing:.14em;color:var(--muted)}
+.chgrow.chg-stop{background:var(--surface);box-shadow:inset 2px 0 0 var(--stop)}
+.chgrow.chg-stop .chglvl{color:var(--stop)}
+.chgrow.chg-watch{box-shadow:inset 2px 0 0 var(--watch)}
+.chgrow.chg-watch .chglvl{color:var(--watch)}
+.chgtext{color:var(--text)}
+.chgfoot{margin:12px 0 0;color:var(--dim);font-size:11.5px;line-height:1.6}
+.chgmore{background:var(--surface);padding:0}
+.chgmore summary{cursor:pointer;list-style:none;padding:10px 12px;font:11.5px var(--mono);color:var(--muted);display:flex;align-items:center;gap:8px;min-height:44px}
+.chgmore summary::-webkit-details-marker{display:none}
+.chgmore summary:hover{color:var(--text)}
+.chgmore .chgrows{margin:0;border-top:1px solid var(--line)}
+@media (max-width:640px){.chgrow{grid-template-columns:1fr;gap:3px}}
 </style>
 </head>
 <body>
