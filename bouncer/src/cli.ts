@@ -14,7 +14,7 @@
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { BlockscoutClient } from "./chain/blockscout.js";
-import { CHAINS, chainByKey, type ChainConfig } from "./chain/chains.js";
+import { CHAINS, chainByKey, type ChainConfig , featureBlocker, type Feature } from "./chain/chains.js";
 import { decodeOutputs, encodeCall } from "./chain/abi.js";
 import { readMarket, readPools } from "./chain/market.js";
 import { ERC20_FUNCTIONS, GraduationPhase, PHASE_LABEL, type LaunchedToken } from "./chain/pons.js";
@@ -100,9 +100,43 @@ export async function main(argv: string[], write: (text: string) => void = (t) =
 
     // Solana is read through a different client against different account
     // layouts, so it forks here rather than pretending to be an EVM chain.
-    if (chain.family === "solana") return await runSolana(command, args, chain, format, emit, write);
-
+    // Declared here rather than beside its first use: the capability
+    // gate below reads it, and the gate has to run before the Solana
+    // hand-off so that one decision covers every family.
     const factory = (flagString(args.flags, "factory") ?? chain.factory ?? "").toLowerCase();
+
+    // One decision about what this chain can serve, taken before any
+    // request goes out.
+    //
+    // The CLI had its own gate, and it was a fallthrough: a command the
+    // Solana branch did not handle reached a generic refusal at the
+    // bottom. That worked for Solana and drifted for everything else.
+    // `bouncer wallet … --chain base` was NOT caught — it went to the
+    // chain, spent requests, and on a working network would have read a
+    // launchpad curve's events on a chain that has no launchpad, which is
+    // an empty answer dressed as a real one.
+    //
+    // featureBlocker() is the same function the website uses, so the two
+    // surfaces cannot disagree about what is available. The wording below
+    // stays the CLI's own: it is better than the generic sentence,
+    // because it can name the command to use instead.
+    const FEATURE_OF: Record<string, Feature> = { board: "board", plan: "plan", wallet: "wallet", receipt: "tx", dev: "dev" };
+    const wanted = FEATURE_OF[command];
+    // The chain AS CONFIGURED FOR THIS RUN, not as the table ships it.
+    //
+    // --factory is how somebody reads a launchpad BOUNCER does not have an
+    // address for yet — Arc is exactly that case. Gating on the shipped
+    // config alone refused the command before looking at the flag, which
+    // took a working escape hatch away. Caught by trying it.
+    const asRun: ChainConfig = factory ? { ...chain, factory, launchpad: chain.launchpad ?? "a launchpad you named" } : chain;
+    if (!demo && wanted && featureBlocker(asRun, wanted)) {
+      write(
+        `bouncer: "${command}" is not available on ${chain.name}. ${featureBlocker(asRun, wanted)!.replace(/^./, (c) => c.toUpperCase())}. ` +
+          `Try: bouncer door <address> --chain ${chain.key}, which answers for any token${chain.family === "evm" ? `, or bouncer exit <address> --chain ${chain.key} for what a sale would pay` : ""}.\n`,
+      );
+      return 1;
+    }
+
     const rpc = demo ? demoRpc() : liveRpc(chain, flagString(args.flags, "rpc"));
     const chunk = demo ? 100_000 : flagNumber(args.flags, "chunk", 0) || undefined;
     const hours = flagNumber(args.flags, "hours", 24);
@@ -137,6 +171,9 @@ export async function main(argv: string[], write: (text: string) => void = (t) =
       launchSearchBlocks: demo ? 400_000 : flagNumber(args.flags, "launch-blocks", 0) || undefined,
     });
     if (demo && command !== "demo") write("DEMO · synthetic chain, every address below is invented\n");
+
+    if (chain.family === "solana") return await runSolana(command, args, chain, format, emit, write);
+
 
     switch (command) {
       case "doctor": {

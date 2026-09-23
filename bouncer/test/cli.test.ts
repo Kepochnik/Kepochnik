@@ -95,8 +95,15 @@ test("a launchpad-only command on a chain with no launchpad refuses at once, and
     for (const chain of ["base", "bnb"]) {
       const { code, out } = await run([...command, "--chain", chain]);
       assert.equal(code, 1, `${command[0]} on ${chain}`);
-      assert.match(out, /reads a launchpad, and none that BOUNCER knows runs on/);
-      assert.match(out, new RegExp(`bouncer door <address> --chain ${chain}`));
+      // The intent, not one phrasing of it. This used to pin the exact
+      // sentence, and when the refusal moved to a gate shared with the
+      // website the test failed over wording while the behaviour was
+      // right — the same blindness that let a matrix check pass a drift
+      // it was written to catch, because it knew one refusal and the CLI
+      // had two.
+      assert.match(out, /launchpad/i, `${command[0]} on ${chain} must say why: ${out.slice(0, 160)}`);
+      assert.match(out, new RegExp(chain), "and name the chain it is about");
+      assert.match(out, new RegExp(`bouncer door <address> --chain ${chain}`), "and point at the command that does work");
       assert.ok(!/responded \d\d\d|fetch failed|ENOTFOUND/.test(out), "it must not have touched the network");
     }
   }

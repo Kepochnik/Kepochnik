@@ -351,8 +351,15 @@ export function featureBlocker(chain: ChainConfig, feature: Feature): string | n
       }
       return null;
     case "dev":
+      // A deployer's report card is every launch they made, read off the
+      // factory's events. The CLI has always refused it on a chain with no
+      // launchpad; the matrix said it was fine, and the two disagreeing is
+      // how a command ends up going out to the network to fetch nothing.
       if (chain.family !== "evm") {
         return `${chain.name} is not an EVM chain, and this read is built on EVM logs and receipts`;
+      }
+      if (!chain.factory || !chain.launchpad) {
+        return `this is every launch a deployer made, read off a launchpad factory's events, and BOUNCER knows no launchpad on ${chain.name}`;
       }
       return null;
   }

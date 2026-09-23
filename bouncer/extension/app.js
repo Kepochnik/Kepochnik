@@ -1190,6 +1190,9 @@
         if (chain2.family !== "evm") {
           return `${chain2.name} is not an EVM chain, and this read is built on EVM logs and receipts`;
         }
+        if (!chain2.factory || !chain2.launchpad) {
+          return `this is every launch a deployer made, read off a launchpad factory's events, and BOUNCER knows no launchpad on ${chain2.name}`;
+        }
         return null;
     }
   }
