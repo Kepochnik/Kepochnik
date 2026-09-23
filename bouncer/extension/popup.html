@@ -582,10 +582,6 @@ details.sec>summary:hover h2{color:var(--brass)}
 .ghost:hover{border-color:var(--brass);color:var(--brass-2)}
 .ghost:focus-visible{outline:2px solid var(--brass-2);outline-offset:2px}
 .ghost[aria-pressed="true"]{border-color:var(--watch);color:var(--watch)}
-.actions{display:flex;gap:8px;flex-wrap:wrap}
-.tabs{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:14px}
-.tab{background:transparent;border:1px solid var(--line);color:var(--muted);border-radius:999px;font:600 11px var(--mono);letter-spacing:.09em;text-transform:uppercase;padding:8px 13px;cursor:pointer}
-.tab[aria-selected="true"]{background:var(--surface-3);color:var(--brass);border-color:var(--brass)}
 .tab:focus-visible{outline:2px solid var(--brass-2)}
 .wallet-row{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
 .wallet-row input{flex:1 1 280px;min-width:0;background:var(--bg);border:1px solid var(--line-2);border-radius:var(--r-sm);color:var(--text);font:13px var(--mono);padding:10px 12px}
@@ -809,13 +805,39 @@ footer a:hover{color:var(--brass-2)}
 
 .whychecks{list-style:none;margin:0 0 16px;padding:0;display:grid;gap:1px;background:var(--line);border:1px solid var(--line)}
 .whycheck{display:grid;grid-template-columns:96px 176px 1fr;gap:12px;align-items:baseline;background:var(--surface);padding:9px 12px;font-size:12.5px;line-height:1.55}
+/* wcs-na, not "n/a": a class name with a slash in it cannot be selected
+   without escaping, so that state rendered with no styling at all and the
+   orphan-class check found it. */
 .wcs{font:10px var(--mono);letter-spacing:.12em;text-transform:uppercase;color:var(--muted)}
-.wcs.read{color:var(--ok)}
-.wcs.unread{color:var(--stop)}
-.wcs.unsupported{color:var(--info)}
+.wcs-read{color:var(--ok)}
+.wcs-unread{color:var(--stop)}
+.wcs-unsupported{color:var(--info)}
+.wcs-na{color:var(--dim)}
 .wcl{color:var(--text);font:12.5px var(--mono)}
 .wcr{color:var(--muted);min-width:0}
 @media (max-width:760px){.whycheck{grid-template-columns:1fr;gap:3px}}
+
+/* ============================================================
+   THE LAUNCH PLANNER'S FORM
+
+   It had no rules at all: class="row" and class="short" were emitted
+   and styled nowhere, so the page rendered three browser-default grey
+   rounded inputs in the middle of a terminal, with the last one
+   colliding with its button. Found by the orphan-class check, which
+   looks for exactly this — a class on screen with nothing behind it.
+   ============================================================ */
+.row{display:flex;gap:0;flex-wrap:wrap;border:1px solid var(--line-2);background:var(--surface-2);max-width:100%}
+.row input.short{flex:1 1 180px;min-width:0;background:none;border:0;border-right:1px solid var(--line);
+  color:var(--text);font:13px var(--mono);padding:12px 13px;min-height:46px}
+.row input.short:focus{outline:none;background:var(--surface-3)}
+.row input.short::placeholder{color:var(--dim)}
+.row .ghost{border:0;border-radius:0;white-space:nowrap;flex:0 0 auto}
+.row:focus-within{box-shadow:inset 0 0 0 1px var(--brass)}
+@media (max-width:640px){
+  .row{flex-direction:column}
+  .row input.short{border-right:0;border-bottom:1px solid var(--line);flex:1 1 auto;width:100%}
+  .row .ghost{width:100%}
+}
 /* Popup-only overrides.
 
    The popup is the same app in a 560-pixel box that Chrome sizes to this
@@ -896,7 +918,7 @@ footer>span{flex:1 1 100%}
         <button type="button" id="picker-btn" class="picker-btn" aria-haspopup="listbox" aria-expanded="false" aria-labelledby="picker-label picker-name">
           <span class="sr" id="picker-label">Chain</span>
           <span class="picker-mark" id="picker-mark" aria-hidden="true"></span>
-          <span class="picker-name" id="picker-name">Find the chain</span>
+          <span id="picker-name">Find the chain</span>
           <span class="picker-caret" aria-hidden="true"></span>
         </button>
         <ul class="picker-menu" id="picker-menu" role="listbox" aria-labelledby="picker-label" hidden></ul>

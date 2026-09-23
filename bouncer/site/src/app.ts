@@ -1818,7 +1818,7 @@ function whyBody(
     .map(
       (c) =>
         `<li class="whycheck">
-          <span class="wcs ${c.state}">${esc(c.state)}</span>
+          <span class="wcs wcs-${c.state === "n/a" ? "na" : c.state}">${esc(c.state)}</span>
           <span class="wcl">${esc(c.label)}</span>
           <span class="wcr">${c.reason ? esc(c.reason) : esc(TOPIC_QUESTION[c.topic])}</span>
         </li>`,

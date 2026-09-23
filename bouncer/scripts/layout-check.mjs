@@ -301,6 +301,48 @@ for (const size of WIDTHS) {
       }
     }
 
+// ---- every class on screen has a rule behind it
+    //
+    // This is the bug that rendered the token's address as a default grey
+    // button: an edit spliced the stylesheet by index and took four rules
+    // with it (.vwho, .vsym, .vname, .vaddr), the markup kept emitting
+    // them, and nothing failed. Reading the source would not have found
+    // it — what matters is what ends up in the DOM.
+    //
+    // Collected from the live page and checked against the stylesheet
+    // text, so a class that is emitted but has no rule anywhere fails.
+    const orphans = await page.evaluate((exempt) => {
+      const sheet = [...document.styleSheets]
+        .flatMap((s) => { try { return [...s.cssRules]; } catch { return []; } })
+        .map((r) => r.cssText)
+        .join("\n");
+      // An element styled by its id is styled. The chain picker's name is
+      // exactly that: class="picker-name" id="picker-name", with the rule
+      // on the id — reporting it as unstyled would be the check being
+      // wrong about the page rather than the page being wrong.
+      const styledById = new Set();
+      for (const el of document.querySelectorAll("[id]")) {
+        if (new RegExp(`#${el.id.replace(/[-]/g, "\\-")}(?![\\w-])`).test(sheet)) for (const c of el.classList) styledById.add(c);
+      }
+      const seen = new Set();
+      for (const el of document.querySelectorAll("*")) for (const c of el.classList) seen.add(c);
+      return [...seen].filter(
+        (c) => !exempt.includes(c) && !styledById.has(c) && !new RegExp(`\\.${c.replace(/[-]/g, "\\-")}(?![\\w-])`).test(sheet),
+      );
+    }, [
+      // Deliberately unstyled, each for a stated reason.
+      //
+      // "mono" and "num" are markers the script and the card reader look
+      // for. "lv-info" is the quiet level: .find.lv-stop and .lv-watch
+      // colour their rows, and INFO is what a row looks like when nothing
+      // has coloured it.
+      "mono", "num", "lv-info",
+    ]);
+    for (const c of orphans) {
+      failures++;
+      console.error(`::error::${size.name} (${size.w}px), ${route.what}: class "${c}" is on the page and has no rule anywhere — an edit took its styling and nothing noticed`);
+    }
+
     const over = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
     if (over > 1) {
       failures++;
@@ -340,4 +382,4 @@ if (failures) {
 // Name what passed, not just that something did. A summary that says "no
 // horizontal scroll" while two other checks sat silently disabled is how a
 // green run stops meaning anything.
-console.log(`layout: ${checked} page loads across ${WIDTHS.length} widths · no horizontal scroll · no page errors · nothing over its height ceiling · every text pairing at or above WCAG AA (4.5:1, 3:1 for large) · every phone control at 44px and every standalone link at 24 · the verdict above the fold on a phone`);
+console.log(`layout: ${checked} page loads across ${WIDTHS.length} widths · no horizontal scroll · no page errors · nothing over its height ceiling · every text pairing at or above WCAG AA (4.5:1, 3:1 for large) · every phone control at 44px and every standalone link at 24 · the verdict above the fold on a phone · every class on screen has a rule behind it`);

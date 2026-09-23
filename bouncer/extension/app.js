@@ -8477,7 +8477,7 @@
        <ol class="whylist">${deciding.map((n) => `<li><span class="whylvl ${n.level}">${n.level.toUpperCase()}</span><span>${esc2(n.text)}</span><code>${esc2(n.code)}</code></li>`).join("")}</ol>` : coverage.state === "thin" ? `<p class="whylead">The word <b>INCOMPLETE</b> is not a finding about the token. Nothing loud was found, and ${esc2(coverage.line.replace(/^./, (c) => c.toLowerCase()))}</p>` : `<p class="whylead">The word <b>CLEAR</b> is the absence of a finding, not the presence of a clean bill. It means every check below ran and none of them flagged anything \u2014 which is a smaller claim than it sounds.</p>`;
     const checks = `<ul class="whychecks">${coverage.checks.map(
       (c) => `<li class="whycheck">
-          <span class="wcs ${c.state}">${esc2(c.state)}</span>
+          <span class="wcs wcs-${c.state === "n/a" ? "na" : c.state}">${esc2(c.state)}</span>
           <span class="wcl">${esc2(c.label)}</span>
           <span class="wcr">${c.reason ? esc2(c.reason) : esc2(TOPIC_QUESTION[c.topic])}</span>
         </li>`
