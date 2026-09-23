@@ -211,6 +211,81 @@ console.log("cli: the MCP server over stdio");
   else console.log(`  ok  ${tools.length} tools, and --demo is honoured`);
 }
 
+// ---- the extension can reach every chain it offers
+//
+// The popup is the same app behind a Chrome manifest, and MV3 will only
+// let it fetch hosts that manifest lists. Add a chain to the table and
+// forget the manifest and the extension ships a chain in its menu that it
+// cannot read — a failure that looks exactly like the endpoint being
+// down. Only what is FETCHED is checked: explorerUrl is used for links,
+// and a link needs no permission.
+console.log("cli: the extension's manifest against the chain table");
+{
+  const { readFileSync } = await import("node:fs");
+  const toRe = (p) => new RegExp("^" + p.replace(/[.+?^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*") + "$");
+  // A browser normalises "https://host" to "https://host/" before matching.
+  // Without this every bare-host endpoint in the table looks unreachable,
+  // which is what the first version of this check reported.
+  const norm = (u) => { try { return new URL(u).href; } catch { return u; } };
+  const manifest = JSON.parse(readFileSync("extension/manifest.json", "utf8"));
+  const pats = (manifest.host_permissions ?? []).map(toRe);
+  const allowed = (u) => pats.some((p) => p.test(norm(u)));
+
+  // The checker gets tested before it is believed. It has been wrong twice:
+  // once leaving "*" as a regex quantifier, once not normalising the URL.
+  for (const [u, want] of [
+    ["https://bouncer-proxy.tarasenkosanja12.workers.dev/rpc/robinhood", true],
+    ["https://evil.example.com/", false],
+    ["https://base.llamarpc.com.evil.test/", false],
+  ]) {
+    if (allowed(u) !== want) fail(`the manifest checker is broken: ${u} read as ${allowed(u)}, expected ${want}`);
+  }
+
+  let missing = 0;
+  for (const c of Object.values(CHAINS)) {
+    for (const url of c.rpc) if (!allowed(url)) { fail(`the extension offers ${c.key} but its manifest does not allow ${url}`); missing++; }
+    if (c.blockscout && !allowed(c.blockscout)) { fail(`the extension offers ${c.key} but its manifest does not allow its explorer ${c.blockscout}`); missing++; }
+  }
+  if (!missing) console.log("  ok  every endpoint the extension fetches is allowed by its manifest");
+}
+
+// ---- the popup's overrides still target things that exist
+//
+// popup.css is the extension's only difference from the website, and it
+// rots invisibly: after the terminal redesign it still carried ten rules
+// for a layout that was gone (.qcard, .vbody, .stamp-row) and two that
+// still matched and fought the new one — a 34-pixel glow behind a verdict
+// the design had deliberately flattened.
+//
+// Checked against the classes the app CAN emit, not against one rendered
+// page: half of these are states a slip only reaches sometimes — an
+// incomplete check, a second visit, a used calculator — and a page-based
+// check would call every one of them dead.
+console.log("cli: the extension's popup overrides");
+{
+  const { readFileSync } = await import("node:fs");
+  const css = readFileSync("extension/popup.css", "utf8").replace(/\/\*[\s\S]*?\*\//g, "");
+  const emitted = readFileSync("site/src/app.ts", "utf8") + readFileSync("site/index.html", "utf8");
+  const selectors = [...new Set(
+    css.split("}").map((b) => b.split("{")[0].trim()).filter(Boolean)
+      .flatMap((s) => s.split(",").map((x) => x.trim()))
+      .filter((s) => s && !s.startsWith("@")),
+  )];
+  let dead = 0;
+  for (const sel of selectors) {
+    const classes = [...sel.matchAll(/\.([a-zA-Z][\w-]*)/g)].map((m) => m[1]);
+    // A selector with no class (body, header, footer) is an element that
+    // always exists; nothing to check.
+    if (!classes.length) continue;
+    const missing = classes.filter((c) => !new RegExp(`\\b${c}\\b`).test(emitted));
+    if (missing.length) {
+      fail(`popup.css styles ".${missing.join(', .')}" (in "${sel}"), which the app never emits any more`);
+      dead++;
+    }
+  }
+  if (!dead) console.log(`  ok  all ${selectors.length} popup overrides target something the app can render`);
+}
+
 if (failures) {
   console.error(`\ncli: ${failures} problem${failures === 1 ? "" : "s"}.`);
   process.exit(1);

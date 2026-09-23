@@ -816,50 +816,70 @@ footer a:hover{color:var(--brass-2)}
 .wcl{color:var(--text);font:12.5px var(--mono)}
 .wcr{color:var(--muted);min-width:0}
 @media (max-width:760px){.whycheck{grid-template-columns:1fr;gap:3px}}
-/* Popup-only overrides: a fixed width, one column, no remote fonts.
+/* Popup-only overrides.
 
-   The popup is the same app in a 560-pixel box, so everything the site
-   lays out in two columns has to fold, and the poster has to stop being a
-   poster — a 132-pixel word in a 560-pixel popup is the whole window. */
-body{width:560px;min-height:640px;max-height:600px;overflow-y:auto;background-image:none}
+   The popup is the same app in a 560-pixel box that Chrome sizes to this
+   body. Everything the site lays out wide has to fold, and the header has
+   to stop taking a third of the window.
+
+   Kept deliberately short. It used to carry ten rules for a design that
+   no longer exists — .qcard, .vbody, .stamp-row and the rest, all
+   matching nothing — plus two that still matched and fought the current
+   one: a 34-pixel glow behind the verdict, which the terminal design
+   removed on purpose, and a 28-pixel ticker from when the record line was
+   a poster. scripts/cli-check.mjs fails now if a selector here matches
+   nothing on a rendered popup, so this cannot silently rot again. */
+
+/* Chrome sizes an action popup to its content, up to 800×600. min-height
+   beats max-height in CSS, so the old pair (min 640, max 600) meant "640,
+   and the max is decoration" — say the one number that is true. */
+body{width:560px;max-height:600px;overflow-y:auto;background-image:none}
 .wrap{padding-inline:12px}
+
+/* The header is chrome, not content: in a 600-pixel window it has to cost
+   as little as possible before the answer starts. */
 header{position:static}
 .hbar{padding-inline:12px;padding-block:10px;gap:8px}
 .wordmark{font-size:22px}
 .mark{width:28px;height:28px}
 .ext{display:none}
-.hero{padding-block:16px 0}
-.hero h1{font-size:30px;margin-bottom:6px}
-.hero p{font-size:13px}
 .chips{display:none}
-.door{margin-top:12px}
+
+/* The pitch is for a first visit to the website. Somebody who installed
+   the extension has already decided. */
+.hero{padding-block:12px 0}
+.hero h1{font-size:22px;letter-spacing:.05em}
+.hero p{display:none}
+.door{margin-top:10px}
 .door input{font-size:13px;padding:11px}
-.btn{font-size:14px;min-height:42px;padding:0 16px}
+.btn{font-size:13px;min-height:44px;padding:0 16px}
 .source{font-size:12px}
 
-/* One column everywhere. */
-.qgrid,.grid{grid-template-columns:1fr}
-.tiles,.exit-grid{grid-template-columns:1fr 1fr}
-.stamp-row{grid-template-columns:1fr}
-.stamp{justify-self:start;transform:rotate(-3deg)}
+/* One column for anything the site splits in two; the four tiles stay
+   two-by-two, which reads fine at this width. */
+.vtop{grid-template-columns:1fr}
+.vcell{border-right:0;border-bottom:1px solid var(--line)}
+.grid{grid-template-columns:1fr}
+.exit-grid{grid-template-columns:1fr 1fr}
+.calc-res{grid-template-columns:1fr}
+.calc-fig{border-right:0;border-bottom:1px solid var(--line)}
 
-/* The verdict, shrunk to a badge-sized statement rather than a billboard. */
-.vbody{grid-template-columns:1fr;gap:10px;padding:14px 16px 18px}
-.vword{font-size:56px;line-height:.9;text-shadow:0 0 34px currentColor}
-.vhead{padding:14px 16px 0}
-.vsym{font-size:28px}
-.vaddr{margin-left:0;order:9;width:100%;font-size:11px}
+/* The verdict is a statement here, not a billboard. No glow: the word
+   sits in its own hatched cell and does not need one to be found, and a
+   glow in a 560-pixel window is most of the window. */
+.vword{font-size:44px;line-height:.95;text-shadow:none}
 .vlead{font-size:14px}
-.vfoot{padding:10px 16px;gap:8px}
+.vfoot{padding:10px 14px;gap:8px}
 .vacts{margin-left:0}
-.qcard,.unread{padding:16px}
-.qcard h2,.unread h2{font-size:15px}
-details.sec>summary{padding:13px 16px}
-details.sec>.body{padding:0 16px 16px}
-.sec{padding:16px}
-footer{margin-top:28px;font-size:11px}
-.hero p{display:none}
-.hero h1{font-size:26px;letter-spacing:.05em}
+
+/* Rows that are three columns on a page and want to be stacked here. */
+.cgap,.whycheck,.chgrow{grid-template-columns:1fr;gap:3px}
+.seen-row a{grid-template-columns:18px 1fr;gap:4px 10px}
+
+.unread{padding:14px}
+details.sec>summary{padding:13px 14px}
+details.sec>.body{padding:0 14px 14px}
+footer{margin-top:24px;font-size:11px}
 footer>span{flex:1 1 100%}
 </style>
 </head>
