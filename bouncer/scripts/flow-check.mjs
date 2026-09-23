@@ -601,6 +601,41 @@ await walk("the list of what you checked before never states a stale verdict as 
   const stored = await page.evaluate(() => localStorage.getItem("bouncer.seen.v1"));
   if (stored && stored !== "[]") throw new Error(`the history was not actually cleared: ${stored.slice(0, 80)}`);
 });
+await walk("the working behind the verdict is on the page", async (page) => {
+  // "Trust me" is the one thing this tool cannot say. A reader who
+  // disagrees with a verdict should be able to see which findings made it
+  // and go and check those against an explorer themselves.
+  await page.goto(`${url}#/demo/0x00000000000000000000000000000000000bad01`, { waitUntil: "load" });
+  await waitForDone(page);
+  const why = await page.$("#s-why");
+  if (!why) throw new Error("no working shown behind the verdict");
+  await page.evaluate(() => document.querySelector("#s-why")?.setAttribute("open", ""));
+
+  const word = await page.$eval(".vword", (el) => el.textContent.trim());
+  const lead = await page.$eval(".whylead", (el) => el.textContent.replace(/\s+/g, " ").trim());
+  if (!lead.includes(word)) throw new Error(`the working names a different verdict than the headline: "${lead}"`);
+
+  // The findings it names must be exactly the loud ones on the slip —
+  // not a second count a reader cannot arrive at.
+  const named = await page.$$eval(".whylist li", (els) => els.length);
+  const loud = await page.$$eval(".find", (els) => els.filter((e) => /\b(STOP|WATCH)\b/.test(e.textContent)).length);
+  if (named === 0) throw new Error("a STOP with no findings behind it");
+  if (loud && named !== loud) throw new Error(`the working counts ${named} deciding findings, the slip shows ${loud}`);
+
+  // Provenance: the endpoint and what was asked of it.
+  const kv = await page.$eval("#s-why .kv", (el) => el.textContent.replace(/\s+/g, " ").trim());
+  if (!/endpoint/.test(kv)) throw new Error("the working does not say which endpoint answered");
+  if (!/\d+ calls? across/.test(kv)) throw new Error(`the working does not say what was asked: "${kv.slice(0, 120)}"`);
+  const methods = await page.$$eval("#s-why .buys tbody tr", (els) => els.length);
+  if (methods < 2) throw new Error(`only ${methods} methods listed; the read makes more than that`);
+
+  // And every check is accounted for, including the ones that did not run.
+  const states = await page.$$eval(".whycheck .wcs", (els) => els.map((e) => e.textContent.trim()));
+  if (!states.length) throw new Error("the working lists no checks");
+  for (const st of states) {
+    if (!["read", "unread", "unsupported", "n/a"].includes(st)) throw new Error(`unknown check state "${st}"`);
+  }
+});
 await browser.close();
 if (failures) {
   console.error(`\nflows: ${failures} journey${failures === 1 ? "" : "s"} broken.`);

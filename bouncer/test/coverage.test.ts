@@ -196,3 +196,33 @@ test("a transfer to the pool is never reported as a proven sale", async () => {
     assert.match(note.text, /router/, "and it has to name what was not simulated");
   }
 });
+
+test("an ordinary token's market and holders are read from the open door, not the launch fields", async () => {
+  // Found by the "why this verdict" panel, which is the whole reason it
+  // exists. `exit` and `room` are the launchpad's own curve and buyer
+  // list, and both are null for every token a launchpad did not make. So
+  // an ordinary token reported "where it trades" and "who holds it" as
+  // questions that DO NOT APPLY — printed as N/A next to a tile reading
+  // "explorer not reachable", which is the exact confusion between "we
+  // did not look" and "there is nothing to look at" that this module was
+  // written to stop.
+  const slip = await demoSlip(DEMO_PLAIN.token);
+  assert.equal(slip.exit, null, "the fixture has to be an ordinary token for this to mean anything");
+  const cov = doorCoverage(slip);
+  for (const id of ["market", "holders"]) {
+    const c = cov.checks.find((x) => x.id === id);
+    assert.ok(c, `${id} is missing from the coverage`);
+    assert.notEqual(c!.state, "n/a", `${id} reads as inapplicable on a token that certainly has one`);
+  }
+
+  // And with the open door itself missing, they are unread rather than
+  // silently fine — the other direction of the same mistake.
+  const blind = { ...slip, exit: null, room: null, open: { ...slip.open!, pools: null, holders: null } } as typeof slip;
+  const blindCov = doorCoverage(blind);
+  for (const id of ["market", "holders"]) {
+    const c = blindCov.checks.find((x) => x.id === id);
+    assert.equal(c!.state, "unread", `${id} must be unread when nothing could read it`);
+    assert.ok(c!.reason, `${id} must say why`);
+  }
+  assert.equal(blindCov.state, "thin", "two decisive checks unread is a thin reading");
+});

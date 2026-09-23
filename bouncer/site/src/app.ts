@@ -878,8 +878,9 @@ async function runDoor(address: string): Promise<void> {
   const draw = (slip: DoorSlip, stage: Stage) => {
     if (run !== doorRun) return false;
     if (drawn !== null && RANK[stage] <= RANK[drawn]) return true;
-    if (drawn === null) renderSlip(slip, { stage });
-    else keepPlace(() => renderSlip(slip, { stage }));
+    const source: Source = { endpoint: rpc.activeUrl, stats: rpc.stats() };
+    if (drawn === null) renderSlip(slip, { stage, source });
+    else keepPlace(() => renderSlip(slip, { stage, source }));
     drawn = stage;
     if (stage === "done") ready();
     else status.textContent = `${mode === "demo" ? "DEMO · " : `${chain().name} · `}block ${slip.at.block} · ${STILL_READING[stage]}…`;
@@ -1765,6 +1766,85 @@ function wireExitCalc(decimals: number, quoteFor: (tokens: bigint) => SizeAnswer
 }
 
 /**
+ * WHY THIS VERDICT, AND WHERE IT CAME FROM.
+ *
+ * Every other panel is the answer. This one is the working: which
+ * findings the word at the top is made of, what was asked of the chain to
+ * get them, which endpoint answered, how long it took, and what was not
+ * asked at all.
+ *
+ * It exists because "trust me" is the one thing this tool cannot say. A
+ * reader who disagrees with a verdict should be able to see exactly which
+ * two findings produced it and go and check those two against a block
+ * explorer themselves — and a reader who agrees should be able to see how
+ * thin the evidence under a CLEAR can be.
+ *
+ * Collapsed by default. This is the answer to a question most readers do
+ * not have, and putting it open would push the findings down the page for
+ * everybody to serve the few.
+ */
+/** Where a reading came from: the endpoint that answered, and what was asked of it. */
+interface Source {
+  endpoint: string;
+  stats: { method: string; calls: number; ms: number; failures: number }[];
+}
+
+function whyBody(
+  notes: DoorNote[],
+  coverage: Coverage,
+  at: string,
+  source: Source,
+): string {
+  const deciding = notes.filter((n) => n.level === "stop" || n.level === "watch");
+  const word = deciding.some((n) => n.level === "stop") ? "STOP" : deciding.length ? "WATCH" : coverage.state === "thin" ? "INCOMPLETE" : "CLEAR";
+  const why = deciding.length
+    ? `<p class="whylead">The word <b>${word}</b> is these ${deciding.length} finding${deciding.length === 1 ? "" : "s"} and nothing else. Every other line on the slip is context.</p>
+       <ol class="whylist">${deciding
+         .map((n) => `<li><span class="whylvl ${n.level}">${n.level.toUpperCase()}</span><span>${esc(n.text)}</span><code>${esc(n.code)}</code></li>`)
+         .join("")}</ol>`
+    : coverage.state === "thin"
+      ? `<p class="whylead">The word <b>INCOMPLETE</b> is not a finding about the token. Nothing loud was found, and ${esc(coverage.line.replace(/^./, (c) => c.toLowerCase()))}</p>`
+      : `<p class="whylead">The word <b>CLEAR</b> is the absence of a finding, not the presence of a clean bill. It means every check below ran and none of them flagged anything — which is a smaller claim than it sounds.</p>`;
+
+  // What ran and what did not, from the same table the completeness band
+  // uses, so the two can never disagree.
+  // A ruled list rather than a table. The first version had three columns
+  // — check, the question it answers, its state — and the middle one
+  // pushed the reason off the right edge while wrapping itself one word
+  // per line. The question is the least useful of the three anyway: it
+  // repeats the topic tag the findings already carry. The reason is the
+  // part somebody opened this panel for.
+  const checks = `<ul class="whychecks">${coverage.checks
+    .map(
+      (c) =>
+        `<li class="whycheck">
+          <span class="wcs ${c.state}">${esc(c.state)}</span>
+          <span class="wcl">${esc(c.label)}</span>
+          <span class="wcr">${c.reason ? esc(c.reason) : esc(TOPIC_QUESTION[c.topic])}</span>
+        </li>`,
+    )
+    .join("")}</ul>`;
+
+  const total = source.stats.reduce((n, x) => n + x.calls, 0);
+  const calls = source.stats.length
+    ? `<div class="tbl"><table class="buys"><thead><tr><th>method</th><th>calls</th><th>time</th><th>failed</th></tr></thead><tbody>${[...source.stats]
+        .sort((a, b) => b.calls - a.calls)
+        .map((x) => `<tr><td><span class="mono">${esc(x.method)}</span></td><td>${x.calls}</td><td>${x.ms} ms</td><td>${x.failures || "—"}</td></tr>`)
+        .join("")}</tbody></table></div>`
+    : "";
+
+  return `${why}
+    <dl class="kv">
+      <dt>read at</dt><dd>${at}</dd>
+      <dt>endpoint</dt><dd><span class="mono">${esc(source.endpoint)}</span> · straight from your browser, nothing cached and nothing proxied through us</dd>
+      <dt>requests</dt><dd>${total} call${total === 1 ? "" : "s"} across ${source.stats.length} method${source.stats.length === 1 ? "" : "s"}</dd>
+    </dl>
+    <h4 class="cap">What was checked</h4>
+    ${checks}
+    ${calls ? `<h4 class="cap">What was asked of the chain</h4>${calls}` : ""}`;
+}
+
+/**
  * One collapsible section of a slip. Shared by every renderer: it used to be a
  * local inside renderSlip, which meant the Solana slip referred to a name that
  * did not exist there and threw for every visitor.
@@ -1800,7 +1880,7 @@ async function runSolanaDoor(address: string): Promise<void> {
   try {
     const first = await readSplDoor(rpc, address, chain(), { skipHolders: true, skipMarket: true });
     if (run !== doorRun) return;
-    renderSplSlip(first, { stage: "opening" });
+    renderSplSlip(first, { stage: "opening", source: { endpoint: rpc.activeUrl, stats: rpc.stats() } });
     opened = true;
     status.textContent = `${chain().name} · slot ${first.at.slot} · ${SOL_STILL_READING}…`;
   } catch {
@@ -1810,8 +1890,9 @@ async function runSolanaDoor(address: string): Promise<void> {
   try {
     const slip = await readSplDoor(rpc, address, chain());
     if (run !== doorRun) return;
-    if (opened) keepPlace(() => renderSplSlip(slip));
-    else renderSplSlip(slip);
+    const source: Source = { endpoint: rpc.activeUrl, stats: rpc.stats() };
+    if (opened) keepPlace(() => renderSplSlip(slip, { source }));
+    else renderSplSlip(slip, { source });
     ready();
   } catch (error) {
     if (run !== doorRun) return;
@@ -1844,7 +1925,7 @@ function solanaWhen(slip: SplSlip): string {
   return `slots ${span.first}–${span.last} · ${span.spread} apart`;
 }
 
-function renderSplSlip(slip: SplSlip, opts: { stage?: Stage } = {}): void {
+function renderSplSlip(slip: SplSlip, opts: { stage?: Stage; source?: Source } = {}): void {
   // Last render only; see renderSlip for why a mid-read slip must not be
   // reported as an incomplete check.
   const stage0 = opts.stage ?? "done";
@@ -1917,6 +1998,7 @@ function renderSplSlip(slip: SplSlip, opts: { stage?: Stage } = {}): void {
       ${extBody ? section("s-ext", "Token-2022 extensions", "The rules the token program itself enforces on every transfer.", extBody, false) : ""}
       ${holdersBodyText ? section("s-holders", "Who holds it", "The largest token accounts and the wallets behind them.", holdersBodyText, false) : ""}
       ${m ? section("s-calc", "Could you get out?", "Your own position size, priced against the pool reserves read above. A price is not an exit: the two come apart exactly when it matters.", exitCalcBody(m.supply), false) : ""}
+      ${coverage && opts.source ? section("s-why", "Why this verdict", "The working behind the word: which findings made it, what was asked of the chain, which endpoint answered, and what was never checked.", whyBody(slip.notes as DoorNote[], coverage, `${esc(slip.chain.name)} · ${esc(solanaWhen(slip))}${slip.at.timestamp ? ` · ${isoUtc(slip.at.timestamp)}` : ""}`, opts.source), false) : ""}
     </div>
     ${buyStrip(slip.chain.key, slip.subject, Boolean(slip.mint), verdictOf(slip.notes as DoorNote[], "done", coverage).kind)}
   </div>`;
@@ -2275,7 +2357,7 @@ function noteRender(stage: Stage, word: string): void {
   if (log.length < 200) log.push({ stage, at: Math.round(performance.now()), word });
 }
 
-function renderSlip(slip: DoorSlip, opts: { stage?: Stage } = {}): void {
+function renderSlip(slip: DoorSlip, opts: { stage?: Stage; source?: Source } = {}): void {
   const stage0 = opts.stage ?? "done";
   // Only on the last render. The EVM door paints three times off one paste,
   // and on the first two most sections genuinely have not been read yet —
@@ -2427,6 +2509,7 @@ function renderSlip(slip: DoorSlip, opts: { stage?: Stage } = {}): void {
       ${v1 ? section("s-v1", "Rules (Pons V1)", "How this older kind of launch works: pool from block one, launch caps, locked liquidity.", `<ol class="rules">${v1.rules.map((x) => `<li>${esc(x)}</li>`).join("")}</ol>`, false) : ""}
       ${e ? section("s-exit", "Cash out now", "What you would actually get for selling part or all of a position right now.", exitBody, false) : ""}
       ${section("s-calc", "Could you get out?", "Your own position size, priced against the reserves above. A price is not an exit: the two come apart exactly when it matters.", exitCalcBody(slip.id.meta?.totalSupply ?? null), false)}
+      ${coverage && opts.source ? section("s-why", "Why this verdict", "The working behind the word: which findings made it, what was asked of the chain, which endpoint answered, and what was never checked.", whyBody(slip.notes, coverage, `${esc(slip.chain.name)} · block ${slip.at.block} · ${isoUtc(slip.at.timestamp)}`, opts.source), false) : ""}
       ${room ? section("s-room", "Who is inside", "Every buyer since launch, how much the creator's own wallets put in, buys landing in the same block.", roomBody, false) : ""}
       ${crew ? section("s-crew", "Same funder?", "Where the first buyers got their money. Wallets funded by one address before the launch are one group.", crewBody, false) : ""}
       ${l ? section("s-look", "Same name", "Other tokens with this ticker on the chain, and which one launched first.", lookBody, false) : ""}

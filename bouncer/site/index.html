@@ -798,6 +798,28 @@ footer a:hover{color:var(--brass-2)}
   .seen-addr,.seen-was{grid-column:2}
   .seen-go{grid-column:2;justify-self:start}
 }
+
+/* The working behind the verdict. Plain and dense on purpose: this is the
+   panel somebody opens to disagree with the page, and it should read like
+   evidence rather than like more design. */
+.whylead{margin:0 0 14px;font-size:14px;line-height:1.65;color:var(--text)}
+.whylist{margin:0 0 16px;padding:0 0 0 20px;display:grid;gap:10px}
+.whylist li{display:grid;grid-template-columns:auto 1fr auto;gap:10px;align-items:baseline;font-size:13px;line-height:1.6;color:var(--muted)}
+.whylvl{font:10px var(--mono);letter-spacing:.14em}
+.whylvl.stop{color:var(--stop)}
+.whylvl.watch{color:var(--watch)}
+.whylist code{font:11px var(--mono);color:var(--dim)}
+@media (max-width:640px){.whylist li{grid-template-columns:1fr;gap:3px}}
+
+.whychecks{list-style:none;margin:0 0 16px;padding:0;display:grid;gap:1px;background:var(--line);border:1px solid var(--line)}
+.whycheck{display:grid;grid-template-columns:96px 176px 1fr;gap:12px;align-items:baseline;background:var(--surface);padding:9px 12px;font-size:12.5px;line-height:1.55}
+.wcs{font:10px var(--mono);letter-spacing:.12em;text-transform:uppercase;color:var(--muted)}
+.wcs.read{color:var(--ok)}
+.wcs.unread{color:var(--stop)}
+.wcs.unsupported{color:var(--info)}
+.wcl{color:var(--text);font:12.5px var(--mono)}
+.wcr{color:var(--muted);min-width:0}
+@media (max-width:760px){.whycheck{grid-template-columns:1fr;gap:3px}}
 </style>
 </head>
 <body>

@@ -304,22 +304,35 @@ export function doorCoverage(slip: DoorSlip): Coverage {
     reason: "BOUNCER simulates the transfer a sale starts with, not the router path it finishes through — that needs an eth_call state override most public nodes do not serve",
     decisive: false,
   });
+  // Two places a market can come from, and looking at only one of them
+  // was wrong in the worst direction. `exit` is the launchpad's own curve
+  // or pool and is null for every ordinary token; those trade in DEX
+  // pools, which live on the open-door read. Checking `exit` alone made
+  // every ordinary token report "where it trades" as a question that does
+  // not apply — N/A, in the panel that exists to show the working, beside
+  // a tile reading "explorer not reachable". `pools: null` is the
+  // open-door saying it could not read them, and that is unread.
   const exitReason = reasonOf(s, "exit door");
+  const pools = slip.open?.pools ?? null;
+  const knowsMarket = Boolean(slip.exit) || Array.isArray(pools);
   checks.push({
     id: "market",
     label: "where it trades",
     topic: "exit",
-    state: slip.exit ? "read" : exitReason ? "unread" : "n/a",
-    reason: exitReason ? plainReason(exitReason) : undefined,
+    state: knowsMarket ? "read" : exitReason ? "unread" : slip.open ? "unread" : "n/a",
+    reason: knowsMarket ? undefined : plainReason(exitReason ?? "the pools could not be read"),
     decisive: true,
   });
+  // Same shape: `room` is the launchpad's buyer list, and an ordinary
+  // token's holders come off the explorer through the open door.
   const roomReason = reasonOf(s, "the room");
+  const knowsHolders = Boolean(slip.room) || Boolean(slip.open?.holders);
   checks.push({
     id: "holders",
     label: "who holds it",
     topic: "room",
-    state: slip.room ? "read" : roomReason ? "unread" : "n/a",
-    reason: roomReason ? plainReason(roomReason) : undefined,
+    state: knowsHolders ? "read" : roomReason ? "unread" : slip.open ? "unread" : "n/a",
+    reason: knowsHolders ? undefined : plainReason(roomReason ?? "the explorer did not answer, so the holder list could not be read"),
     decisive: true,
   });
   const devReason = reasonOf(s, "dev report card");

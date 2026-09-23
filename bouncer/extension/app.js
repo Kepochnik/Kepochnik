@@ -633,6 +633,14 @@
 
   // src/bouncer/topics.ts
   var TOPIC_ORDER = ["id", "keep", "sell", "exit", "room", "unread"];
+  var TOPIC_QUESTION = {
+    id: "Is this the token you meant?",
+    keep: "Can they take it from you?",
+    sell: "Can you sell it right now?",
+    exit: "What would you actually get out?",
+    room: "Who is already inside?",
+    unread: "What BOUNCER could not read"
+  };
   var TOPIC_TAG = {
     id: "identity",
     keep: "control",
@@ -918,21 +926,24 @@
       decisive: false
     });
     const exitReason = reasonOf(s, "exit door");
+    const pools = slip.open?.pools ?? null;
+    const knowsMarket = Boolean(slip.exit) || Array.isArray(pools);
     checks.push({
       id: "market",
       label: "where it trades",
       topic: "exit",
-      state: slip.exit ? "read" : exitReason ? "unread" : "n/a",
-      reason: exitReason ? plainReason(exitReason) : void 0,
+      state: knowsMarket ? "read" : exitReason ? "unread" : slip.open ? "unread" : "n/a",
+      reason: knowsMarket ? void 0 : plainReason(exitReason ?? "the pools could not be read"),
       decisive: true
     });
     const roomReason = reasonOf(s, "the room");
+    const knowsHolders = Boolean(slip.room) || Boolean(slip.open?.holders);
     checks.push({
       id: "holders",
       label: "who holds it",
       topic: "room",
-      state: slip.room ? "read" : roomReason ? "unread" : "n/a",
-      reason: roomReason ? plainReason(roomReason) : void 0,
+      state: knowsHolders ? "read" : roomReason ? "unread" : slip.open ? "unread" : "n/a",
+      reason: knowsHolders ? void 0 : plainReason(roomReason ?? "the explorer did not answer, so the holder list could not be read"),
       decisive: true
     });
     const devReason = reasonOf(s, "dev report card");
@@ -7900,8 +7911,9 @@
     const draw = (slip, stage) => {
       if (run !== doorRun) return false;
       if (drawn !== null && RANK[stage] <= RANK[drawn]) return true;
-      if (drawn === null) renderSlip(slip, { stage });
-      else keepPlace(() => renderSlip(slip, { stage }));
+      const source = { endpoint: rpc.activeUrl, stats: rpc.stats() };
+      if (drawn === null) renderSlip(slip, { stage, source });
+      else keepPlace(() => renderSlip(slip, { stage, source }));
       drawn = stage;
       if (stage === "done") ready();
       else status.textContent = `${mode === "demo" ? "DEMO \xB7 " : `${chain().name} \xB7 `}block ${slip.at.block} \xB7 ${STILL_READING[stage]}\u2026`;
@@ -8407,6 +8419,30 @@
       });
     }
   }
+  function whyBody(notes, coverage, at, source) {
+    const deciding = notes.filter((n) => n.level === "stop" || n.level === "watch");
+    const word = deciding.some((n) => n.level === "stop") ? "STOP" : deciding.length ? "WATCH" : coverage.state === "thin" ? "INCOMPLETE" : "CLEAR";
+    const why = deciding.length ? `<p class="whylead">The word <b>${word}</b> is these ${deciding.length} finding${deciding.length === 1 ? "" : "s"} and nothing else. Every other line on the slip is context.</p>
+       <ol class="whylist">${deciding.map((n) => `<li><span class="whylvl ${n.level}">${n.level.toUpperCase()}</span><span>${esc2(n.text)}</span><code>${esc2(n.code)}</code></li>`).join("")}</ol>` : coverage.state === "thin" ? `<p class="whylead">The word <b>INCOMPLETE</b> is not a finding about the token. Nothing loud was found, and ${esc2(coverage.line.replace(/^./, (c) => c.toLowerCase()))}</p>` : `<p class="whylead">The word <b>CLEAR</b> is the absence of a finding, not the presence of a clean bill. It means every check below ran and none of them flagged anything \u2014 which is a smaller claim than it sounds.</p>`;
+    const checks = `<ul class="whychecks">${coverage.checks.map(
+      (c) => `<li class="whycheck">
+          <span class="wcs ${c.state}">${esc2(c.state)}</span>
+          <span class="wcl">${esc2(c.label)}</span>
+          <span class="wcr">${c.reason ? esc2(c.reason) : esc2(TOPIC_QUESTION[c.topic])}</span>
+        </li>`
+    ).join("")}</ul>`;
+    const total = source.stats.reduce((n, x) => n + x.calls, 0);
+    const calls = source.stats.length ? `<div class="tbl"><table class="buys"><thead><tr><th>method</th><th>calls</th><th>time</th><th>failed</th></tr></thead><tbody>${[...source.stats].sort((a, b) => b.calls - a.calls).map((x) => `<tr><td><span class="mono">${esc2(x.method)}</span></td><td>${x.calls}</td><td>${x.ms} ms</td><td>${x.failures || "\u2014"}</td></tr>`).join("")}</tbody></table></div>` : "";
+    return `${why}
+    <dl class="kv">
+      <dt>read at</dt><dd>${at}</dd>
+      <dt>endpoint</dt><dd><span class="mono">${esc2(source.endpoint)}</span> \xB7 straight from your browser, nothing cached and nothing proxied through us</dd>
+      <dt>requests</dt><dd>${total} call${total === 1 ? "" : "s"} across ${source.stats.length} method${source.stats.length === 1 ? "" : "s"}</dd>
+    </dl>
+    <h4 class="cap">What was checked</h4>
+    ${checks}
+    ${calls ? `<h4 class="cap">What was asked of the chain</h4>${calls}` : ""}`;
+  }
   function section(id, title, what, body, open) {
     return `<details class="sec" id="${id}"${open ? " open" : ""}><summary><h2>${title}</h2><span class="chev" aria-hidden="true"></span></summary><div class="body"><p class="what">${what}</p>${body}</div></details>`;
   }
@@ -8419,7 +8455,7 @@
     try {
       const first = await readSplDoor(rpc, address, chain(), { skipHolders: true, skipMarket: true });
       if (run !== doorRun) return;
-      renderSplSlip(first, { stage: "opening" });
+      renderSplSlip(first, { stage: "opening", source: { endpoint: rpc.activeUrl, stats: rpc.stats() } });
       opened = true;
       status.textContent = `${chain().name} \xB7 slot ${first.at.slot} \xB7 ${SOL_STILL_READING}\u2026`;
     } catch {
@@ -8427,8 +8463,9 @@
     try {
       const slip = await readSplDoor(rpc, address, chain());
       if (run !== doorRun) return;
-      if (opened) keepPlace(() => renderSplSlip(slip));
-      else renderSplSlip(slip);
+      const source = { endpoint: rpc.activeUrl, stats: rpc.stats() };
+      if (opened) keepPlace(() => renderSplSlip(slip, { source }));
+      else renderSplSlip(slip, { source });
       ready();
     } catch (error) {
       if (run !== doorRun) return;
@@ -8505,6 +8542,7 @@
       ${extBody ? section("s-ext", "Token-2022 extensions", "The rules the token program itself enforces on every transfer.", extBody, false) : ""}
       ${holdersBodyText ? section("s-holders", "Who holds it", "The largest token accounts and the wallets behind them.", holdersBodyText, false) : ""}
       ${m ? section("s-calc", "Could you get out?", "Your own position size, priced against the pool reserves read above. A price is not an exit: the two come apart exactly when it matters.", exitCalcBody(m.supply), false) : ""}
+      ${coverage && opts.source ? section("s-why", "Why this verdict", "The working behind the word: which findings made it, what was asked of the chain, which endpoint answered, and what was never checked.", whyBody(slip.notes, coverage, `${esc2(slip.chain.name)} \xB7 ${esc2(solanaWhen(slip))}${slip.at.timestamp ? ` \xB7 ${isoUtc(slip.at.timestamp)}` : ""}`, opts.source), false) : ""}
     </div>
     ${buyStrip(slip.chain.key, slip.subject, Boolean(slip.mint), verdictOf(slip.notes, "done", coverage).kind)}
   </div>`;
@@ -8830,6 +8868,7 @@
       ${v1 ? section("s-v1", "Rules (Pons V1)", "How this older kind of launch works: pool from block one, launch caps, locked liquidity.", `<ol class="rules">${v1.rules.map((x) => `<li>${esc2(x)}</li>`).join("")}</ol>`, false) : ""}
       ${e ? section("s-exit", "Cash out now", "What you would actually get for selling part or all of a position right now.", exitBody, false) : ""}
       ${section("s-calc", "Could you get out?", "Your own position size, priced against the reserves above. A price is not an exit: the two come apart exactly when it matters.", exitCalcBody(slip.id.meta?.totalSupply ?? null), false)}
+      ${coverage && opts.source ? section("s-why", "Why this verdict", "The working behind the word: which findings made it, what was asked of the chain, which endpoint answered, and what was never checked.", whyBody(slip.notes, coverage, `${esc2(slip.chain.name)} \xB7 block ${slip.at.block} \xB7 ${isoUtc(slip.at.timestamp)}`, opts.source), false) : ""}
       ${room ? section("s-room", "Who is inside", "Every buyer since launch, how much the creator's own wallets put in, buys landing in the same block.", roomBody, false) : ""}
       ${crew ? section("s-crew", "Same funder?", "Where the first buyers got their money. Wallets funded by one address before the launch are one group.", crewBody, false) : ""}
       ${l ? section("s-look", "Same name", "Other tokens with this ticker on the chain, and which one launched first.", lookBody, false) : ""}
