@@ -16,6 +16,22 @@ import { base58Decode, base58Encode } from "./base58.js";
 import { isOnCurve } from "./ed25519.js";
 import { sha256 } from "./sha256.js";
 
+/**
+ * An endpoint's host, for a message somebody has to read.
+ *
+ * The full URLs made the sentence two terminal lines long, and it is
+ * quoted inside other sentences — so it was nested brackets inside nested
+ * brackets by the time it reached the notes. The host is the part that
+ * identifies the endpoint; the scheme and path are noise here.
+ */
+function hostOf(url: string): string {
+  try {
+    return new URL(url).host;
+  } catch {
+    return url;
+  }
+}
+
 export const TOKEN_PROGRAM = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA";
 export const TOKEN_2022_PROGRAM = "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb";
 export const METADATA_PROGRAM = "metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s";
@@ -234,7 +250,7 @@ export class SolanaRpc {
     const reason = lastError instanceof Error ? lastError.message : String(lastError);
     if (this.urls.length > 1) {
       throw new SolanaRpcError(
-        `all ${this.urls.length} Solana endpoints BOUNCER knows refused this read (${this.urls.join(", ")}). Last answer: ${reason}`,
+        `all ${this.urls.length} Solana endpoints BOUNCER knows refused this read (${this.urls.map(hostOf).join(", ")}) — last: ${reason}`,
         lastError instanceof SolanaRpcError ? lastError.code : undefined,
       );
     }

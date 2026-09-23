@@ -31,6 +31,7 @@ import {
 } from "../chain/solana.js";
 import type { Receipt } from "../receipt.js";
 import type { DoorNote } from "./door.js";
+import { splCoverage, type Coverage } from "./coverage.js";
 
 export interface SplHolder {
   /** The token account. */
@@ -279,6 +280,15 @@ export async function readSplDoor(rpc: SolanaRpc, input: string, chain: ChainCon
  */
 function reasonFor(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
+  // Do not explain a message that already explains itself.
+  //
+  // The client says "all 2 Solana endpoints BOUNCER knows refused this
+  // read (…). Last answer: … responded 403". Wrapping that in "the public
+  // endpoint refused this read (…)" produced a sentence nested inside a
+  // sentence, each with its own brackets, over two terminal lines — and
+  // then the notes wrapped it a third time. Seen end to end in the CLI
+  // and unreadable.
+  if (/endpoints? BOUNCER knows/i.test(message)) return message;
   if (/\b429\b|rate limit|too many requests/i.test(message)) {
     return `the public endpoint rate-limited this read (${message}). Point BOUNCER at your own endpoint with RPC_URL_SOLANA to get it.`;
   }
@@ -498,6 +508,31 @@ export function splNotes(slip: SplSlip): DoorNote[] {
   return notes;
 }
 
+/**
+ * The completeness state, as a receipt section.
+ *
+ * Seen end to end in the terminal for the first time and it was missing
+ * entirely. The website says "INCOMPLETE CHECK · 3 of 4 answered" over the
+ * verdict with a button to try again; the CLI printed four cheerful INFO
+ * lines — the supply is fixed, nobody can freeze you — and left the reader
+ * to infer from one WATCH buried among them that the pools and the holders
+ * were never read. Then the footer said "Every value was read", which was
+ * false on exactly the readings where it mattered.
+ *
+ * Same coverage table as every other surface, so they cannot drift.
+ */
+function coverageSection(coverage: Coverage): { title: string; rows: { label: string; value: string; note?: string }[] } | null {
+  if (coverage.state === "complete" && !coverage.limits.length) return null;
+  return {
+    title: coverage.state === "thin" ? "Incomplete check" : coverage.state === "partial" ? "Partial check" : "What this does not cover",
+    rows: [
+      { label: "answered", value: `${coverage.read} of ${coverage.asked} checks`, note: coverage.state === "complete" ? undefined : coverage.line },
+      ...coverage.gaps.map((g) => ({ label: g.label, value: "not read", note: g.reason })),
+      ...coverage.limits.map((g) => ({ label: g.label, value: "not offered", note: g.reason })),
+    ],
+  };
+}
+
 export function splReceipt(slip: SplSlip): Receipt {
   const m = slip.mint;
   const name = slip.metadata?.symbol ? `${slip.metadata.symbol}${slip.metadata.name ? ` · ${slip.metadata.name}` : ""}` : slip.subject;
@@ -579,13 +614,20 @@ export function splReceipt(slip: SplSlip): Receipt {
       ],
     });
   }
+  const coverage = splCoverage(slip);
+  const cov = coverageSection(coverage);
+  // Before the notes, not after: the notes are what was found, and how
+  // much of the token was actually looked at decides what "found" is worth.
+  if (cov) sections.push(cov);
   sections.push({ title: "Door notes", rows: slip.notes.map((n) => ({ label: n.level.toUpperCase(), value: n.text })) });
   return {
     title: `BOUNCER · ${name}`,
     subtitle: `${slip.stamp} · ${slip.chain.name} · ${slip.at.slot ? `slot ${slip.at.slot}` : "slot not reported"}${slip.at.timestamp ? ` · ${new Date(slip.at.timestamp * 1000).toISOString().replace(/\.\d+Z$/, "Z")}` : ""}`,
     sections,
     footnotes: [
-      `Every value was read from ${slip.chain.name} at the slot shown. Nothing is scored, predicted or advised.`,
+      coverage.state === "complete"
+        ? `Every check that applies here answered. Values are read from ${slip.chain.name} across the slots this reading spans; nothing is scored, predicted or advised.`
+        : `This reading is incomplete: ${coverage.line} Nothing is scored, predicted or advised, and what was not read is not a clean result.`,
       "On Solana the questions that matter most are fields on the mint account, not guesses about code: whether anyone can print more, and whether anyone can freeze what you hold.",
     ],
     meta: { stamp: slip.stamp, slot: slip.at.slot, subject: slip.subject, notes: slip.notes.length, chain: slip.chain.key },

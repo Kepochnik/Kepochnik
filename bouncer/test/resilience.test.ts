@@ -88,3 +88,45 @@ test("a single-endpoint chain is not told it tried several", async () => {
     },
   );
 });
+
+test("the terminal never claims every value was read when it was not", async () => {
+  // Seen end to end in the CLI for the first time and it was wrong twice
+  // over: no completeness state anywhere, and a footer reading "Every
+  // value was read from Solana at the slot shown" printed over a reading
+  // whose holders and pools had both been refused. The website had said
+  // INCOMPLETE about the same slip for days.
+  const { splReceipt } = await import("../src/bouncer/spl.js");
+  const { renderReceipt } = await import("../src/receipt.js");
+  const rpc = new SolanaRpc({
+    urls: ["https://a.invalid"],
+    minSpacingMs: 0,
+    retries: 0,
+    fetchImpl: (async (_i: RequestInfo | URL, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body ?? "{}")) as { method: string };
+      if (body.method === "getSlot") return new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, result: 1 }), { status: 200 });
+      if (body.method === "getBlockTime") return new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, result: 1_700_000_000 }), { status: 200 });
+      if (body.method === "getAccountInfo" || body.method === "getMultipleAccounts") {
+        const mint = Buffer.alloc(82);
+        mint[45] = 1;
+        const value = { owner: TOKEN_PROGRAM, lamports: 1, executable: false, data: [mint.toString("base64"), "base64"] };
+        return new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, result: body.method === "getAccountInfo" ? { value } : { value: [value, null] } }), { status: 200 });
+      }
+      return new Response("Forbidden", { status: 403 });
+    }) as unknown as typeof fetch,
+  });
+  const slip = await readSplDoor(rpc, base58Encode(key(7)), CHAINS.solana, { deadlineMs: 1_200, marketDeadlineMs: 1_200 });
+  const text = renderReceipt(splReceipt(slip), "text");
+
+  assert.ok(!/Every value was read/i.test(text), "the footer must not claim a complete reading");
+  assert.match(text, /INCOMPLETE CHECK/i, `the terminal has to carry the state the website carries:\n${text.slice(0, 600)}`);
+  assert.match(text, /who holds it/i);
+  assert.match(text, /where it trades/i);
+
+  // And a reason a reader can act on, not an HTTP code on its own.
+  assert.match(text, /refused the request \(403\)/i);
+
+  // No nested-bracket wrapping: the client's message already explains
+  // itself, and quoting it inside another explanation made two terminal
+  // lines of brackets inside brackets.
+  assert.ok(!/refused this read \(.*refused this read/i.test(text), "an error message was wrapped inside itself");
+});

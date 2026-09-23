@@ -17,6 +17,7 @@ import type { BlockHeader, RpcClient } from "../chain/rpc.js";
 import { addressTopic, findBlockByTimestamp, readTapeAdaptive } from "../chain/tape.js";
 import { formatBps, formatDuration, formatUnits, isoUtc, shortAddress } from "../format.js";
 import type { Receipt } from "../receipt.js";
+import { doorCoverage, type Coverage } from "./coverage.js";
 import { coverChargeLine, readCoverCharge, type CoverCharge } from "./coverCharge.js";
 import { devReportLine, readDevReport, type DevReport } from "./devReport.js";
 import { readExitDoor, type ExitDoor } from "./exitDoor.js";
@@ -956,6 +957,23 @@ function usd(value: number): string {
   return `$${value.toFixed(0)}`;
 }
 
+/**
+ * The completeness state, as a receipt section. Same table every other
+ * surface reads; see the matching function in spl.ts for why the CLI
+ * needed one at all.
+ */
+function coverageSection(coverage: Coverage): { title: string; rows: { label: string; value: string; note?: string }[] } | null {
+  if (coverage.state === "complete" && !coverage.limits.length) return null;
+  return {
+    title: coverage.state === "thin" ? "Incomplete check" : coverage.state === "partial" ? "Partial check" : "What this does not cover",
+    rows: [
+      { label: "answered", value: `${coverage.read} of ${coverage.asked} checks`, note: coverage.state === "complete" ? undefined : coverage.line },
+      ...coverage.gaps.map((g) => ({ label: g.label, value: "not read", note: g.reason })),
+      ...coverage.limits.map((g) => ({ label: g.label, value: "not offered", note: g.reason })),
+    ],
+  };
+}
+
 export function doorReceipt(slip: DoorSlip): Receipt {
   const meta = slip.id.meta;
   const launch = slip.id.launch;
@@ -1133,13 +1151,18 @@ export function doorReceipt(slip: DoorSlip): Receipt {
       ],
     });
   }
+  const coverage = doorCoverage(slip);
+  const cov = coverageSection(coverage);
+  if (cov) sections.push(cov);
   sections.push({ title: "Door notes", rows: slip.notes.map((n) => ({ label: n.level.toUpperCase(), value: n.text })) });
   return {
     title: `BOUNCER · ${title}`,
     subtitle: `${slip.stamp} · ${slip.chain.name} · block ${slip.at.block} · ${isoUtc(slip.at.timestamp)}`,
     sections,
     footnotes: [
-      `Every value was read from ${slip.chain.name} at the block shown. Nothing is scored, predicted or advised: the slip says what is true at the door.`,
+      coverage.state === "complete"
+        ? `Every check that applies here answered, all of it read from ${slip.chain.name} at the block shown. Nothing is scored, predicted or advised: the slip says what is true at the door.`
+        : `This reading is incomplete: ${coverage.line} What was read came from ${slip.chain.name} at the block shown; what was not read is not a clean result.`,
       ...(slip.rules ? [`Amounts in ${slip.rules.quote.symbol}; ${formatUnits(slip.rules.snapshot.token.totalSupply, slip.rules.snapshot.token.decimals, 0)} total supply.`] : []),
     ],
     meta: { stamp: slip.stamp, block: slip.at.block, subject: slip.subject, notes: slip.notes.length, chain: slip.chain.key },

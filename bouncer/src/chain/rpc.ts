@@ -5,6 +5,22 @@
  */
 import type { Hex, RawLog } from "./abi.js";
 
+/**
+ * An endpoint's host, for a message somebody has to read.
+ *
+ * The full URLs made the sentence two terminal lines long, and it is
+ * quoted inside other sentences — so it was nested brackets inside nested
+ * brackets by the time it reached the notes. The host is the part that
+ * identifies the endpoint; the scheme and path are noise here.
+ */
+function hostOf(url: string): string {
+  try {
+    return new URL(url).host;
+  } catch {
+    return url;
+  }
+}
+
 export interface RpcOptions {
   urls: string[];
   expectedChainId: number;
@@ -516,7 +532,7 @@ export class RpcClient {
     const reason = lastError instanceof Error ? lastError.message : String(lastError);
     if (this.urls.length > 1) {
       const failed = lastError instanceof RpcError ? lastError : null;
-      const wrapped = new RpcError(`all ${this.urls.length} endpoints BOUNCER knows for this chain refused this read (${this.urls.join(", ")}). Last answer: ${reason}`, failed?.code);
+      const wrapped = new RpcError(`all ${this.urls.length} endpoints BOUNCER knows for this chain refused this read (${this.urls.map(hostOf).join(", ")}) — last: ${reason}`, failed?.code);
       throw wrapped;
     }
     throw lastError instanceof Error ? lastError : new RpcError(reason);
