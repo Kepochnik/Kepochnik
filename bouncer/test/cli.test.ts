@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { readFile } from "node:fs/promises";
 import { main } from "../src/cli.js";
 
 async function run(argv: string[]): Promise<{ code: number; out: string }> {
@@ -112,4 +113,34 @@ test("a launchpad-only command on a chain with no launchpad refuses at once, and
 test("the chain list in help names every chain the tool can read", async () => {
   const { out } = await run([]);
   for (const chain of ["robinhood", "base", "bnb", "solana", "arc"]) assert.match(out, new RegExp(chain));
+});
+
+test("every flag the source reads is a flag the parser knows", async () => {
+  // The list in args.ts is what stands between a user and a silent
+  // misread. It has to cover everything the commands actually consult, or
+  // a real flag gets refused from somebody's command line; and a stray
+  // entry is a typo that will never be caught.
+  //
+  // Held against the source rather than maintained by hand, because a
+  // flag added to a command and not added to the list is exactly the
+  // change nobody remembers to make twice.
+  const { KNOWN_FLAGS, unknownFlags } = await import("../src/cli/args.js");
+  // From the repo root, not relative to this module: the tests run out of
+  // dist/, where ../src/cli.ts is the compiled tree and the .ts file is
+  // not there at all.
+  const source = await readFile(`${process.cwd()}/src/cli.ts`, "utf8");
+  const used = new Set<string>();
+  for (const m of source.matchAll(/flags(?:,\s*|\[)"([a-z0-9-]+)"/g)) used.add(m[1]);
+  for (const m of source.matchAll(/args\.flags\.([a-z][a-zA-Z0-9]*)/g)) used.add(m[1]);
+
+  const known = new Set<string>(KNOWN_FLAGS);
+  const missing = [...used].filter((f) => !known.has(f)).sort();
+  assert.deepEqual(missing, [], `these flags are read by the CLI but would be refused as unknown: ${missing.join(", ")}`);
+
+  // And the suggestion actually fires for the typo that motivated it: a
+  // transposition, which is two edits and the commonest kind there is.
+  assert.equal(unknownFlags({ chian: "base" })[0]?.meant, "chain");
+  assert.equal(unknownFlags({ dem0: true })[0]?.meant, "demo");
+  // Something that is not a near miss gets no invented suggestion.
+  assert.equal(unknownFlags({ zzzzzzzz: true })[0]?.meant, undefined);
 });

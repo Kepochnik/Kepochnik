@@ -9,7 +9,21 @@ import { SolanaRpc } from "../dist/src/chain/solana.js";
 import { BlockscoutClient } from "../dist/src/chain/blockscout.js";
 import { DEMO_BLOCKSCOUT, demoBlockscoutFetch, demoRpc } from "../dist/src/bouncer/demo.js";
 
-const demo = process.env.BOUNCER_DEMO === "1";
+// Both spellings, because one of them was silently ignored.
+//
+// Every other binary here takes --demo. This one took BOUNCER_DEMO=1 and
+// nothing else, so `bouncer-mcp --demo` started a server that read the
+// REAL chains while its operator believed it was on the synthetic one.
+// A flag that is quietly dropped is worse than one that is rejected: the
+// second tells you, the first hands you live data you did not ask for.
+const demo = process.env.BOUNCER_DEMO === "1" || process.argv.includes("--demo");
+
+// And anything else is refused rather than dropped, for the same reason.
+const UNKNOWN = process.argv.slice(2).filter((a) => a !== "--demo");
+if (UNKNOWN.length) {
+  console.error(`bouncer-mcp: unknown argument${UNKNOWN.length === 1 ? "" : "s"} ${UNKNOWN.join(", ")}. This server takes --demo and its settings from the environment (RPC_URL_<CHAIN>, FACTORY_<CHAIN>, BOUNCER_DEMO=1).`);
+  process.exit(1);
+}
 const server = createMcpServer({
   demo,
   rpcFor: (chain) => {

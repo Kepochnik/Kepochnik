@@ -22,7 +22,7 @@ import { NotAPonsLaunch, PonsReader, readTokenMeta } from "./chain/reader.js";
 import { RpcClient } from "./chain/rpc.js";
 import { SolanaRpc } from "./chain/solana.js";
 import { findBlockByTimestamp } from "./chain/tape.js";
-import { flagNumber, flagString, parseArgs, type ParsedArgs } from "./cli/args.js";
+import { flagNumber, flagString, parseArgs, unknownFlags, type ParsedArgs } from "./cli/args.js";
 import { doctorReceipt, runDoctor } from "./cli/doctor.js";
 import { renderReceipt, type Receipt, type ReceiptFormat } from "./receipt.js";
 import { doorCard } from "./bouncer/card.js";
@@ -76,6 +76,23 @@ No key. No signer. No transaction path.`;
 export async function main(argv: string[], write: (text: string) => void = (t) => process.stdout.write(t)): Promise<number> {
   const args = parseArgs(argv);
   const command = args.command ?? "help";
+  // A flag the tool does not know is refused, never dropped.
+  //
+  // `--chian base` parsed cleanly and read Robinhood Chain. The user
+  // believed they had checked a token on Base; on Robinhood Chain that
+  // address is somebody else's contract or nothing at all, and BOUNCER
+  // reported on it with total confidence. Silently reading the wrong
+  // chain is the worst failure available to a tool whose argument is "do
+  // not trust that this address is what you were told".
+  const strays = unknownFlags(args.flags);
+  if (strays.length) {
+    for (const s of strays) {
+      write(`bouncer: unknown flag --${s.flag}${s.meant ? `. Did you mean --${s.meant}?` : ""}\n`);
+    }
+    write(`Nothing was read. Run bouncer with no arguments for the list of flags.\n`);
+    return 1;
+  }
+
   const demo = args.flags.demo === true || command === "demo";
   const format = (flagString(args.flags, "format") ?? "text") as ReceiptFormat | "svg";
   const output = flagString(args.flags, "output");

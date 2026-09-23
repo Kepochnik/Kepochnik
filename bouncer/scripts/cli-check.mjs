@@ -157,6 +157,60 @@ if (unpublished) {
   }
 }
 
+// ---- a flag the tool does not know is refused, never dropped
+//
+// `--chian base` parsed cleanly and read Robinhood Chain while its user
+// believed they were checking a token on Base. Silently reading the wrong
+// chain is the worst failure available to this tool.
+console.log("cli: a mistyped flag stops the run");
+for (const [flag, meant] of [["--chian", "--chain"], ["--dem0", "--demo"], ["--formt", "--format"], ["--nosuchthing", null]]) {
+  const { code, out } = await bouncer(["door", DEMO_TOKEN, "--demo", flag], { timeout: 25_000 });
+  if (code === 0) fail(`${flag} was accepted and something was read anyway`);
+  if (!out.includes(`unknown flag ${flag}`)) fail(`${flag} was not named in the refusal: "${out.trim().slice(0, 110)}"`);
+  if (meant && !out.includes(`Did you mean ${meant}?`)) fail(`${flag} got no suggestion of ${meant}: "${out.trim().slice(0, 110)}"`);
+  if (!meant && /Did you mean/.test(out)) fail(`${flag} was given an invented suggestion: "${out.trim().slice(0, 110)}"`);
+}
+console.log("  ok  mistyped flags refuse with a suggestion, and nothing is read");
+
+// ---- the MCP server answers over stdio, and takes the same --demo
+//
+// It took BOUNCER_DEMO=1 and nothing else, so `bouncer-mcp --demo` served
+// an agent from the REAL chains while its operator believed otherwise.
+console.log("cli: the MCP server over stdio");
+{
+  const { spawn } = await import("node:child_process");
+  const ask = (args, env) =>
+    new Promise((resolve) => {
+      const p = spawn("node", ["bin/bouncer-mcp.mjs", ...args], { stdio: ["pipe", "pipe", "pipe"], env: { ...process.env, ...env } });
+      let out = "";
+      p.stdout.on("data", (d) => (out += d));
+      p.stderr.on("data", (d) => (out += d));
+      for (const [id, method, params] of [
+        [1, "initialize", { protocolVersion: "2024-11-05", capabilities: {}, clientInfo: { name: "check", version: "1" } }],
+        [2, "tools/list", {}],
+        [3, "tools/call", { name: "bouncer_check", arguments: { address: DEMO_TOKEN } }],
+      ]) {
+        p.stdin.write(JSON.stringify({ jsonrpc: "2.0", id, method, params }) + "\n");
+      }
+      setTimeout(() => {
+        p.kill();
+        resolve(out);
+      }, 30_000);
+    });
+
+  const out = await ask(["--demo"], {});
+  const replies = out.split("\n").filter((l) => l.trim().startsWith("{")).map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
+  const byId = new Map(replies.map((r) => [r.id, r]));
+  if (!byId.has(1)) fail("the MCP server did not answer initialize");
+  const tools = byId.get(2)?.result?.tools ?? [];
+  if (tools.length < 5) fail(`the MCP server listed ${tools.length} tools`);
+  const call = byId.get(3)?.result;
+  if (!call) fail("the MCP server did not answer a tools/call");
+  else if (call.isError) fail(`bouncer_check over MCP failed with --demo, so the flag is being ignored: ${JSON.stringify(call.content).slice(0, 140)}`);
+  else if (!call.structuredContent) fail("bouncer_check returned no structured content for an agent to read");
+  else console.log(`  ok  ${tools.length} tools, and --demo is honoured`);
+}
+
 if (failures) {
   console.error(`\ncli: ${failures} problem${failures === 1 ? "" : "s"}.`);
   process.exit(1);
