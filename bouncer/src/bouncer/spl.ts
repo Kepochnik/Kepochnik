@@ -97,9 +97,25 @@ export async function readSplDoor(rpc: SolanaRpc, input: string, chain: ChainCon
   // fetches it beside the mint for the same one request.
   const metadataPda = metadataAddress(input);
   const [{ slot, timestamp }, accounts] = await Promise.all([
+    // The slot says WHEN, and nothing on this chain is pinned to it —
+    // every section is served at whatever slot its node had reached, which
+    // is why the slip reports a range rather than a number. So it is
+    // metadata about the reading, and metadata must never be able to
+    // destroy the reading.
+    //
+    // It could. Found by pasting a real mint at a real endpoint: the node
+    // answered getSlot with a 403, Promise.all rejected, and BOUNCER
+    // reported nothing at all — over a mint account it could have read
+    // perfectly well, about a token whose mint authority was still set.
+    // "Somebody can print more of this" is the answer somebody came for,
+    // and it was thrown away to protect a timestamp.
     (async () => {
-      const at = await rpc.slot();
-      return { slot: at, timestamp: await rpc.blockTime(at) };
+      try {
+        const at = await rpc.slot();
+        return { slot: at, timestamp: await rpc.blockTime(at) };
+      } catch {
+        return { slot: 0, timestamp: null };
+      }
     })(),
     rpc.multipleAccounts(metadataPda ? [input, metadataPda] : [input]).catch(async () => [await rpc.accountInfo(input), null]),
   ]);
@@ -245,6 +261,13 @@ export async function readSplDoor(rpc: SolanaRpc, input: string, chain: ChainCon
   // Measured after every read has landed, because that is the only point
   // at which the range is the whole range.
   slip.at.span = rpc.slotSpan();
+  // When getSlot was refused, the responses themselves still carry a
+  // context slot — so the reading knows when it happened even though the
+  // clock read failed. Better than the zero, and true.
+  if (slip.at.slot === 0 && slip.at.span) slip.at.slot = slip.at.span.last;
+  if (slip.at.slot === 0) {
+    slip.skipped.push({ section: "the slot", reason: "the node would not say which slot it was serving, so this reading has no clock on it" });
+  }
   slip.notes = splNotes(slip);
   return slip;
 }
@@ -559,7 +582,7 @@ export function splReceipt(slip: SplSlip): Receipt {
   sections.push({ title: "Door notes", rows: slip.notes.map((n) => ({ label: n.level.toUpperCase(), value: n.text })) });
   return {
     title: `BOUNCER · ${name}`,
-    subtitle: `${slip.stamp} · ${slip.chain.name} · slot ${slip.at.slot}${slip.at.timestamp ? ` · ${new Date(slip.at.timestamp * 1000).toISOString().replace(/\.\d+Z$/, "Z")}` : ""}`,
+    subtitle: `${slip.stamp} · ${slip.chain.name} · ${slip.at.slot ? `slot ${slip.at.slot}` : "slot not reported"}${slip.at.timestamp ? ` · ${new Date(slip.at.timestamp * 1000).toISOString().replace(/\.\d+Z$/, "Z")}` : ""}`,
     sections,
     footnotes: [
       `Every value was read from ${slip.chain.name} at the slot shown. Nothing is scored, predicted or advised.`,

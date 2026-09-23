@@ -509,7 +509,17 @@ export class RpcClient {
       }
     }
     this.record(requests, Date.now() - startedAt, true);
-    throw lastError instanceof Error ? lastError : new RpcError(String(lastError));
+    // Every endpoint that was tried, not just the last to fail. See the
+    // matching comment in solana.ts: "one node is down" and "every node
+    // BOUNCER knows refused you" need different next moves from a reader,
+    // and a message naming one URL cannot tell them apart.
+    const reason = lastError instanceof Error ? lastError.message : String(lastError);
+    if (this.urls.length > 1) {
+      const failed = lastError instanceof RpcError ? lastError : null;
+      const wrapped = new RpcError(`all ${this.urls.length} endpoints BOUNCER knows for this chain refused this read (${this.urls.join(", ")}). Last answer: ${reason}`, failed?.code);
+      throw wrapped;
+    }
+    throw lastError instanceof Error ? lastError : new RpcError(reason);
   }
 
   private async pace(): Promise<void> {

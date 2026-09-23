@@ -1920,6 +1920,10 @@ async function runSolanaDoor(address: string): Promise<void> {
  */
 function solanaWhen(slip: SplSlip): string {
   const span = slip.at.span;
+  // Zero is the sentinel for "the node would not say", and printing it as
+  // a slot number would be a false fact in the one line whose whole job
+  // is to say when this was true.
+  if (!slip.at.slot && !span) return "the slot was not reported";
   if (!span || span.spread === 0) return `slot ${slip.at.slot}`;
   if (span.spread <= 4) return `slot ${span.last}`;
   return `slots ${span.first}–${span.last} · ${span.spread} apart`;

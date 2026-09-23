@@ -183,7 +183,11 @@ export function splCard(slip: SplSlip, options: CardOptions): string {
       chain: slip.chain.name,
       // The range the reading covered, not the slot it started at. See
       // SplSlip.at for why those differ on this chain.
-      at: slip.at.span && slip.at.span.spread > 4 ? `slots ${slip.at.span.first}-${slip.at.span.last}` : `slot ${slip.at.span?.last ?? slip.at.slot}`,
+      at: slip.at.span && slip.at.span.spread > 4
+        ? `slots ${slip.at.span.first}-${slip.at.span.last}`
+        : (slip.at.span?.last ?? slip.at.slot)
+          ? `slot ${slip.at.span?.last ?? slip.at.slot}`
+          : "slot not reported",
       timestamp: slip.at.timestamp,
       ticker: clip(slip.metadata?.symbol || shortAddress(slip.subject), 12),
       lead: options.lead,

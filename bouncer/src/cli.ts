@@ -29,6 +29,7 @@ import { doorCard } from "./bouncer/card.js";
 import { DEMO, DEMO_BLOCKSCOUT, DEMO_IMPOSTOR, demoBlockscoutFetch, demoRpc } from "./bouncer/demo.js";
 import { devReportLine, readDevReport } from "./bouncer/devReport.js";
 import { doorReceipt, findLaunchBlock, readDoor, slipJson, type DoorOptions } from "./bouncer/door.js";
+import { plainReason } from "./bouncer/coverage.js";
 import { readExitDoor } from "./bouncer/exitDoor.js";
 import { MASCOT_SVG_INNER } from "./bouncer/mascot.js";
 import { readLaunchPlan } from "./bouncer/planner.js";
@@ -456,7 +457,19 @@ export async function main(argv: string[], write: (text: string) => void = (t) =
         return 1;
     }
   } catch (error) {
-    write(`bouncer: ${error instanceof Error ? error.message : String(error)}\n`);
+    // The same translation the website uses, from the same function. The
+    // CLI printed "responded 403", which tells somebody who already knows
+    // what an RPC is roughly what happened and tells everybody else
+    // nothing — and it is the first thing a new user sees, because a
+    // public endpoint refusing the heavier reads is the common case
+    // rather than the exceptional one.
+    const raw = error instanceof Error ? error.message : String(error);
+    const said = plainReason(raw);
+    write(`bouncer: ${said}\n`);
+    if (said !== raw) write(`  (${raw})\n`);
+    if (/refused|rate.?limit|in time|never reached/i.test(said)) {
+      write(`  Public endpoints limit the heavier reads. Pass your own with --rpc <url>, or deploy the read-only proxy in this repo's proxy/ folder.\n`);
+    }
     return 1;
   }
 }

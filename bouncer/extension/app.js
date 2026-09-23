@@ -1937,7 +1937,13 @@
         }
       }
       this.record(requests, Date.now() - startedAt, true);
-      throw lastError instanceof Error ? lastError : new RpcError(String(lastError));
+      const reason = lastError instanceof Error ? lastError.message : String(lastError);
+      if (this.urls.length > 1) {
+        const failed2 = lastError instanceof RpcError ? lastError : null;
+        const wrapped = new RpcError(`all ${this.urls.length} endpoints BOUNCER knows for this chain refused this read (${this.urls.join(", ")}). Last answer: ${reason}`, failed2?.code);
+        throw wrapped;
+      }
+      throw lastError instanceof Error ? lastError : new RpcError(reason);
     }
     async pace() {
       if (this.minSpacingMs <= 0) return;
@@ -2317,7 +2323,14 @@
         }
       }
       this.record(method, Date.now() - startedAt, true);
-      throw lastError instanceof Error ? lastError : new SolanaRpcError(String(lastError));
+      const reason = lastError instanceof Error ? lastError.message : String(lastError);
+      if (this.urls.length > 1) {
+        throw new SolanaRpcError(
+          `all ${this.urls.length} Solana endpoints BOUNCER knows refused this read (${this.urls.join(", ")}). Last answer: ${reason}`,
+          lastError instanceof SolanaRpcError ? lastError.code : void 0
+        );
+      }
+      throw lastError instanceof Error ? lastError : new SolanaRpcError(reason);
     }
     async pace() {
       if (this.minSpacingMs <= 0) return;
@@ -3085,9 +3098,25 @@
     if (!isSolanaAddress(input)) throw new Error(`${input} is not a Solana address`);
     const metadataPda = metadataAddress(input);
     const [{ slot, timestamp }, accounts] = await Promise.all([
+      // The slot says WHEN, and nothing on this chain is pinned to it —
+      // every section is served at whatever slot its node had reached, which
+      // is why the slip reports a range rather than a number. So it is
+      // metadata about the reading, and metadata must never be able to
+      // destroy the reading.
+      //
+      // It could. Found by pasting a real mint at a real endpoint: the node
+      // answered getSlot with a 403, Promise.all rejected, and BOUNCER
+      // reported nothing at all — over a mint account it could have read
+      // perfectly well, about a token whose mint authority was still set.
+      // "Somebody can print more of this" is the answer somebody came for,
+      // and it was thrown away to protect a timestamp.
       (async () => {
-        const at = await rpc.slot();
-        return { slot: at, timestamp: await rpc.blockTime(at) };
+        try {
+          const at = await rpc.slot();
+          return { slot: at, timestamp: await rpc.blockTime(at) };
+        } catch {
+          return { slot: 0, timestamp: null };
+        }
       })(),
       rpc.multipleAccounts(metadataPda ? [input, metadataPda] : [input]).catch(async () => [await rpc.accountInfo(input), null])
     ]);
@@ -3200,6 +3229,10 @@
     );
     await Promise.all([readName, readHolders, readMarket2]);
     slip.at.span = rpc.slotSpan();
+    if (slip.at.slot === 0 && slip.at.span) slip.at.slot = slip.at.span.last;
+    if (slip.at.slot === 0) {
+      slip.skipped.push({ section: "the slot", reason: "the node would not say which slot it was serving, so this reading has no clock on it" });
+    }
     slip.notes = splNotes(slip);
     return slip;
   }
@@ -6250,7 +6283,7 @@
         chain: slip.chain.name,
         // The range the reading covered, not the slot it started at. See
         // SplSlip.at for why those differ on this chain.
-        at: slip.at.span && slip.at.span.spread > 4 ? `slots ${slip.at.span.first}-${slip.at.span.last}` : `slot ${slip.at.span?.last ?? slip.at.slot}`,
+        at: slip.at.span && slip.at.span.spread > 4 ? `slots ${slip.at.span.first}-${slip.at.span.last}` : slip.at.span?.last ?? slip.at.slot ? `slot ${slip.at.span?.last ?? slip.at.slot}` : "slot not reported",
         timestamp: slip.at.timestamp,
         ticker: clip(slip.metadata?.symbol || shortAddress(slip.subject), 12),
         lead: options.lead,
@@ -8481,6 +8514,7 @@
   }
   function solanaWhen(slip) {
     const span = slip.at.span;
+    if (!slip.at.slot && !span) return "the slot was not reported";
     if (!span || span.spread === 0) return `slot ${slip.at.slot}`;
     if (span.spread <= 4) return `slot ${span.last}`;
     return `slots ${span.first}\u2013${span.last} \xB7 ${span.spread} apart`;

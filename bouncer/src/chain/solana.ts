@@ -223,7 +223,22 @@ export class SolanaRpc {
       }
     }
     this.record(method, Date.now() - startedAt, true);
-    throw lastError instanceof Error ? lastError : new SolanaRpcError(String(lastError));
+    // Name every endpoint that was tried, not just the last one to fail.
+    //
+    // Pasting a real mint produced "https://solana-rpc.publicnode.com
+    // responded 403" — which reads as "BOUNCER knows one node and it is
+    // down", when the truth was that BOTH nodes it knows had refused. The
+    // two call for completely different next moves: wait and retry, or
+    // bring your own endpoint. A reader cannot pick between them from a
+    // message that mentions one URL.
+    const reason = lastError instanceof Error ? lastError.message : String(lastError);
+    if (this.urls.length > 1) {
+      throw new SolanaRpcError(
+        `all ${this.urls.length} Solana endpoints BOUNCER knows refused this read (${this.urls.join(", ")}). Last answer: ${reason}`,
+        lastError instanceof SolanaRpcError ? lastError.code : undefined,
+      );
+    }
+    throw lastError instanceof Error ? lastError : new SolanaRpcError(reason);
   }
 
   private async pace(): Promise<void> {
