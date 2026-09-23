@@ -379,6 +379,63 @@ const EXAMPLES: { label: string; hint: string; hash: string }[] = [
   { label: "A Pons V1 token", hint: "the older launchpad, caps still on", hash: `#/demo/${DEMO_V1.token}` },
 ];
 
+/**
+ * WHAT YOU HAVE CHECKED BEFORE.
+ *
+ * The history is already kept for the change band; this is the same
+ * shelf, read the other way round. It is worth its space for one reason:
+ * the thing somebody wants to do second is re-check something they
+ * checked first, and until now that meant finding the address again.
+ *
+ * The hard part is the verdict, and it is a trap. The stored word is what
+ * the token read LAST TIME, and printing it in a list of links makes it
+ * look like the answer now — a STOP that has since been fixed, or worse a
+ * CLEAR that has since become a STOP, presented as current. Every row
+ * says "read X then", in the past tense, and the age is on the row rather
+ * than in a tooltip. Re-checking is one click, and that is the point: the
+ * list is a way back to the question, not an answer to it.
+ */
+function renderSeen(): void {
+  const host = document.getElementById("seen");
+  if (!host) return;
+  const rows = loadHistory()
+    .filter((s) => (mode === "demo" ? s.chain === "demo" : s.chain !== "demo"))
+    .slice(0, 8);
+  if (!rows.length) {
+    host.innerHTML = "";
+    return;
+  }
+  const now = Math.floor(Date.now() / 1000);
+  const mark = (chainKey: string) => {
+    const key = chainKey === "demo" ? "robinhood" : chainKey;
+    const c = CHAINS[key];
+    return c ? `<span class="seen-mark" style="color:${esc(c.tint)}">${chainMark(key)}</span>` : "";
+  };
+  host.innerHTML = `<div class="seen">
+    <div class="seen-head"><span>Checked before</span><button class="link" id="seen-clear" type="button">Forget these</button></div>
+    <ul class="seen-list">${rows
+      .map((sn) => {
+        const href = `#/${mode === "demo" ? "demo" : "t"}/${sn.address}${mode === "demo" ? "" : `?chain=${esc(sn.chain)}`}`;
+        return `<li class="seen-row">
+          <a href="${href}">
+            ${mark(sn.chain)}
+            <span class="seen-sym">${esc(sn.symbol || shortAddress(sn.address))}</span>
+            <span class="seen-addr mono">${esc(shortAddress(sn.address))}</span>
+            <span class="seen-was">read ${esc(sn.verdict)} ${esc(ago(now - sn.at))} ago</span>
+            <span class="seen-go">check again</span>
+          </a>
+        </li>`;
+      })
+      .join("")}</ul>
+    <p class="seen-foot">What each one read when you last looked, not what it reads now — a token that was CLEAR in March is not CLEAR because this list says so. Kept in this browser only.</p>
+  </div>`;
+  document.getElementById("seen-clear")?.addEventListener("click", () => {
+    storage(HISTORY_KEY, "[]");
+    renderSeen();
+    showToast("Forgotten");
+  });
+}
+
 function renderChips(): void {
   const chips = $("chips");
   chips.innerHTML = "";
@@ -416,6 +473,7 @@ function renderChips(): void {
     !here || canDo(here, feature) ? `<a href="${href}">${label}</a>` : "";
   more.innerHTML = `<span>More:</span>${offer("board", `#/board?chain=${c}`, "Tonight's board")}${offer("plan", `#/plan?tax=100&chain=${c}`, "Plan a launch")}<span>Paste "token wallet" (two addresses) to see one wallet's bag.</span>`;
   chips.appendChild(more);
+  renderSeen();
 }
 
 /**

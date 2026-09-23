@@ -767,6 +767,37 @@ footer a:hover{color:var(--brass-2)}
 .chgmore summary:hover{color:var(--text)}
 .chgmore .chgrows{margin:0;border-top:1px solid var(--line)}
 @media (max-width:640px){.chgrow{grid-template-columns:1fr;gap:3px}}
+
+/* ============================================================
+   CHECKED BEFORE
+
+   The same shelf the change band reads, the other way round. The one
+   thing it must not do is present a stored verdict as a current one:
+   every row is in the past tense and carries its age, because a CLEAR
+   from March is not a CLEAR.
+   ============================================================ */
+.seen{border-top:1px solid var(--line);padding:14px 0 0}
+.seen-head{display:flex;align-items:center;gap:12px;margin-bottom:10px}
+.seen-head span{font:11px var(--mono);letter-spacing:.2em;text-transform:uppercase;color:var(--muted)}
+/* min-height:auto was here and the layout check caught it at 22px on a
+   phone — the rule this release added, broken by the next thing this
+   release added. It keeps its quiet look and gains a real target. */
+.seen-head .link{margin-left:auto;font-size:12px;padding:4px 8px}
+.seen-list{list-style:none;margin:0;padding:0;display:grid;gap:1px;background:var(--line);border:1px solid var(--line)}
+.seen-row a{display:grid;grid-template-columns:18px auto 1fr auto auto;gap:12px;align-items:center;
+  background:var(--surface);padding:10px 12px;text-decoration:none;color:inherit;min-height:44px}
+.seen-row a:hover{background:var(--surface-2)}
+.seen-mark svg{width:14px;height:14px;display:block}
+.seen-sym{font:700 13px var(--display);letter-spacing:.04em;color:var(--text)}
+.seen-addr{color:var(--dim);font-size:11.5px}
+.seen-was{font:11.5px var(--mono);color:var(--muted);white-space:nowrap}
+.seen-go{font:10px var(--mono);letter-spacing:.14em;text-transform:uppercase;color:var(--brass);white-space:nowrap}
+.seen-foot{margin:10px 0 0;color:var(--dim);font-size:11.5px;line-height:1.6}
+@media (max-width:640px){
+  .seen-row a{grid-template-columns:18px 1fr;gap:4px 10px}
+  .seen-addr,.seen-was{grid-column:2}
+  .seen-go{grid-column:2;justify-self:start}
+}
 </style>
 </head>
 <body>
@@ -829,6 +860,7 @@ footer a:hover{color:var(--brass-2)}
       <span class="hint" id="chain-hint">Live mode reads the chain straight from your browser. If the public RPC refuses browser requests ("Failed to fetch"), deploy the read-only proxy from the repo's <code>proxy/</code> folder (3 minutes, free) and paste its URL above, or use the Chrome extension, which can call any RPC.</span>
     </div>
     <div class="status" id="status"></div>
+    <div id="seen"></div>
   </section>
 
   <div id="out"></div>

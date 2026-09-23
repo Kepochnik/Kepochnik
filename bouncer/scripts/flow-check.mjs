@@ -557,6 +557,50 @@ await walk("a second look says what moved since the first", async (page) => {
   const level = await page.$eval(".chg", (el) => el.className);
   if (!/chg-stop/.test(level)) throw new Error(`a verdict falling to STOP is not a quiet change: "${level}"`);
 });
+await walk("the list of what you checked before never states a stale verdict as current", async (page) => {
+  // The trap in this feature. The stored word is what the token read LAST
+  // time, and dropping it into a list of links makes it look like the
+  // answer now — a CLEAR that has since become a STOP, presented as
+  // current, by the tool whose whole job is not to do that.
+  await page.goto(url, { waitUntil: "load" });
+  await page.evaluate(() => {
+    const mk = (chain, address, symbol, verdict, agoSec) => ({
+      v: 1, chain, address, symbol, verdict, stamp: "NOT A LAUNCH",
+      at: Math.floor(Date.now() / 1000) - agoSec, height: 1, codes: [],
+      facts: { owner: null, canMint: false, canFreeze: false, taxBps: 0, top10Bps: 1000, poolQuote: "1" },
+      coverage: "complete",
+    });
+    localStorage.setItem("bouncer.seen.v1", JSON.stringify([
+      mk("base", "0x4200000000000000000000000000000000000006", "WETH", "CLEAR", 86400 * 3),
+      mk("demo", "0x0000000000000000000000000000000000f1a1a1", "ROCKET", "STOP", 60),
+    ]));
+  });
+  await page.reload({ waitUntil: "load" });
+  await page.waitForTimeout(700);
+
+  const rows = await page.$$eval(".seen-row", (els) => els.map((e) => e.textContent.replace(/\s+/g, " ").trim()));
+  if (!rows.length) throw new Error("a browser with history showed no list");
+
+  // An invented token must not appear beside real ones.
+  if (rows.some((r) => /ROCKET/.test(r))) throw new Error(`a demo token is listed in live mode: ${JSON.stringify(rows)}`);
+
+  const weth = rows.find((r) => /WETH/.test(r));
+  if (!weth) throw new Error(`the real token is missing: ${JSON.stringify(rows)}`);
+  // Past tense, with an age, every time. "CLEAR" on its own would be a
+  // claim about now.
+  if (!/read CLEAR 3 days ago/.test(weth)) throw new Error(`the stored verdict is not in the past tense with its age: "${weth}"`);
+  const foot = await page.$eval(".seen-foot", (el) => el.textContent.replace(/\s+/g, " ").trim());
+  if (!/not what it reads now/i.test(foot)) throw new Error(`the list does not disclaim itself: "${foot}"`);
+
+  // And it can be forgotten, because a list of every token somebody has
+  // looked at is not a thing to keep without a way out.
+  await page.click("#seen-clear");
+  await page.waitForTimeout(300);
+  const left = await page.$$(".seen-row");
+  if (left.length) throw new Error("forgetting the history left rows on screen");
+  const stored = await page.evaluate(() => localStorage.getItem("bouncer.seen.v1"));
+  if (stored && stored !== "[]") throw new Error(`the history was not actually cleared: ${stored.slice(0, 80)}`);
+});
 await browser.close();
 if (failures) {
   console.error(`\nflows: ${failures} journey${failures === 1 ? "" : "s"} broken.`);

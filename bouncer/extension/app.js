@@ -7629,6 +7629,42 @@
     { label: "A trade receipt", hint: "one buy, itemised", hash: `#/tx/0xdemoFRESH${DEMO.tokens.fresh.launched + 22}?chain=demo` },
     { label: "A Pons V1 token", hint: "the older launchpad, caps still on", hash: `#/demo/${DEMO_V1.token}` }
   ];
+  function renderSeen() {
+    const host = document.getElementById("seen");
+    if (!host) return;
+    const rows = loadHistory().filter((s) => mode === "demo" ? s.chain === "demo" : s.chain !== "demo").slice(0, 8);
+    if (!rows.length) {
+      host.innerHTML = "";
+      return;
+    }
+    const now = Math.floor(Date.now() / 1e3);
+    const mark = (chainKey) => {
+      const key = chainKey === "demo" ? "robinhood" : chainKey;
+      const c = CHAINS[key];
+      return c ? `<span class="seen-mark" style="color:${esc2(c.tint)}">${chainMark(key)}</span>` : "";
+    };
+    host.innerHTML = `<div class="seen">
+    <div class="seen-head"><span>Checked before</span><button class="link" id="seen-clear" type="button">Forget these</button></div>
+    <ul class="seen-list">${rows.map((sn) => {
+      const href = `#/${mode === "demo" ? "demo" : "t"}/${sn.address}${mode === "demo" ? "" : `?chain=${esc2(sn.chain)}`}`;
+      return `<li class="seen-row">
+          <a href="${href}">
+            ${mark(sn.chain)}
+            <span class="seen-sym">${esc2(sn.symbol || shortAddress(sn.address))}</span>
+            <span class="seen-addr mono">${esc2(shortAddress(sn.address))}</span>
+            <span class="seen-was">read ${esc2(sn.verdict)} ${esc2(ago(now - sn.at))} ago</span>
+            <span class="seen-go">check again</span>
+          </a>
+        </li>`;
+    }).join("")}</ul>
+    <p class="seen-foot">What each one read when you last looked, not what it reads now \u2014 a token that was CLEAR in March is not CLEAR because this list says so. Kept in this browser only.</p>
+  </div>`;
+    document.getElementById("seen-clear")?.addEventListener("click", () => {
+      storage(HISTORY_KEY, "[]");
+      renderSeen();
+      showToast("Forgotten");
+    });
+  }
   function renderChips() {
     const chips = $("chips");
     chips.innerHTML = "";
@@ -7654,6 +7690,7 @@
     const offer = (feature, href, label) => !here || canDo(here, feature) ? `<a href="${href}">${label}</a>` : "";
     more.innerHTML = `<span>More:</span>${offer("board", `#/board?chain=${c}`, "Tonight's board")}${offer("plan", `#/plan?tax=100&chain=${c}`, "Plan a launch")}<span>Paste "token wallet" (two addresses) to see one wallet's bag.</span>`;
     chips.appendChild(more);
+    renderSeen();
   }
   new MutationObserver(() => {
     document.body.classList.toggle("answered", (document.getElementById("out")?.childElementCount ?? 0) > 0);
