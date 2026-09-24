@@ -64,6 +64,46 @@ interface Update {
   message?: { chat: { id: number }; text?: string };
 }
 
+/**
+ * One reply, cut into messages Telegram will take.
+ *
+ * Telegram's hard limit is 4096 characters and a door slip is around ten
+ * thousand, so this has to split. It used to split on character count
+ * alone, which cut a 124-column box drawing mid-row: the first message
+ * ended "...LETE CHECK" and the second began with the rest of that line,
+ * each wrapped in its own code fence. Three messages of broken table, for
+ * the bot's main command.
+ *
+ * Lines are never split. A line longer than the budget on its own is the
+ * one case that must be, and it is hard-wrapped rather than dropped.
+ */
+export function chunksFor(text: string, budget = 3_800): string[] {
+  const out: string[] = [];
+  let current = "";
+  const push = () => {
+    if (current) out.push(current);
+    current = "";
+  };
+  for (const raw of text.split("\n")) {
+    // A code fence inside the content would close the one this is wrapped
+    // in and let Telegram interpret the rest as markup. Nothing in a slip
+    // produces one today; a token can be named anything.
+    const line = raw.split(FENCE).join(FENCE_SAFE);
+    if (line.length > budget) {
+      push();
+      for (let i = 0; i < line.length; i += budget) out.push(line.slice(i, i + budget));
+      continue;
+    }
+    if (current.length + line.length + 1 > budget) push();
+    current = current ? current + "\n" + line : line;
+  }
+  push();
+  return out.length ? out : [text];
+}
+
+const FENCE = "`" + "`" + "`";
+const FENCE_SAFE = "'" + "'" + "'";
+
 export async function runBot(options: BotOptions): Promise<void> {
   const fetchImpl = options.fetchImpl ?? ((input: RequestInfo | URL, init?: RequestInit) => fetch(input, init));
   const api = `https://api.telegram.org/bot${options.token}`;
@@ -74,8 +114,7 @@ export async function runBot(options: BotOptions): Promise<void> {
   let polls = 0;
   let lastWatchTick = 0;
   const send = async (chatId: number, text: string) => {
-    const chunks = text.match(/[\s\S]{1,3800}/g) ?? [text];
-    for (const chunk of chunks) {
+    for (const chunk of chunksFor(text)) {
       await fetchImpl(`${api}/sendMessage`, {
         method: "POST",
         headers: { "content-type": "application/json" },
