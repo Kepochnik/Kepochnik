@@ -1,0 +1,29 @@
+{
+  "name": "shoulda-cli",
+  "version": "0.1.0",
+  "description": "Your memecoin trades vs. just buying the stock. Read-only receipts for Robinhood Chain wallets.",
+  "type": "module",
+  "bin": {
+    "shoulda": "bin/shoulda.mjs"
+  },
+  "files": [
+    "bin",
+    "src",
+    "mascot"
+  ],
+  "scripts": {
+    "demo": "node bin/shoulda.mjs demo",
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "keywords": [
+    "robinhood-chain",
+    "stock-tokens",
+    "chainlink",
+    "memecoin",
+    "pnl"
+  ],
+  "license": "MIT"
+}
