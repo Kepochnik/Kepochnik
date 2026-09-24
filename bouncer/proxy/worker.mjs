@@ -83,6 +83,31 @@ function cors(extra = {}) {
   };
 }
 
+/**
+ * A rejected request's method, printed safely.
+ *
+ * The refusal path interpolated the value straight into a template
+ * string, and `{"method":{"toString":"eth_sendRawTransaction"}}` threw
+ * "Cannot convert object to primitive value" — an object whose toString
+ * is a string rather than a function. The type check above had already
+ * refused it correctly; the CRASH was in saying so, which turned a clean
+ * 403 into a 500 for anyone who sent that body.
+ *
+ * Also capped. The message echoes something the caller chose, and there
+ * is no reason for a refusal to quote a megabyte back.
+ */
+function describe(method) {
+  if (typeof method === "string") return method.length > 80 ? `${method.slice(0, 80)}…` : method;
+  if (method === undefined || method === null) return "(no method)";
+  return `(a ${Array.isArray(method) ? "list" : typeof method}, not a method name)`;
+}
+
+/** A JSON-RPC id that is safe to echo: the spec allows a string, a number or null. */
+function safeId(item) {
+  const id = item?.id;
+  return typeof id === "string" || typeof id === "number" ? id : null;
+}
+
 function json(body, status = 200) {
   return new Response(JSON.stringify(body), { status, headers: cors({ "content-type": "application/json" }) });
 }
@@ -147,16 +172,36 @@ export async function handle(request, upstreams = UPSTREAMS, fetchImpl = (i, o) 
     const allowed = up.family === "solana" ? SOLANA_READ_ONLY_METHODS : READ_ONLY_METHODS;
     for (const item of items) {
       if (!item || typeof item.method !== "string" || !allowed.has(item.method)) {
-        return json({ jsonrpc: "2.0", id: item?.id ?? null, error: { code: -32601, message: `method not allowed through bouncer-proxy: ${item?.method ?? "?"}` } }, 403);
+        return json({ jsonrpc: "2.0", id: safeId(item), error: { code: -32601, message: `method not allowed through bouncer-proxy: ${describe(item?.method)}` } }, 403);
       }
     }
+    // Forward what was CHECKED, not what arrived.
+    //
+    // The allowlist ran against the parsed object and the original text
+    // was then sent upstream — two different representations of the same
+    // request, and every bypass of a validating proxy lives in the gap
+    // between them. `{"method":"eth_chainId","__proto__":{"method":"eth_sendRawTransaction"}}`
+    // is inert against JSON.parse, which is what made it a false alarm
+    // when probed; it is not a promise about every upstream's parser,
+    // about duplicate keys, or about whatever a non-JS node does with
+    // that second key. Re-serialising the validated items closes the gap
+    // instead of arguing about it.
+    //
+    // Re-serialising is lossless for these payloads: Ethereum and Solana
+    // JSON-RPC carry big values as hex or base58 strings, so nothing here
+    // depends on an integer wider than a double.
+    const forward = JSON.stringify(
+      Array.isArray(payload)
+        ? items.map((item) => ({ jsonrpc: "2.0", id: safeId(item), method: item.method, params: item.params ?? [] }))
+        : { jsonrpc: "2.0", id: safeId(items[0]), method: items[0].method, params: items[0].params ?? [] },
+    );
     const endpoints = Array.isArray(up.rpc) ? up.rpc : [up.rpc];
     let lastStatus = 502;
     let lastBody = JSON.stringify({ jsonrpc: "2.0", id: items[0]?.id ?? null, error: { code: -32603, message: "no upstream answered" } });
     for (const endpoint of endpoints) {
       let upstream;
       try {
-        upstream = await fetchImpl(endpoint, { method: "POST", headers: { "content-type": "application/json" }, body: text });
+        upstream = await fetchImpl(endpoint, { method: "POST", headers: { "content-type": "application/json" }, body: forward });
       } catch {
         continue; // the endpoint did not answer at all; the next one might
       }

@@ -220,3 +220,67 @@ test("the proxy is no wider than the client: it forwards nothing extra", async (
   const extra = [...READ_ONLY_METHODS].filter((m) => !CLIENT_METHODS.has(m));
   assert.deepEqual(extra, [], `the proxy allows these and nothing in BOUNCER needs them: ${extra.join(", ")}`);
 });
+
+/** A POST through the real handler, with every upstream call captured. */
+async function through(body, { chain = "demo" } = {}) {
+  let sent = null;
+  const res = await handle(
+    new Request(`https://p.invalid/rpc/${chain}`, { method: "POST", headers: { "content-type": "application/json" }, body: typeof body === "string" ? body : JSON.stringify(body) }),
+    upstreams,
+    async (_url, init) => {
+      sent = String(init.body);
+      return new Response('{"jsonrpc":"2.0","id":1,"result":"0x1"}', { status: 200, headers: { "content-type": "application/json" } });
+    },
+  );
+  return { res, sent };
+}
+
+test("a refusal never crashes, whatever shape the method arrives in", async () => {
+  // Found by probing the worker rather than reading it. The type check
+  // correctly refused {"method":{"toString":"eth_sendRawTransaction"}} —
+  // and then threw "Cannot convert object to primitive value" while
+  // SAYING so, because the message interpolated the value straight into
+  // a template string. A clean 403 became a 500 for anyone who sent that
+  // body, on the one path that exists to keep writes out.
+  for (const method of [{ toString: "eth_sendRawTransaction" }, ["eth_sendRawTransaction"], 42, null, { nested: { deep: true } }]) {
+    const { res, sent } = await through({ jsonrpc: "2.0", id: 1, method, params: [] });
+    assert.equal(res.status, 403, `method ${JSON.stringify(method)} should be refused, not crash`);
+    assert.equal(sent, null, "and nothing should have gone upstream");
+    const body = await res.json();
+    assert.equal(typeof body.error.message, "string");
+    assert.match(body.error.message, /not allowed through bouncer-proxy/);
+  }
+
+  // A refusal does not quote a megabyte of the caller's own input back.
+  const { res } = await through({ jsonrpc: "2.0", id: 1, method: "x".repeat(5_000), params: [] });
+  const body = await res.json();
+  assert.ok(body.error.message.length < 200, `the refusal echoed ${body.error.message.length} characters back`);
+});
+
+test("what goes upstream is what was checked, not what arrived", async () => {
+  // The allowlist ran against the parsed object while the ORIGINAL text
+  // was forwarded — two representations of one request, and every bypass
+  // of a validating proxy lives in the gap between them. The __proto__
+  // payload below is inert against JSON.parse, which is exactly why it
+  // was a false alarm when probed; that is not a promise about every
+  // upstream's parser. Re-serialising the validated items closes the gap
+  // rather than arguing about which parsers agree.
+  const { res, sent } = await through('{"jsonrpc":"2.0","id":1,"method":"eth_chainId","__proto__":{"method":"eth_sendRawTransaction"},"extra":"dropped"}');
+  assert.equal(res.status, 200);
+  assert.ok(sent, "nothing was forwarded");
+  assert.ok(!sent.includes("sendRawTransaction"), `an unvalidated key travelled upstream: ${sent}`);
+  assert.ok(!sent.includes("extra"), "only validated fields are forwarded");
+  assert.equal(JSON.parse(sent).method, "eth_chainId");
+});
+
+test("a batch forwards every validated call and nothing else", async () => {
+  const { res, sent } = await through([
+    { jsonrpc: "2.0", id: 1, method: "eth_chainId", params: [] },
+    { jsonrpc: "2.0", id: 2, method: "eth_blockNumber", params: [], smuggled: "eth_sendRawTransaction" },
+  ]);
+  assert.equal(res.status, 200);
+  const forwarded = JSON.parse(sent);
+  assert.equal(forwarded.length, 2);
+  assert.deepEqual(forwarded.map((x) => x.method), ["eth_chainId", "eth_blockNumber"]);
+  assert.ok(!sent.includes("smuggled"));
+});
