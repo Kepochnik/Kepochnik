@@ -174,7 +174,7 @@ Long polling, no webhook, no library. `/ca <token|curve>` prints the slip, `/dev
 
 ## Browser extension
 
-The whole site in a Chrome popup, with one thing a web page cannot do: an extension page may call any RPC directly, so the public endpoints answer it even when they refuse browser requests from a website. Open it on a token page (ponsfamily.com, gmgn.ai, dexscreener.com, the Blockscout explorers) and the slip for the address in the URL opens in live mode on the matching chain. A small `🦍 BOUNCER · check the list` badge is pinned on those pages too. It reads the page URL and nothing else: no wallet, no page storage, no injected requests.
+The whole site in a Chrome popup, with one thing a web page cannot do: an extension page may call any RPC directly, so the public endpoints answer it even when they refuse browser requests from a website. Open it on a token page — Basescan, BscScan, Solscan, Solana.fm, DexScreener, GMGN, ponsfamily.com, Arcscan, the Blockscout explorers — and the slip for the token in that URL opens in live mode **on the chain that page is about**, EVM address or Solana mint. A small `🦍 BOUNCER · check the list` badge is pinned on those pages too. Which chain a page is about is decided once, in `src/bouncer/pageSubject.ts`, and generated into the extension: the badge and the popup used to keep separate tables, and the popup's sent every page it did not recognise to Robinhood Chain — a confident verdict about whatever those twenty bytes happen to be somewhere else. A page it cannot name a chain for opens the front page instead of guessing. It reads the page URL and nothing else: no wallet, no page storage, no injected requests.
 
 <p align="center"><img src="assets/readme/extension.png" width="100%" alt="the BOUNCER popup on a token page: the slip in a 560 px column, cover charge countdown, door notes" /></p>
 
@@ -222,6 +222,7 @@ src/bouncer/txReceipt.ts    one trade itemised
 src/bouncer/planner.ts      the launch planner
 src/bouncer/watch.ts        DEV MOVED and CREW EXIT events, and the poll loop
 src/bouncer/watchPlan.ts    which tape a token gets, and what that tape is blind to
+src/bouncer/pageSubject.ts  which token a web page is about, and on which chain (shared by the extension's badge and popup)
 src/bouncer/leaderboard.ts  the board
 src/mcp/server.ts           the read-only MCP server (stdio, no dependencies)
 src/bouncer/door.ts         one address in, one slip out; the door notes

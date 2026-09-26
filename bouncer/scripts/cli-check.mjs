@@ -286,6 +286,75 @@ console.log("cli: the extension's popup overrides");
   if (!dead) console.log(`  ok  all ${selectors.length} popup overrides target something the app can render`);
 }
 
+// ---- the extension sends a page's token to the chain that page is about
+//
+// The popup and the badge each used to keep a host table, and they disagreed:
+// the popup sent every page it did not recognise to Robinhood Chain, so a Base
+// token page produced a confident verdict about a different contract, and a
+// Solana mint produced nothing. Both now read one table from the core, which
+// is generated into extension/page-subject.js — so this checks the SHIPPED
+// file rather than the source, and checks it by asking it questions.
+console.log("cli: the extension reads a page's chain from its URL");
+{
+  const { readFileSync } = await import("node:fs");
+  const before = globalThis.__bouncerPageSubject;
+  await import("../extension/page-subject.js");
+  const read = globalThis.__bouncerPageSubject;
+  globalThis.__bouncerPageSubject = before;
+  if (typeof read !== "function") fail("the built page-subject.js does not define __bouncerPageSubject");
+  else {
+    const EVM = "0x532f27101965dd16442e59d40670faf5ebb142e4";
+    const MINT = "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263";
+    const cases = [
+      [`https://basescan.org/token/${EVM}`, "base", EVM],
+      [`https://www.basescan.org/token/${EVM}`, "base", EVM],
+      [`https://base.blockscout.com/token/${EVM}`, "base", EVM],
+      [`https://bscscan.com/token/${EVM}`, "bnb", EVM],
+      [`https://robinhoodchain.blockscout.com/token/${EVM}`, "robinhood", EVM],
+      [`https://testnet.arcscan.app/token/${EVM}`, "arc-testnet", EVM],
+      [`https://dexscreener.com/base/${EVM}`, "base", EVM],
+      [`https://dexscreener.com/bsc/${EVM}`, "bnb", EVM],
+      [`https://solscan.io/token/${MINT}`, "solana", MINT],
+      [`https://gmgn.ai/sol/token/${MINT}`, "solana", MINT],
+      // A page on a host nobody mapped, and a mapped host with nothing on it.
+      [`https://example.com/token/${EVM}`, null, null],
+      ["https://basescan.org/blocks", null, null],
+      // An EVM address on a Solana page is not a Solana mint, and the reverse
+      // is not an EVM address: neither may be answered on the other's chain.
+      [`https://solscan.io/token/${EVM}`, null, null],
+      [`https://basescan.org/token/${MINT}`, null, null],
+    ];
+    let wrong = 0;
+    for (const [url, chain, address] of cases) {
+      const got = read(url);
+      const gotChain = got?.chain ?? null;
+      const gotAddress = got?.address ?? null;
+      if (gotChain !== chain || (address && gotAddress !== address.toLowerCase() && gotAddress !== address)) {
+        fail(`${url} read as ${gotChain ?? "nothing"}/${gotAddress ?? "nothing"}, expected ${chain ?? "nothing"}/${address ?? "nothing"}`);
+        wrong++;
+      }
+    }
+    // Every page the badge is injected into must be a page it can answer for.
+    // A match pattern with no chain behind it puts a script on somebody's site
+    // for nothing, which is exactly the permission a reviewer asks about.
+    const manifest = JSON.parse(readFileSync("extension/manifest.json", "utf8"));
+    for (const pattern of manifest.content_scripts?.[0]?.matches ?? []) {
+      const host = pattern.replace(/^https:\/\//, "").replace(/\/\*$/, "");
+      if (/\*/.test(host)) { fail(`a content script match with a wildcard host: ${pattern}`); wrong++; continue; }
+      // Both address shapes, because a Solana host answers only for a base58
+      // mint and an EVM host only for twenty bytes. The first probe asked with
+      // an EVM address alone and reported solscan.io as unmappable, which was
+      // the probe being wrong about the extension rather than the other way
+      // round.
+      const probe = [`${host}/base/token/${EVM}`, `${host}/sol/token/${MINT}`, `${host}/token/${EVM}`, `${host}/token/${MINT}`]
+        .map((path) => read(`https://${path}`))
+        .find(Boolean);
+      if (!probe) { fail(`the badge is injected into ${host}, which the shared table cannot name a chain for`); wrong++; }
+    }
+    if (!wrong) console.log(`  ok  ${cases.length} page URLs resolve to the right chain, and every injected page resolves to one`);
+  }
+}
+
 if (failures) {
   console.error(`\ncli: ${failures} problem${failures === 1 ? "" : "s"}.`);
   process.exit(1);

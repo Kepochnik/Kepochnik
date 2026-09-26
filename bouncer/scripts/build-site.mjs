@@ -56,9 +56,28 @@ const popup = html
   .replace(/<link rel="preconnect"[^>]*>\n/g, "")
   .replace(/<link rel="stylesheet" href="https:\/\/fonts\.googleapis\.com[^>]*>\n/, "")
   .replace("</style>", `${popupCss}</style>`)
-  .replace('<script src="app.js"></script>', '<script src="popup-init.js"></script>\n<script src="app.js"></script>');
+  .replace('<script src="app.js"></script>', '<script src="page-subject.js"></script>\n<script src="popup-init.js"></script>\n<script src="app.js"></script>');
 writeFileSync("extension/popup.html", popup);
 copyFileSync("site/dist/app.js", "extension/app.js");
+
+// One answer to "which token is this page about", shared by the content
+// script and the popup. They each kept their own host table and disagreed:
+// the popup read a Base token page on Robinhood Chain, and could not read a
+// Solana mint at all. Generated from the core so there is one table left.
+await build({
+  stdin: {
+    contents: 'import { pageSubject } from "./src/bouncer/pageSubject.js";\nglobalThis.__bouncerPageSubject = pageSubject;\n',
+    resolveDir: ".",
+    loader: "ts",
+  },
+  bundle: true,
+  format: "iife",
+  target: ["es2022"],
+  outfile: "extension/page-subject.js",
+  legalComments: "none",
+  logLevel: "warning",
+  tsconfigRaw: { compilerOptions: { target: "ES2022", strict: true } },
+});
 
 // The popup offers every chain the app knows, so its manifest has to allow
 // every endpoint those chains use. Hand-keeping that list is how Base, BNB and
@@ -75,11 +94,32 @@ copyFileSync("site/dist/app.js", "extension/app.js");
   const manifestPath = "extension/manifest.json";
   const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
   const next = [...hosts].sort();
+  let changed = false;
   if (JSON.stringify(manifest.host_permissions) !== JSON.stringify(next)) {
     manifest.host_permissions = next;
-    writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+    changed = true;
     console.log(`extension: host_permissions refreshed (${next.length} origins)`);
   }
+
+  // The pages the badge appears on, from the same table that decides which
+  // chain each page is about. Hand-keeping these two lists apart is how the
+  // badge came to cover a host the popup then read on the wrong chain.
+  const { MULTI_CHAIN_HOSTS, tokenPageHosts } = await import("../dist/src/bouncer/pageSubject.js");
+  const matches = [...new Set([...Object.keys(tokenPageHosts()), ...MULTI_CHAIN_HOSTS])]
+    // `www.` only where there is a bare domain to put it in front of.
+    // `https://www.base.blockscout.com/*` is a host that does not exist, and a
+    // permission list with four impossible entries in it is a list a Web Store
+    // reviewer has to take on trust. pageSubject strips the prefix either way.
+    .flatMap((host) => (host.split(".").length === 2 ? [`https://${host}/*`, `https://www.${host}/*`] : [`https://${host}/*`]))
+    .sort();
+  const scripts = ["page-subject.js", "content.js"];
+  const entry = manifest.content_scripts?.[0] ?? { run_at: "document_idle" };
+  if (JSON.stringify(entry.matches) !== JSON.stringify(matches) || JSON.stringify(entry.js) !== JSON.stringify(scripts)) {
+    manifest.content_scripts = [{ ...entry, matches, js: scripts }];
+    changed = true;
+    console.log(`extension: content script refreshed (${matches.length} pages)`);
+  }
+  if (changed) writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
 }
 try {
   rmSync("site/dist/bouncer-extension.zip", { force: true });

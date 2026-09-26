@@ -1,43 +1,24 @@
-// BOUNCER badge: finds the token address in the page URL and pins a small
-// "check the list" link to the slip. It reads the URL only; it never touches
+// BOUNCER badge: finds the token this page is about and pins a small
+// "check the list" link to its slip. It reads the URL only; it never touches
 // the page's wallet, forms or storage.
+//
+// Which chain the page is about is decided in the core
+// (src/bouncer/pageSubject.ts), generated into page-subject.js, and shared
+// with the popup — which used to keep a second, wronger copy of the same
+// table. Getting this wrong is worse than showing no badge at all: the slip
+// would be read on a chain where the same address is a different contract.
 (() => {
-  // Which chain the page is about. Getting this wrong is worse than not
-  // showing the badge: the slip would then be read on a chain where the same
-  // address is a different contract, or nothing at all.
-  const chainFor = () => {
-    const host = location.host.replace(/^www\./, "");
-    const byHost = {
-      "robinhoodchain.blockscout.com": "robinhood",
-      "basescan.org": "base",
-      "base.blockscout.com": "base",
-      "bscscan.com": "bnb",
-      "solscan.io": "solana",
-      "solana.fm": "solana",
-      "testnet.arcscan.app": "arc-testnet",
-      "arcscan.app": "arc-testnet",
-    };
-    if (byHost[host]) return byHost[host];
-    // Aggregators put the chain in the first path segment.
-    const bySegment = { base: "base", bsc: "bnb", bnb: "bnb", solana: "solana", sol: "solana", robinhood: "robinhood" };
-    const segment = location.pathname.split("/").filter(Boolean)[0];
-    return bySegment[(segment ?? "").toLowerCase()] ?? null;
-  };
-
-  const chain = chainFor();
-  if (!chain) return; // an unknown chain would send the reader to the wrong one
-  const address =
-    chain === "solana"
-      ? (location.href.match(/\/(?:token|account|address)\/([1-9A-HJ-NP-Za-km-z]{32,44})/) ?? [])[1]
-      : (location.href.match(/0x[0-9a-fA-F]{40}/) ?? [])[0]?.toLowerCase();
-  if (!address) return;
+  const read = globalThis.__bouncerPageSubject;
+  if (typeof read !== "function") return;
+  const subject = read(location.href);
+  if (!subject) return;
 
   const existing = document.getElementById("bouncer-badge");
   if (existing) existing.remove();
   chrome.storage.sync.get({ siteUrl: "https://kepochnik.github.io/bouncer/" }, ({ siteUrl }) => {
     const a = document.createElement("a");
     a.id = "bouncer-badge";
-    a.href = `${siteUrl}#/t/${address}?chain=${chain}`;
+    a.href = `${siteUrl}#/t/${subject.address}?chain=${subject.chain}`;
     a.target = "_blank";
     a.rel = "noopener";
     a.textContent = "🦍 BOUNCER · check the list";

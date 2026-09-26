@@ -47,19 +47,28 @@
   "content_scripts": [
     {
       "matches": [
-        "https://ponsfamily.com/*",
-        "https://www.ponsfamily.com/*",
-        "https://gmgn.ai/*",
-        "https://robinhoodchain.blockscout.com/*",
-        "https://testnet.arcscan.app/*",
-        "https://dexscreener.com/*",
-        "https://basescan.org/*",
+        "https://arcscan.app/*",
         "https://base.blockscout.com/*",
+        "https://basescan.org/*",
         "https://bscscan.com/*",
+        "https://dexscreener.com/*",
+        "https://gmgn.ai/*",
+        "https://ponsfamily.com/*",
+        "https://robinhoodchain.blockscout.com/*",
+        "https://solana.fm/*",
         "https://solscan.io/*",
-        "https://solana.fm/*"
+        "https://testnet.arcscan.app/*",
+        "https://www.arcscan.app/*",
+        "https://www.basescan.org/*",
+        "https://www.bscscan.com/*",
+        "https://www.dexscreener.com/*",
+        "https://www.gmgn.ai/*",
+        "https://www.ponsfamily.com/*",
+        "https://www.solana.fm/*",
+        "https://www.solscan.io/*"
       ],
       "js": [
+        "page-subject.js",
         "content.js"
       ],
       "run_at": "document_idle"

@@ -24,14 +24,15 @@
     "depth-check": "node scripts/depth-check.mjs",
     "stage-check": "node scripts/stage-check.mjs",
     "flow-check": "node scripts/flow-check.mjs",
-    "check": "npm run readonly-check && npm run workflow-check && npm test && npm run site-types && npm run cli-check && npm run depth-check && npm run site && npm run layout-check && npm run stage-check && npm run flow-check",
+    "check": "npm run readonly-check && npm run workflow-check && npm test && npm run site-types && npm run cli-check && npm run depth-check && npm run site && npm run layout-check && npm run stage-check && npm run flow-check && npm run popup-check",
     "site": "npm run build --silent && node scripts/build-site.mjs",
     "demo": "npm run build --silent && node bin/bouncer.mjs demo",
     "doctor": "npm run build --silent && node bin/bouncer.mjs doctor",
     "mcp": "npm run build --silent && node bin/bouncer-mcp.mjs",
     "bot": "npm run build --silent && node bin/bouncer-bot.mjs",
     "site-types": "tsc -p site/tsconfig.json",
-    "cli-check": "node scripts/cli-check.mjs"
+    "cli-check": "node scripts/cli-check.mjs",
+    "popup-check": "node scripts/popup-check.mjs"
   },
   "devDependencies": {
     "@types/node": "^22.13.0",
