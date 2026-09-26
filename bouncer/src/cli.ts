@@ -18,7 +18,7 @@ import { CHAINS, chainByKey, type ChainConfig , featureBlocker, type Feature } f
 import { decodeOutputs, encodeCall } from "./chain/abi.js";
 import { readMarket, readPools } from "./chain/market.js";
 import { ERC20_FUNCTIONS, GraduationPhase, PHASE_LABEL, type LaunchedToken } from "./chain/pons.js";
-import { NotAPonsLaunch, PonsReader, readTokenMeta } from "./chain/reader.js";
+import { NotAPonsLaunch, PonsReader, readSupply, readTokenMeta } from "./chain/reader.js";
 import { RpcClient } from "./chain/rpc.js";
 import { SolanaRpc } from "./chain/solana.js";
 import { findBlockByTimestamp } from "./chain/tape.js";
@@ -678,11 +678,6 @@ async function watchMarketToken(
     sleep: demo ? async () => {} : undefined,
   });
   return 0;
-}
-
-async function readSupply(rpc: RpcClient, token: string, block: number): Promise<bigint> {
-  const [raw] = await rpc.callBatch([{ to: token, data: encodeCall(ERC20_FUNCTIONS.totalSupply, []) }], block);
-  return decodeOutputs(ERC20_FUNCTIONS.totalSupply, raw)[0] as bigint;
 }
 
 async function readBalanceOf(rpc: RpcClient, token: string, who: string, block: number): Promise<bigint> {

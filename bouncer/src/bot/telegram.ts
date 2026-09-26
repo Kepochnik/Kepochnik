@@ -9,7 +9,7 @@
  *   /exit <token> [tokens]     the exit door
  *   /wallet <token> <wallet>   a position
  *   /receipt <txhash>          a trade itemised
- *   /watch <token>             DEV MOVED and CREW EXIT alerts for this chat
+ *   /watch <token>             alerts here: dev and crew on a launch, transfers on any other token
  *   /unwatch [token]           stop one or all
  *   /board [hours]             the board
  *   /chain [key]               show or switch the chain for this chat
@@ -17,7 +17,7 @@
 import { BlockscoutClient } from "../chain/blockscout.js";
 import { CHAINS, chainByKey, type ChainConfig } from "../chain/chains.js";
 import { RpcClient } from "../chain/rpc.js";
-import { PonsReader } from "../chain/reader.js";
+import { NotAPonsLaunch, PonsReader, readSupply, readTokenMeta } from "../chain/reader.js";
 import { findBlockByTimestamp } from "../chain/tape.js";
 import { renderReceipt } from "../receipt.js";
 import { devReportLine, readDevReport } from "../bouncer/devReport.js";
@@ -27,6 +27,8 @@ import { readBoard } from "../bouncer/leaderboard.js";
 import { readOneCrew } from "../bouncer/oneCrew.js";
 import { readRoom } from "../bouncer/room.js";
 import { readWatchEvents } from "../bouncer/watch.js";
+import { readTokenWatchEvents } from "../bouncer/tokenWatch.js";
+import { readPools } from "../chain/market.js";
 import { findLaunchBlock } from "../bouncer/door.js";
 import type { LaunchedToken } from "../chain/pons.js";
 import { formatBps, formatDuration, formatUnits } from "../format.js";
@@ -36,10 +38,21 @@ export interface Watch {
   chatId: number;
   chainKey: string;
   token: string;
-  launch: LaunchedToken;
+  /**
+   * The launchpad's launch record, or null for an ordinary token.
+   *
+   * It used to be required, and `/watch` read it by calling the factory —
+   * which throws for anything the factory did not make. So the bot could
+   * watch launchpad tokens and nothing else, and every memecoin anybody
+   * actually pastes is an ordinary ERC-20. Null means the transfer tape
+   * below is what gets read instead.
+   */
+  launch: LaunchedToken | null;
   crew: string[];
   cursor: number;
   symbol: string;
+  /** What the transfer tape needs, when there is no launch record to read. */
+  tape?: { pools: string[]; wallets: string[]; supply: bigint; decimals: number };
 }
 
 export interface BotOptions {
@@ -166,7 +179,9 @@ export async function tickWatches(watches: Watch[], options: BotOptions, send: (
       let head = heads.get(w.chainKey);
       if (head === undefined) heads.set(w.chainKey, (head = await rpc.blockNumber()));
       if (head < w.cursor) continue;
-      const events = await readWatchEvents(rpc, w.launch, { fromBlock: w.cursor, toBlock: head, crew: w.crew, factory: chain.factory ?? undefined, quote: chain.native });
+      const events: { block: number; kind: string; text: string; tx: string }[] = w.launch
+        ? await readWatchEvents(rpc, w.launch, { fromBlock: w.cursor, toBlock: head, crew: w.crew, factory: chain.factory ?? undefined, quote: chain.native })
+        : await readTokenWatchEvents(rpc, w.token, { fromBlock: w.cursor, toBlock: head, pools: w.tape?.pools ?? [], watch: w.tape?.wallets ?? [], supply: w.tape?.supply ?? 0n, decimals: w.tape?.decimals ?? 18 });
       w.cursor = head + 1;
       for (const e of events) await send(w.chatId, `${w.symbol} · ${e.kind}\n${e.text}\nblock ${e.block} · ${e.tx}${options.siteUrl ? `\n${options.siteUrl}#/t/${w.token}` : ""}`);
       if (events.some((e) => e.kind === "graduated")) log(`${w.symbol} graduated; watch stays on for the pool`);
@@ -176,11 +191,55 @@ export async function tickWatches(watches: Watch[], options: BotOptions, send: (
   }
 }
 
+/**
+ * Register a watch on a token no launchpad made.
+ *
+ * Reads the three things the transfer tape needs and says out loud what it
+ * will therefore be blind to — no pool means a sale reads as an ordinary
+ * move, no supply means every transfer is reported. The CLI has printed
+ * those two sentences since it learned the same trick; a bot that stayed
+ * silent about them would have people reading "moved" for a dump.
+ */
+async function watchTape(rpc: RpcClient, address: string, head: number, chain: ChainConfig, context: CommandContext): Promise<string> {
+  const token = address.toLowerCase();
+  if (context.watches.some((w) => w.chatId === context.chatId && w.token === token)) return `already watching ${token}`;
+  const meta = await readTokenMeta(rpc, token, head).catch(() => null);
+  if (!meta) return `${token} does not answer symbol() and decimals(), so it is not an ERC-20 this can follow`;
+  const supply = await readSupply(rpc, token, head).catch(() => 0n);
+  const pools = chain.dex ? await readPools(rpc, token, chain.dex, head, meta.decimals).catch(() => []) : [];
+  context.watches.push({
+    chatId: context.chatId,
+    chainKey: chain.key,
+    token,
+    launch: null,
+    crew: [],
+    cursor: head + 1,
+    symbol: meta.symbol || token.slice(0, 8),
+    tape: { pools: pools.map((x) => x.address), wallets: [], supply, decimals: meta.decimals },
+  });
+  const blind = [
+    pools.length ? null : "no pool was found, so a sale will read as an ordinary move",
+    supply > 0n ? null : "total supply could not be read, so every transfer is reported",
+  ].filter((x): x is string => Boolean(x));
+  return [
+    `watching ${meta.symbol || token} (${token}) on ${chain.name} from block ${head + 1}: tokens into a pool (a sale), tokens out of a pool (a purchase), minting, burning, and any move of 0.25% of supply or more.`,
+    "no launchpad made this token, so there is no curve, no dev tax and no graduation to report.",
+    ...blind.map((b) => `· ${b}`),
+  ].join("\n");
+}
+
 function loadWatches(file?: string): Watch[] {
   if (!file) return [];
   try {
-    const raw = JSON.parse(require_fs().readFileSync(file, "utf8")) as (Omit<Watch, "launch"> & { launch: Record<string, unknown> })[];
-    return raw.map((w) => ({ ...w, launch: reviveLaunch(w.launch) }));
+    const raw = JSON.parse(require_fs().readFileSync(file, "utf8")) as (Omit<Watch, "launch" | "tape"> & { launch: Record<string, unknown> | null; tape?: { pools: string[]; wallets: string[]; supply: string | number; decimals: number } })[];
+    return raw.map((w) => ({
+      ...w,
+      launch: w.launch ? reviveLaunch(w.launch) : null,
+      // Only this one field, not a reviver over the whole file: a token whose
+      // symbol is "420n" would come back from a blanket reviver as a BigInt
+      // and break the first line that prints it.
+      tape: w.tape ? { ...w.tape, supply: BigInt(String(w.tape.supply).replace(/n$/, "")) } : undefined,
+    }));
   } catch {
     return [];
   }
@@ -241,7 +300,7 @@ export async function handleCommand(text: string, chain: ChainConfig, setChain: 
         "/exit <token> [tokens]    exit door",
         "/wallet <token> <wallet>  a position",
         "/receipt <txhash>         a trade itemised",
-        "/watch <token>            DEV MOVED / CREW EXIT alerts here",
+        "/watch <token>            dev and crew on a launch, transfers on any other token",
         "/unwatch [token]          stop one or all",
         "/board [hours]            the board",
         `/chain [${Object.keys(CHAINS).join("|")}]  current: ${chain.key}`,
@@ -283,9 +342,20 @@ export async function handleCommand(text: string, chain: ChainConfig, setChain: 
     }
     case "/watch": {
       if (!rest[0]) return "usage: /watch <token>";
-      if (!factory) return `${chain.name}: ${chain.notes ?? "factory not known"}`;
       const head = await rpc.blockNumber();
-      const launch = await new PonsReader(rpc, factory).launchedToken(rest[0], head);
+      // The factory first, because its events say more — but "not a launch"
+      // is an answer here, not an error. Without this fallback the bot
+      // answered /watch BRETT with a raw NotAPonsLaunch, and the website now
+      // points people here for exactly that token.
+      let launch: LaunchedToken | null = null;
+      if (factory) {
+        try {
+          launch = await new PonsReader(rpc, factory).launchedToken(rest[0], head);
+        } catch (error) {
+          if (!(error instanceof NotAPonsLaunch)) throw error;
+        }
+      }
+      if (!launch) return await watchTape(rpc, rest[0], head, chain, context);
       const token = launch.token.toLowerCase();
       if (context.watches.some((w) => w.chatId === context.chatId && w.token === token)) return `already watching ${token}`;
       let crew: string[] = [];

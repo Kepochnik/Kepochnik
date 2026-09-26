@@ -146,3 +146,40 @@ test("what the bot actually sends is split on lines, not just what a helper coul
     }
   }
 });
+
+/**
+ * `/watch` called the factory and let NotAPonsLaunch escape, so the bot
+ * could watch launchpad tokens and nothing else — and the website now tells
+ * people to come here for exactly the token it could not watch.
+ */
+test("/watch follows an ordinary token, and says what it will be blind to", async () => {
+  const watches: Parameters<typeof handleCommand>[4] = { chatId: 1, watches: [] };
+  const reply = await handleCommand(`/watch ${DEMO_PLAIN.token}`, CHAINS.robinhood, () => {}, options, watches);
+  assert.ok(typeof reply === "string", "an ordinary token got no answer at all");
+  assert.match(reply!, /watching/i);
+  assert.match(reply!, /no launchpad made this token/i, `the reply does not say what it cannot report: ${reply}`);
+  assert.equal(watches.watches.length, 1, "the watch was announced but not registered");
+  const w = watches.watches[0];
+  assert.equal(w.launch, null, "an ordinary token must not carry a launch record");
+  assert.ok(w.tape, "a tape watch with no tape inputs reads nothing");
+  assert.ok(w.tape!.supply > 0n, "the share-of-supply column needs the supply");
+  assert.ok(w.tape!.pools.length, "the pool was readable, so a sale should be tellable from a move");
+  assert.equal(w.symbol, DEMO_PLAIN.symbol);
+});
+
+test("a tape watch survives a restart with its supply still a number", async () => {
+  // The state file is JSON and a bigint is not, so the supply goes out as
+  // "1000…n". A restart that read it back as that string would compare a
+  // string against a bigint on the first tick and throw.
+  const { tickWatches } = await import("../src/bot/telegram.js");
+  const watches: Parameters<typeof handleCommand>[4] = { chatId: 1, watches: [] };
+  await handleCommand(`/watch ${DEMO_PLAIN.token}`, CHAINS.robinhood, () => {}, options, watches);
+  const wire = JSON.parse(JSON.stringify(watches.watches, (_k, v: unknown) => (typeof v === "bigint" ? `${v.toString()}n` : v))) as unknown[];
+  assert.match(String((wire[0] as { tape: { supply: string } }).tape.supply), /n$/, "the fixture is meant to go out as a bigint marker");
+
+  // And a tick over a live-looking window does not throw.
+  const back = { ...watches.watches[0], cursor: 0 };
+  const logs: string[] = [];
+  await tickWatches([back], options, async () => {}, (line) => logs.push(line));
+  assert.deepEqual(logs, [], `a tick on a tape watch failed: ${logs.join(" | ")}`);
+});

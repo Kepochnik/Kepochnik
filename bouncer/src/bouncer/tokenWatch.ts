@@ -85,7 +85,11 @@ export async function readTokenWatchEvents(rpc: RpcClient, token: string, option
     // reported: an unreadable number must not quietly empty the tape.
     if (!isWatched && shareBps !== null && shareBps < minShareBps) continue;
 
-    const amount = `${formatUnits(tokens, decimals, 0)} tokens${shareBps === null ? "" : ` (${(shareBps / 100).toFixed(2)}% of supply)`}`;
+    // A watched wallet is reported at any size, so this line has to be able
+    // to print a size below the threshold — and "(0.00% of supply)" reads as
+    // a measurement of nothing rather than as a move too small to round.
+    const share = shareBps === null ? "" : shareBps === 0 ? " (under 0.01% of supply)" : ` (${(shareBps / 100).toFixed(2)}% of supply)`;
+    const amount = `${formatUnits(tokens, decimals, 0)} tokens${share}`;
     let kind: TokenWatchKind;
     let text: string;
     if (from === ZERO) {

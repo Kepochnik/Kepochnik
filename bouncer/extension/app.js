@@ -4309,7 +4309,7 @@
   async function readOneCrew(blockscout, room, launchBlock, creatorWallets, limit = 12) {
     const creators = new Set(creatorWallets.map((c) => c.toLowerCase()));
     const candidates = room.first.slice(0, limit);
-    const wallets = [];
+    const wallets2 = [];
     let unresolved = 0;
     for (const address of candidates) {
       const w = room.wallets.find((x) => x.address === address);
@@ -4320,20 +4320,20 @@
         unresolved++;
       }
       if (!source && !creators.has(address)) unresolved++;
-      wallets.push({ address, funder: source?.from ?? null, fundedAtBlock: source?.block ?? null, quoteIn: w?.quoteIn ?? 0n, creatorWallet: creators.has(address) });
+      wallets2.push({ address, funder: source?.from ?? null, fundedAtBlock: source?.block ?? null, quoteIn: w?.quoteIn ?? 0n, creatorWallet: creators.has(address) });
     }
     const byFunder = /* @__PURE__ */ new Map();
-    for (const w of wallets) if (w.funder) byFunder.set(w.funder, [...byFunder.get(w.funder) ?? [], w]);
+    for (const w of wallets2) if (w.funder) byFunder.set(w.funder, [...byFunder.get(w.funder) ?? [], w]);
     const crews = [...byFunder.entries()].filter(([, ws]) => ws.length > 1).map(([funder, ws]) => {
       const quoteIn = ws.reduce((a, w) => a + w.quoteIn, 0n);
       return { funder, wallets: ws.map((w) => w.address), quoteIn, shareBps: room.totalQuoteIn === 0n ? 0 : Number(quoteIn * 10000n / room.totalQuoteIn) };
     }).sort((a, b) => b.shareBps - a.shareBps);
     return {
-      checked: wallets.length,
-      wallets,
+      checked: wallets2.length,
+      wallets: wallets2,
       crews,
       largestCrewShareBps: crews[0]?.shareBps ?? 0,
-      fundedByCreator: wallets.filter((w) => w.funder && creators.has(w.funder)).map((w) => w.address),
+      fundedByCreator: wallets2.filter((w) => w.funder && creators.has(w.funder)).map((w) => w.address),
       unresolved
     };
   }
@@ -5320,7 +5320,7 @@
           name: h.name,
           role: h.address === deployer?.address ? "deployer" : owner && h.address === owner.address ? "owner" : h.address === address ? "token" : BURN_ADDRESSES2.has(h.address) ? "burn" : null
         }));
-        const wallets = top.filter((h) => !h.isContract && h.role !== "burn" && h.role !== "token");
+        const wallets2 = top.filter((h) => !h.isContract && h.role !== "burn" && h.role !== "token");
         const share = (rows) => {
           if (supply === null || supply <= 0n || !rows.length) return null;
           return rows.reduce((a, h) => a + (h.bps ?? 0), 0);
@@ -5330,7 +5330,7 @@
           transfers: tokenInfo.transfers,
           top,
           rows: top.length,
-          top10WalletsBps: share(wallets.slice(0, 10)),
+          top10WalletsBps: share(wallets2.slice(0, 10)),
           contractsBps: share(top.filter((h) => h.isContract || h.role === "token")),
           burnedBps: share(top.filter((h) => h.role === "burn"))
         };
@@ -5550,12 +5550,12 @@
   function summariseActivity(transfers) {
     if (!transfers.length) return { lastTransferAt: null, lastTransferBlock: null, recent: 0, recentWallets: 0 };
     const newest = transfers.reduce((a, b) => b.block > a.block ? b : a, transfers[0]);
-    const wallets = /* @__PURE__ */ new Set();
+    const wallets2 = /* @__PURE__ */ new Set();
     for (const t of transfers) {
-      wallets.add(t.from);
-      wallets.add(t.to);
+      wallets2.add(t.from);
+      wallets2.add(t.to);
     }
-    return { lastTransferAt: newest.timestamp, lastTransferBlock: newest.block || null, recent: transfers.length, recentWallets: wallets.size };
+    return { lastTransferAt: newest.timestamp, lastTransferBlock: newest.block || null, recent: transfers.length, recentWallets: wallets2.size };
   }
   function powerKinds(o) {
     const order = ["upgrade", "mint", "pause", "blacklist", "trading", "fees", "limits", "burn-others", "exempt", "sweep"];
@@ -5578,7 +5578,7 @@
       chunkSize ? { startChunk: chunkSize, maxChunk: chunkSize, minChunk: Math.min(1e3, chunkSize) } : { startChunk: 2e4 }
     );
     const creator = /* @__PURE__ */ new Set([launch.deployer.toLowerCase(), launch.creatorFeeRecipient.toLowerCase()]);
-    const wallets = /* @__PURE__ */ new Map();
+    const wallets2 = /* @__PURE__ */ new Map();
     const perBlock = /* @__PURE__ */ new Map();
     let buys = 0;
     let sells = 0;
@@ -5589,10 +5589,10 @@
     for (const log of tape.logs) {
       const isBuy = log.name === "CurveBuy";
       const who = String(isBuy ? log.args.buyer : log.args.seller).toLowerCase();
-      let w = wallets.get(who);
+      let w = wallets2.get(who);
       if (!w) {
         w = { address: who, firstBlock: log.blockNumber, buys: 0, sells: 0, quoteIn: 0n, quoteOut: 0n, creatorWallet: creator.has(who) };
-        wallets.set(who, w);
+        wallets2.set(who, w);
       }
       if (isBuy) {
         const spent = log.args.quoteIn - log.args.fee - log.args.tax;
@@ -5612,7 +5612,7 @@
         w.quoteOut += log.args.quoteOut;
       }
     }
-    const list = [...wallets.values()].sort((a, b) => b.quoteIn - b.quoteOut > a.quoteIn - a.quoteOut ? 1 : -1);
+    const list = [...wallets2.values()].sort((a, b) => b.quoteIn - b.quoteOut > a.quoteIn - a.quoteOut ? 1 : -1);
     return {
       fromBlock,
       toBlock,
@@ -7406,14 +7406,151 @@
         if (!left.has(who)) left.set(who, { block: l.blockNumber, quote: 0n, tx: l.transactionHash });
       }
       if (left.size >= 2) {
-        const wallets = [...left.keys()];
+        const wallets2 = [...left.keys()];
         const quote = [...left.values()].reduce((a, v) => a + v.quote, 0n);
         const first = Math.min(...[...left.values()].map((v) => v.block));
-        events.push({ block: first, kind: "crew-exit", tx: [...left.values()][0].tx, wallets, quote, text: `${wallets.length} of ${crew.length} crew wallets left in the same window${quote ? `, ${formatUnits(quote, q2.decimals)} ${q2.symbol} out` : ""}` });
+        events.push({ block: first, kind: "crew-exit", tx: [...left.values()][0].tx, wallets: wallets2, quote, text: `${wallets2.length} of ${crew.length} crew wallets left in the same window${quote ? `, ${formatUnits(quote, q2.decimals)} ${q2.symbol} out` : ""}` });
       }
     }
     events.sort((a, b) => a.block - b.block);
     return events;
+  }
+
+  // src/bouncer/tokenWatch.ts
+  init_tape();
+  var ZERO3 = "0x0000000000000000000000000000000000000000";
+  var DEAD2 = "0x000000000000000000000000000000000000dead";
+  async function readTokenWatchEvents(rpc, token, options) {
+    const decimals = options.decimals ?? 18;
+    const supply = options.supply ?? 0n;
+    const minShareBps = options.minShareBps ?? 25;
+    const pools = new Set((options.pools ?? []).map((p) => p.toLowerCase()));
+    const watched = new Set((options.watch ?? []).map((w) => w.toLowerCase()));
+    const tape = await readTapeAdaptive(
+      rpc,
+      { address: token.toLowerCase(), events: [ERC20_EVENTS.Transfer], fromBlock: options.fromBlock, toBlock: options.toBlock },
+      { minChunk: 1, startChunk: options.chunkSize ?? 200, maxChunk: 5e3 }
+    );
+    const events = [];
+    for (const log of tape.logs) {
+      const from = String(log.args.from).toLowerCase();
+      const to = String(log.args.to).toLowerCase();
+      const tokens = log.args.value;
+      const shareBps = supply > 0n ? Number(tokens * 10000n / supply) : null;
+      const isWatched = watched.has(from) || watched.has(to);
+      if (!isWatched && shareBps !== null && shareBps < minShareBps) continue;
+      const share = shareBps === null ? "" : shareBps === 0 ? " (under 0.01% of supply)" : ` (${(shareBps / 100).toFixed(2)}% of supply)`;
+      const amount = `${formatUnits(tokens, decimals, 0)} tokens${share}`;
+      let kind;
+      let text;
+      if (from === ZERO3) {
+        kind = "minted";
+        text = `${amount} minted to ${shortAddress(to)}`;
+      } else if (to === ZERO3 || to === DEAD2) {
+        kind = "burned";
+        text = `${amount} burned by ${shortAddress(from)}`;
+      } else if (pools.has(to)) {
+        kind = "sold-into-pool";
+        text = `${shortAddress(from)} sent ${amount} into the pool`;
+      } else if (pools.has(from)) {
+        kind = "bought-from-pool";
+        text = `${shortAddress(to)} took ${amount} out of the pool`;
+      } else {
+        kind = "moved";
+        text = `${shortAddress(from)} moved ${amount} to ${shortAddress(to)}`;
+      }
+      if (isWatched) text += watched.has(from) ? "  \u2190 watched wallet" : "  \u2190 to a watched wallet";
+      events.push({ block: log.blockNumber, kind, text, tx: log.transactionHash, wallets: [from, to], tokens, shareBps, watched: isWatched });
+    }
+    events.sort((a, b) => a.block - b.block);
+    return events;
+  }
+
+  // src/bouncer/watchPlan.ts
+  function wallets(...addresses) {
+    const zero = "0x0000000000000000000000000000000000000000";
+    const out2 = /* @__PURE__ */ new Set();
+    for (const a of addresses) {
+      if (!a) continue;
+      const key = a.toLowerCase();
+      if (key === zero) continue;
+      out2.add(key);
+    }
+    return [...out2];
+  }
+  function doorWatch(slip) {
+    const crew = slip.crew?.crews.flatMap((c) => c.wallets) ?? [];
+    if (slip.id.registered && slip.id.launch && !slip.id.v1) {
+      return {
+        ok: true,
+        plan: {
+          mode: "launch",
+          watching: [
+            "the dev selling on the curve or moving tokens out",
+            "the tax recipient changing",
+            "buyback switching on or off",
+            "the curve being swept or graduating",
+            ...crew.length ? [`${crew.length} grouped wallets leaving together`] : []
+          ],
+          blind: crew.length ? [] : ["no group of same-funded wallets was found, so there is no group exit to report"],
+          wallets: wallets(slip.id.launch.deployer, ...crew),
+          crew: wallets(...crew),
+          pools: [],
+          supply: slip.id.meta?.totalSupply ?? 0n,
+          decimals: slip.id.meta?.decimals ?? 18,
+          minShareBps: 25
+        }
+      };
+    }
+    if (!slip.id.meta) {
+      return { ok: false, why: "this address did not read as a token, so it has no transfer log to follow" };
+    }
+    const o = slip.open;
+    const pools = (o?.pools ?? []).map((p) => p.address.toLowerCase());
+    const owner = o?.owner && !o.owner.renounced ? o.owner.address : null;
+    const watched = wallets(o?.deployer?.address, owner, ...crew);
+    const blind = [];
+    if (o?.pools === null) blind.push("the pool list could not be read, so a sale into a pool will read as an ordinary move");
+    else if (!pools.length) blind.push("no pool was found, so there is nothing for a sale to be sold into yet");
+    if (!slip.id.meta.totalSupply) blind.push("total supply could not be read, so moves have no share-of-supply column and every move is reported");
+    if (!watched.length) blind.push("neither a deployer nor an owner was found, so no wallet is reported below the size threshold");
+    return {
+      ok: true,
+      plan: {
+        mode: "tape",
+        watching: [
+          pools.length ? "tokens going into a pool, which is a sale" : "tokens moving out of a wallet",
+          ...pools.length ? ["tokens coming out of a pool, which is a purchase"] : [],
+          "minting and burning",
+          ...watched.length ? [`every move by ${watched.length === 1 ? "the wallet" : `the ${watched.length} wallets`} that deployed or controls this token, however small`] : []
+        ],
+        blind,
+        wallets: watched,
+        crew: wallets(...crew),
+        pools,
+        supply: slip.id.meta.totalSupply ?? 0n,
+        decimals: slip.id.meta.decimals ?? 18,
+        minShareBps: 25
+      }
+    };
+  }
+  function splWatch(_slip) {
+    return {
+      ok: false,
+      why: "Solana has no log filter to follow, so watching a mint means re-reading every token account each tick \u2014 the same read the public endpoints refuse. Re-check the token instead; the page shows what changed since your last look."
+    };
+  }
+  function readLag(plannedMs, actualMs) {
+    const late = actualMs > plannedMs * 2;
+    if (!late) return { plannedMs, actualMs, late: false, text: null };
+    const seconds = Math.round(actualMs / 1e3);
+    const gap = seconds >= 120 ? `${Math.round(seconds / 60)} min` : `${seconds} s`;
+    return {
+      plannedMs,
+      actualMs,
+      late: true,
+      text: `Last gap was ${gap}, not ${Math.round(plannedMs / 1e3)} s \u2014 the browser slows a tab it is not showing. No block is skipped, they just arrive late.`
+    };
   }
 
   // src/bouncer/txReceipt.ts
@@ -7502,6 +7639,7 @@
   var view = "door";
   var ticker = null;
   var watcher = null;
+  var watchClock = null;
   function storage(key, value) {
     try {
       if (value !== void 0) localStorage.setItem(key, value);
@@ -8121,13 +8259,35 @@
       clearInterval(watcher);
       watcher = null;
     }
+    if (watchClock) {
+      clearInterval(watchClock);
+      watchClock = null;
+    }
   }
-  function startWatch(slip, panel, button) {
-    const launch = slip.id.launch;
-    const crew = slip.crew?.crews.flatMap((c) => c.wallets) ?? [];
+  function watchBody(offer) {
+    if (!offer.ok) return `<p class="watch-no">${esc2(offer.why)}</p>`;
+    const plan = offer.plan;
+    const every = mode === "demo" ? 5 : 15;
+    return `<div class="watchbar"><button class="ghost" id="act-watch" type="button" aria-pressed="false">Start watching</button>
+      <span class="watch-when">Every ${every} s, <b>only while this tab is open.</b> Close it and the watch is over.</span></div>
+    <ul class="watch-what">${plan.watching.map((w) => `<li>${esc2(w)}</li>`).join("")}</ul>
+    ${plan.blind.length ? `<ul class="watch-blind">${plan.blind.map((b) => `<li>${esc2(b)}</li>`).join("")}</ul>` : ""}
+    <p class="watch-away">Nothing watches while you are away. For that, run <code>bouncer watch &lt;token&gt;</code> in a terminal, or <code>/watch</code> in the Telegram bot \u2014 both keep going with the tab shut.</p>
+    <div class="watch-state" id="watch-state"></div>
+    <div class="events"></div>`;
+  }
+  function startWatch(slip, plan, panel, button) {
     const list = panel.querySelector(".events");
-    let cursor = mode === "demo" ? Math.max(0, slip.at.block - 3e5) : slip.at.block + 1;
+    const state = panel.querySelector(".watch-state");
+    const everyMs = mode === "demo" ? 5e3 : 15e3;
+    const back = plan.mode === "launch" ? mode === "demo" ? 3e5 : -1 : Math.round(600 * chain().blocksPerSecond);
+    const from = back < 0 ? slip.at.block + 1 : Math.max(0, slip.at.block - back);
+    let cursor = from;
     let rounds = 0;
+    let lastAt = Date.now();
+    let head = null;
+    let lag = null;
+    let failing = null;
     const add = (html, quiet = false) => {
       const el = document.createElement("div");
       el.className = `event${quiet ? " quiet" : ""}`;
@@ -8135,25 +8295,47 @@
       list.prepend(el);
       while (list.children.length > 40) list.lastElementChild?.remove();
     };
+    const paint = () => {
+      if (!state.isConnected) {
+        stopWatch();
+        return;
+      }
+      const since = Math.max(0, Math.round((Date.now() - lastAt) / 1e3));
+      const covered = head === null ? "nothing read yet" : `read up to block ${head}, from ${from}`;
+      state.innerHTML = `<span class="watch-live">${failing ? "stalled" : "watching"}</span>
+      <span>${esc2(covered)} \xB7 last look ${since} s ago</span>
+      ${lag?.text ? `<span class="watch-late">${esc2(lag.text)}</span>` : ""}
+      ${failing ? `<span class="watch-late">${esc2(failing)}</span>` : ""}`;
+    };
     const tick = async () => {
+      const now = Date.now();
+      if (rounds > 0) lag = readLag(everyMs, now - lastAt);
+      lastAt = now;
+      paint();
       try {
         const rpc = rpcFor();
-        const head = await rpc.blockNumber();
-        if (head < cursor) return;
-        const events = await readWatchEvents(rpc, launch, { fromBlock: cursor, toBlock: head, crew, factory: factoryFor(), quote: slip.rules?.quote ?? chain().native, chunkSize: mode === "demo" ? 1e5 : void 0 });
-        cursor = head + 1;
-        rounds++;
-        for (const e of events) {
-          add(`<span class="b">${e.block}</span><span class="k">${esc2(e.kind)}</span><span>${esc2(e.text)}</span>`);
-          try {
-            if (Notification.permission === "granted") new Notification(`BOUNCER \xB7 ${slip.id.meta?.symbol ?? "watch"}`, { body: `${e.kind}: ${e.text}` });
-          } catch {
+        const at = await rpc.blockNumber();
+        head = at;
+        if (at >= cursor) {
+          const events = plan.mode === "launch" ? await readWatchEvents(rpc, slip.id.launch, { fromBlock: cursor, toBlock: at, crew: plan.crew, factory: factoryFor(), quote: slip.rules?.quote ?? chain().native, chunkSize: mode === "demo" ? 1e5 : void 0 }) : await readTokenWatchEvents(rpc, slip.subject, { fromBlock: cursor, toBlock: at, pools: plan.pools, watch: plan.wallets, supply: plan.supply, decimals: plan.decimals, minShareBps: plan.minShareBps, chunkSize: mode === "demo" ? 5e3 : void 0 });
+          cursor = at + 1;
+          for (const e of events) {
+            add(`<span class="b">${e.block}</span><span class="k">${esc2(e.kind)}</span><span>${esc2(e.text)}</span>`);
+            try {
+              if (Notification.permission === "granted") new Notification(`BOUNCER \xB7 ${slip.id.meta?.symbol ?? "watch"}`, { body: `${e.kind}: ${e.text}` });
+            } catch {
+            }
           }
+          if (!events.length && rounds % 4 === 0) add(`<span class="b">${at}</span><span class="k" style="color:var(--dim)">quiet</span><span>no moves up to block ${at}</span>`, true);
         }
-        if (!events.length && rounds % 4 === 1) add(`<span class="b">${head}</span><span class="k" style="color:var(--dim)">quiet</span><span>no moves up to block ${head}</span>`, true);
+        failing = null;
+        rounds++;
       } catch (error) {
-        add(`<span class="b">\xB7</span><span class="k" style="color:var(--stop)">error</span><span>${esc2(error instanceof Error ? error.message : String(error))}</span>`);
+        const why = error instanceof Error ? plainReason(error.message) : String(error);
+        failing = why;
+        add(`<span class="b">\xB7</span><span class="k" style="color:var(--stop)">error</span><span>${esc2(why)}</span>`);
       }
+      paint();
     };
     button.setAttribute("aria-pressed", "true");
     button.textContent = "Watching \xB7 click to stop";
@@ -8162,7 +8344,8 @@
     } catch {
     }
     void tick();
-    watcher = window.setInterval(() => void tick(), mode === "demo" ? 5e3 : 15e3);
+    watcher = window.setInterval(() => void tick(), everyMs);
+    watchClock = window.setInterval(paint, 1e3);
   }
   function bad(text) {
     out.innerHTML = `<div class="error"><strong>That is not what this tab needs.</strong><p>${esc2(text)}</p></div>`;
@@ -8595,6 +8778,7 @@
       ${holdersBodyText ? section("s-holders", "Who holds it", "The largest token accounts and the wallets behind them.", holdersBodyText, false) : ""}
       ${m ? section("s-calc", "Could you get out?", "Your own position size, priced against the pool reserves read above. A price is not an exit: the two come apart exactly when it matters.", exitCalcBody(m.supply), false) : ""}
       ${coverage && opts.source ? section("s-why", "Why this verdict", "The working behind the word: which findings made it, what was asked of the chain, which endpoint answered, and what was never checked.", whyBody(slip.notes, coverage, `${esc2(slip.chain.name)} \xB7 ${esc2(solanaWhen(slip))}${slip.at.timestamp ? ` \xB7 ${isoUtc(slip.at.timestamp)}` : ""}`, opts.source), false) : ""}
+      ${stage0 === "done" ? section("s-watch", "Watch for changes", "Whether this tab can follow the mint after you leave it.", watchBody(splWatch(slip)), false) : ""}
     </div>
     ${buyStrip(slip.chain.key, slip.subject, Boolean(slip.mint), verdictOf(slip.notes, "done", coverage).kind)}
   </div>`;
@@ -8890,7 +9074,7 @@
         <div class="tbl"><table class="buys"><thead><tr><th>wallet</th><th>got its money from</th><th>bought</th></tr></thead><tbody>${crew.wallets.slice(0, 10).map((w) => `<tr><td>${shortAddress(w.address)}</td><td>${w.creatorWallet ? '<span class="flag">creator wallet</span>' : w.funder ? `${shortAddress(w.funder)} <small style="color:var(--dim)">@${w.fundedAtBlock}</small>` : '<span style="color:var(--dim)">not found</span>'}</td><td>${amt(w.quoteIn)}</td></tr>`).join("")}</tbody></table></div>` : "";
     const lookBody = l ? `<h3 class="cap">Tokens carrying this ticker</h3><dl class="kv"><dt>${esc2(l.query)}</dt><dd>${esc2(lookalikeLine(l))}</dd></dl>
         <h3 class="cap">Every one found <b>\xB7 the factory decides, not the name</b></h3><div class="tbl"><table class="buys"><thead><tr><th>address</th><th>from the factory?</th><th>stage</th><th>launch block</th></tr></thead><tbody>${l.candidates.slice(0, 8).map((x) => `<tr><td><a href="#/${mode === "demo" ? "demo" : "t"}/${x.address}${routeChain()}">${shortAddress(x.address)}</a>${x.address === l.subject ? " \xB7 this one" : ""}</td><td>${x.registered ? '<span class="flag ok">yes</span>' : '<span class="flag bad">no</span>'}</td><td>${x.phase !== null ? PHASE_LABEL[x.phase] : "\u2014"}</td><td>${x.launchBlock ?? "\u2014"}</td></tr>`).join("")}</tbody></table></div>` : "";
-    const watchBody = `<div class="watchbar"><button class="ghost" id="act-watch" type="button" aria-pressed="false">Start watching</button><span style="color:var(--muted);font-size:13px">Checks every ${mode === "demo" ? "5" : "15"} s while this tab is open: the dev selling or moving tokens, the tax recipient changing, buyback switching, graduation${crew?.crews.length ? `, and ${crew.crews.flatMap((x) => x.wallets).length} grouped wallets leaving together` : ""}. Browser notifications if you allow them.</span></div><div class="events"></div>`;
+    const offer = doorWatch(slip);
     out.innerHTML = `<div class="slip">
     ${verdictBlock({
       sym,
@@ -8925,7 +9109,7 @@
       ${crew ? section("s-crew", "Same funder?", "Where the first buyers got their money. Wallets funded by one address before the launch are one group.", crewBody, false) : ""}
       ${l ? section("s-look", "Same name", "Other tokens with this ticker on the chain, and which one launched first.", lookBody, false) : ""}
       ${d ? section("s-dev", "This dev before", `Everything this deployer launched in the last ${mode === "demo" ? "8" : "24"} h and how it went.`, devSection(d, slip.subject, false, true), false) : ""}
-      ${registered && !v1 ? section("s-watch", "Watch for changes", "Get told when the dev moves, right in this tab.", watchBody, new URLSearchParams(location.hash.split("?")[1] ?? "").get("watch") === "1") : ""}
+      ${stage0 === "done" ? section("s-watch", "Watch for changes", "Get told when the dev moves or tokens go into a pool, right in this tab.", watchBody(offer), new URLSearchParams(location.hash.split("?")[1] ?? "").get("watch") === "1") : ""}
     </div>
     ${buyStrip(mode === "demo" ? "" : slip.chain.key, slip.subject, Boolean(slip.id.meta) && slip.open?.transferFunction !== false, verdictOf(slip.notes, "done", coverage).kind)}
   </div>`;
@@ -8981,7 +9165,8 @@
       });
     }
     const watchButton = document.getElementById("act-watch");
-    if (watchButton) {
+    if (watchButton && offer.ok) {
+      const plan = offer.plan;
       watchButton.addEventListener("click", () => {
         if (watcher) {
           stopWatch();
@@ -8989,9 +9174,9 @@
           watchButton.textContent = "Start watching";
           return;
         }
-        startWatch(slip, $("s-watch"), watchButton);
+        startWatch(slip, plan, $("s-watch"), watchButton);
       });
-      if (new URLSearchParams(location.hash.split("?")[1] ?? "").get("watch") === "1") startWatch(slip, $("s-watch"), watchButton);
+      if (new URLSearchParams(location.hash.split("?")[1] ?? "").get("watch") === "1") startWatch(slip, plan, $("s-watch"), watchButton);
     }
     if (slip.cover?.status === "open") {
       const cc = slip.cover;

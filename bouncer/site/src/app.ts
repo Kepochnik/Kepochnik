@@ -9,7 +9,7 @@
  */
 import { BlockscoutClient } from "../../src/chain/blockscout.js";
 import { TOPIC_TAG,TOPIC_BLURB, TOPIC_ORDER, TOPIC_QUESTION, topicOf } from "../../src/bouncer/topics.js";
-import { doorCoverage, splCoverage, qualify, type Coverage } from "../../src/bouncer/coverage.js";
+import { doorCoverage, plainReason, splCoverage, qualify, type Coverage } from "../../src/bouncer/coverage.js";
 import { missingVenues, tradeVenues } from "../../src/bouncer/trade.js";
 import { CHAINS, canDo, chainByKey, featureBlocker, type ChainConfig, type Feature } from "../../src/chain/chains.js";
 import { PHASE_LABEL } from "../../src/chain/pons.js";
@@ -36,6 +36,8 @@ import { readPosition, type Position } from "../../src/bouncer/position.js";
 import { roomLine } from "../../src/bouncer/room.js";
 import { readBoard, type Board } from "../../src/bouncer/leaderboard.js";
 import { readWatchEvents, type WatchEvent } from "../../src/bouncer/watch.js";
+import { readTokenWatchEvents, type TokenWatchEvent } from "../../src/bouncer/tokenWatch.js";
+import { doorWatch, readLag, splWatch, type WatchOffer, type WatchPlan } from "../../src/bouncer/watchPlan.js";
 import { readTradeReceipt, type TradeReceipt } from "../../src/bouncer/txReceipt.js";
 import { formatBps, formatDuration, formatUnits, isoUtc, shortAddress } from "../../src/format.js";
 
@@ -85,6 +87,7 @@ let mode: Mode = "demo";
 let view: View = "door";
 let ticker: number | null = null;
 let watcher: number | null = null;
+let watchClock: number | null = null;
 
 function storage(key: string, value?: string): string | null {
   try {
@@ -1078,15 +1081,68 @@ function renderBoard(b: Board, hours: number): void {
 
 function stopWatch(): void {
   if (watcher) { clearInterval(watcher); watcher = null; }
+  if (watchClock) { clearInterval(watchClock); watchClock = null; }
 }
 
-/** DEV MOVED / CREW EXIT in this tab: polls the head every 15 s and appends events. */
-function startWatch(slip: DoorSlip, panel: HTMLElement, button: HTMLButtonElement): void {
-  const launch = slip.id.launch!;
-  const crew = slip.crew?.crews.flatMap((c) => c.wallets) ?? [];
+/**
+ * The offer, or the reason there is none.
+ *
+ * Both halves matter. A section that simply does not appear for an ordinary
+ * ERC-20 tells the reader there was nothing to watch, when the truth was that
+ * the page had only been wired up for launchpad tokens. And a button that
+ * says "every 15 s" without saying "while this tab is open" is promising
+ * something a web page cannot deliver: the moment the tab closes the watch is
+ * gone, and the events a reader was waiting for are the ones that arrive
+ * overnight. So the limits go above the button, not in a footnote under it.
+ */
+function watchBody(offer: WatchOffer): string {
+  if (!offer.ok) return `<p class="watch-no">${esc(offer.why)}</p>`;
+  const plan = offer.plan;
+  const every = mode === "demo" ? 5 : 15;
+  return `<div class="watchbar"><button class="ghost" id="act-watch" type="button" aria-pressed="false">Start watching</button>
+      <span class="watch-when">Every ${every} s, <b>only while this tab is open.</b> Close it and the watch is over.</span></div>
+    <ul class="watch-what">${plan.watching.map((w) => `<li>${esc(w)}</li>`).join("")}</ul>
+    ${plan.blind.length ? `<ul class="watch-blind">${plan.blind.map((b) => `<li>${esc(b)}</li>`).join("")}</ul>` : ""}
+    <p class="watch-away">Nothing watches while you are away. For that, run <code>bouncer watch &lt;token&gt;</code> in a terminal, or <code>/watch</code> in the Telegram bot — both keep going with the tab shut.</p>
+    <div class="watch-state" id="watch-state"></div>
+    <div class="events"></div>`;
+}
+
+/**
+ * The tick, for either tape.
+ *
+ * A launchpad token has the curve's own events — the dev selling, the tax
+ * recipient moving, graduation. Everything else has its Transfer log, which
+ * says less and says it about any ERC-20 ever deployed. Which one is which is
+ * decided in the core (watchPlan.ts), so this function only runs it.
+ *
+ * `cursor` is why a throttled tab is a delay and not a hole: each round asks
+ * from the last block it finished to the head it can see now, so a tab that
+ * slept for an hour reads that hour on its first round back. What the page
+ * must not do is keep claiming a 15-second heartbeat while the browser is
+ * giving it four minutes — so the real gap is measured and printed.
+ */
+function startWatch(slip: DoorSlip, plan: WatchPlan, panel: HTMLElement, button: HTMLButtonElement): void {
   const list = panel.querySelector<HTMLElement>(".events")!;
-  let cursor = mode === "demo" ? Math.max(0, slip.at.block - 300_000) : slip.at.block + 1;
+  const state = panel.querySelector<HTMLElement>(".watch-state")!;
+  const everyMs = mode === "demo" ? 5_000 : 15_000;
+  // How far back the first round reaches. On a launch, live, that is nothing:
+  // the slip just read the whole history, so anything before this block is
+  // already on the page above. The transfer tape has no such section, so it
+  // opens with ten minutes of history — the CLI's own default, and not an
+  // hour, because this tape is EVERY transfer and on a busy token an hour is
+  // a wall of history before the first live line.
+  const back = plan.mode === "launch"
+    ? (mode === "demo" ? 300_000 : -1)
+    : Math.round(600 * chain().blocksPerSecond);
+  const from = back < 0 ? slip.at.block + 1 : Math.max(0, slip.at.block - back);
+  let cursor = from;
   let rounds = 0;
+  let lastAt = Date.now();
+  let head: number | null = null;
+  let lag: ReturnType<typeof readLag> | null = null;
+  let failing: string | null = null;
+
   const add = (html: string, quiet = false) => {
     const el = document.createElement("div");
     el.className = `event${quiet ? " quiet" : ""}`;
@@ -1094,28 +1150,60 @@ function startWatch(slip: DoorSlip, panel: HTMLElement, button: HTMLButtonElemen
     list.prepend(el);
     while (list.children.length > 40) list.lastElementChild?.remove();
   };
+
+  const paint = () => {
+    if (!state.isConnected) { stopWatch(); return; }
+    const since = Math.max(0, Math.round((Date.now() - lastAt) / 1000));
+    const covered = head === null ? "nothing read yet" : `read up to block ${head}, from ${from}`;
+    state.innerHTML = `<span class="watch-live">${failing ? "stalled" : "watching"}</span>
+      <span>${esc(covered)} · last look ${since} s ago</span>
+      ${lag?.text ? `<span class="watch-late">${esc(lag.text)}</span>` : ""}
+      ${failing ? `<span class="watch-late">${esc(failing)}</span>` : ""}`;
+  };
+
   const tick = async () => {
+    const now = Date.now();
+    if (rounds > 0) lag = readLag(everyMs, now - lastAt);
+    lastAt = now;
+    paint();
     try {
       const rpc = rpcFor();
-      const head = await rpc.blockNumber();
-      if (head < cursor) return;
-      const events: WatchEvent[] = await readWatchEvents(rpc, launch, { fromBlock: cursor, toBlock: head, crew, factory: factoryFor(), quote: slip.rules?.quote ?? chain().native, chunkSize: mode === "demo" ? 100_000 : undefined });
-      cursor = head + 1;
-      rounds++;
-      for (const e of events) {
-        add(`<span class="b">${e.block}</span><span class="k">${esc(e.kind)}</span><span>${esc(e.text)}</span>`);
-        try { if (Notification.permission === "granted") new Notification(`BOUNCER · ${slip.id.meta?.symbol ?? "watch"}`, { body: `${e.kind}: ${e.text}` }); } catch { /* no notifications here */ }
+      const at = await rpc.blockNumber();
+      head = at;
+      if (at >= cursor) {
+        const events: { block: number; kind: string; text: string }[] = plan.mode === "launch"
+          ? await readWatchEvents(rpc, slip.id.launch!, { fromBlock: cursor, toBlock: at, crew: plan.crew, factory: factoryFor(), quote: slip.rules?.quote ?? chain().native, chunkSize: mode === "demo" ? 100_000 : undefined })
+          : await readTokenWatchEvents(rpc, slip.subject, { fromBlock: cursor, toBlock: at, pools: plan.pools, watch: plan.wallets, supply: plan.supply, decimals: plan.decimals, minShareBps: plan.minShareBps, chunkSize: mode === "demo" ? 5_000 : undefined });
+        cursor = at + 1;
+        for (const e of events) {
+          add(`<span class="b">${e.block}</span><span class="k">${esc(e.kind)}</span><span>${esc(e.text)}</span>`);
+          try { if (Notification.permission === "granted") new Notification(`BOUNCER · ${slip.id.meta?.symbol ?? "watch"}`, { body: `${e.kind}: ${e.text}` }); } catch { /* no notifications here */ }
+        }
+        if (!events.length && rounds % 4 === 0) add(`<span class="b">${at}</span><span class="k" style="color:var(--dim)">quiet</span><span>no moves up to block ${at}</span>`, true);
       }
-      if (!events.length && rounds % 4 === 1) add(`<span class="b">${head}</span><span class="k" style="color:var(--dim)">quiet</span><span>no moves up to block ${head}</span>`, true);
+      failing = null;
+      rounds++;
     } catch (error) {
-      add(`<span class="b">·</span><span class="k" style="color:var(--stop)">error</span><span>${esc(error instanceof Error ? error.message : String(error))}</span>`);
+      // The cursor is deliberately NOT advanced here. A failed round leaves
+      // its blocks unread, and the next round has to cover them or the watch
+      // quietly loses the window it could not read — which is the one failure
+      // a watch must never have.
+      const why = error instanceof Error ? plainReason(error.message) : String(error);
+      failing = why;
+      add(`<span class="b">·</span><span class="k" style="color:var(--stop)">error</span><span>${esc(why)}</span>`);
     }
+    paint();
   };
+
   button.setAttribute("aria-pressed", "true");
   button.textContent = "Watching · click to stop";
   try { if ("Notification" in window && Notification.permission === "default") void Notification.requestPermission(); } catch { /* fine */ }
   void tick();
-  watcher = window.setInterval(() => void tick(), mode === "demo" ? 5_000 : 15_000);
+  watcher = window.setInterval(() => void tick(), everyMs);
+  // A second timer, only to keep "last look 4 s ago" true. Without it the
+  // line freezes at the moment of the last round and a stalled watch looks
+  // exactly like a working one.
+  watchClock = window.setInterval(paint, 1_000);
 }
 
 function bad(text: string): void {
@@ -2003,6 +2091,7 @@ function renderSplSlip(slip: SplSlip, opts: { stage?: Stage; source?: Source } =
       ${holdersBodyText ? section("s-holders", "Who holds it", "The largest token accounts and the wallets behind them.", holdersBodyText, false) : ""}
       ${m ? section("s-calc", "Could you get out?", "Your own position size, priced against the pool reserves read above. A price is not an exit: the two come apart exactly when it matters.", exitCalcBody(m.supply), false) : ""}
       ${coverage && opts.source ? section("s-why", "Why this verdict", "The working behind the word: which findings made it, what was asked of the chain, which endpoint answered, and what was never checked.", whyBody(slip.notes as DoorNote[], coverage, `${esc(slip.chain.name)} · ${esc(solanaWhen(slip))}${slip.at.timestamp ? ` · ${isoUtc(slip.at.timestamp)}` : ""}`, opts.source), false) : ""}
+      ${stage0 === "done" ? section("s-watch", "Watch for changes", "Whether this tab can follow the mint after you leave it.", watchBody(splWatch(slip)), false) : ""}
     </div>
     ${buyStrip(slip.chain.key, slip.subject, Boolean(slip.mint), verdictOf(slip.notes as DoorNote[], "done", coverage).kind)}
   </div>`;
@@ -2482,7 +2571,7 @@ function renderSlip(slip: DoorSlip, opts: { stage?: Stage; source?: Source } = {
         <h3 class="cap">Every one found <b>· the factory decides, not the name</b></h3><div class="tbl"><table class="buys"><thead><tr><th>address</th><th>from the factory?</th><th>stage</th><th>launch block</th></tr></thead><tbody>${l.candidates.slice(0, 8).map((x) => `<tr><td><a href="#/${mode === "demo" ? "demo" : "t"}/${x.address}${routeChain()}">${shortAddress(x.address)}</a>${x.address === l.subject ? " · this one" : ""}</td><td>${x.registered ? '<span class="flag ok">yes</span>' : '<span class="flag bad">no</span>'}</td><td>${x.phase !== null ? PHASE_LABEL[x.phase] : "—"}</td><td>${x.launchBlock ?? "—"}</td></tr>`).join("")}</tbody></table></div>`
     : "";
 
-  const watchBody = `<div class="watchbar"><button class="ghost" id="act-watch" type="button" aria-pressed="false">Start watching</button><span style="color:var(--muted);font-size:13px">Checks every ${mode === "demo" ? "5" : "15"} s while this tab is open: the dev selling or moving tokens, the tax recipient changing, buyback switching, graduation${crew?.crews.length ? `, and ${crew.crews.flatMap((x) => x.wallets).length} grouped wallets leaving together` : ""}. Browser notifications if you allow them.</span></div><div class="events"></div>`;
+  const offer = doorWatch(slip);
 
   out.innerHTML = `<div class="slip">
     ${verdictBlock({
@@ -2518,7 +2607,7 @@ function renderSlip(slip: DoorSlip, opts: { stage?: Stage; source?: Source } = {
       ${crew ? section("s-crew", "Same funder?", "Where the first buyers got their money. Wallets funded by one address before the launch are one group.", crewBody, false) : ""}
       ${l ? section("s-look", "Same name", "Other tokens with this ticker on the chain, and which one launched first.", lookBody, false) : ""}
       ${d ? section("s-dev", "This dev before", `Everything this deployer launched in the last ${mode === "demo" ? "8" : "24"} h and how it went.`, devSection(d, slip.subject, false, true), false) : ""}
-      ${registered && !v1 ? section("s-watch", "Watch for changes", "Get told when the dev moves, right in this tab.", watchBody, new URLSearchParams(location.hash.split("?")[1] ?? "").get("watch") === "1") : ""}
+      ${stage0 === "done" ? section("s-watch", "Watch for changes", "Get told when the dev moves or tokens go into a pool, right in this tab.", watchBody(offer), new URLSearchParams(location.hash.split("?")[1] ?? "").get("watch") === "1") : ""}
     </div>
     ${buyStrip(mode === "demo" ? "" : slip.chain.key, slip.subject, Boolean(slip.id.meta) && slip.open?.transferFunction !== false, verdictOf(slip.notes, "done", coverage).kind)}
   </div>`;
@@ -2565,12 +2654,13 @@ function renderSlip(slip: DoorSlip, opts: { stage?: Stage; source?: Source } = {
     });
   }
   const watchButton = document.getElementById("act-watch") as HTMLButtonElement | null;
-  if (watchButton) {
+  if (watchButton && offer.ok) {
+    const plan = offer.plan;
     watchButton.addEventListener("click", () => {
       if (watcher) { stopWatch(); watchButton.setAttribute("aria-pressed", "false"); watchButton.textContent = "Start watching"; return; }
-      startWatch(slip, $("s-watch"), watchButton);
+      startWatch(slip, plan, $("s-watch"), watchButton);
     });
-    if (new URLSearchParams(location.hash.split("?")[1] ?? "").get("watch") === "1") startWatch(slip, $("s-watch"), watchButton);
+    if (new URLSearchParams(location.hash.split("?")[1] ?? "").get("watch") === "1") startWatch(slip, plan, $("s-watch"), watchButton);
   }
 
   if (slip.cover?.status === "open") {

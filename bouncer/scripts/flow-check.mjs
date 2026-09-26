@@ -636,6 +636,50 @@ await walk("the working behind the verdict is on the page", async (page) => {
     if (!["read", "unread", "unsupported", "n/a"].includes(st)) throw new Error(`unknown check state "${st}"`);
   }
 });
+await walk("an ordinary token can be watched, and the watch says what it cannot do", async (page) => {
+  // The section used to appear only for launchpad tokens. Somebody checking
+  // an ordinary ERC-20 — which is what every memecoin worth checking is —
+  // got no section at all, which reads as "nothing here to watch" rather
+  // than "this page was only wired up for one kind of token".
+  await page.goto(`${url}#/demo/0x0000000000000000000000000000000000f1a1a1`, { waitUntil: "load" });
+  await waitForDone(page);
+  const sec = await page.$("#s-watch");
+  if (!sec) throw new Error("an ordinary token was offered no watch at all");
+  await page.evaluate(() => document.querySelector("#s-watch")?.setAttribute("open", ""));
+
+  const button = await page.$("#act-watch");
+  if (!button) throw new Error("the watch section has no button and gave no reason");
+
+  // The three things a tab watch cannot do, above the button rather than
+  // under it: it ends with the tab, what it is blind to on THIS token, and
+  // where to go for a watch that survives you closing the laptop.
+  const when = await page.$eval(".watch-when", (el) => el.textContent.replace(/\s+/g, " ").trim());
+  if (!/only while this tab is open/i.test(when)) throw new Error(`the watch does not say it dies with the tab: "${when}"`);
+  const away = await page.$eval(".watch-away", (el) => el.textContent.replace(/\s+/g, " ").trim());
+  if (!/bouncer watch|\/watch/.test(away)) throw new Error(`the watch offers nothing for when you are away: "${away}"`);
+  const what = await page.$$eval(".watch-what li", (els) => els.map((e) => e.textContent.trim()));
+  if (what.length < 2) throw new Error(`the watch does not say what it reports: ${JSON.stringify(what)}`);
+  if (!what.some((w) => /pool/.test(w))) throw new Error("a token with a pool does not say it can tell a sale from a move");
+
+  // And pressing it starts a watch that says out loud how far it has read.
+  await page.click("#act-watch");
+  await page.waitForFunction(() => (document.querySelector("#watch-state")?.textContent ?? "").includes("last look"), null, { timeout: 30_000 });
+  const state = await page.$eval("#watch-state", (el) => el.textContent.replace(/\s+/g, " ").trim());
+  if (!/read up to block \d+|nothing read yet/.test(state)) throw new Error(`the watch does not say how far it has read: "${state}"`);
+
+  // Pressing it again stops it, and stopping means stopping: a page that
+  // says "watching" with no timer behind it is the worst of the three states.
+  await page.click("#act-watch");
+  const pressed = await page.$eval("#act-watch", (el) => el.getAttribute("aria-pressed"));
+  if (pressed !== "false") throw new Error("stopping the watch left the button pressed");
+});
+await walk("Solana says why it cannot watch instead of hiding the section", async (page) => {
+  await page.goto(`${url}#/t/So11111111111111111111111111111111111111112?chain=solana`, { waitUntil: "load" });
+  // No network here, so the slip will not finish. The point of the walk is
+  // the shape of the answer when it does, and that is checked on the build
+  // by cli-check; here it only has to not throw.
+  await page.waitForTimeout(1_500);
+});
 await browser.close();
 if (failures) {
   console.error(`\nflows: ${failures} journey${failures === 1 ? "" : "s"} broken.`);

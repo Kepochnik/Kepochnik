@@ -110,6 +110,19 @@ One block window, narrow reads, events not verdicts:
 
 The crew is the set of first buyers ONE CREW found sharing a funder. The CLI polls every 5 s, the bot every 15 s, the site tab every 15 s; each keeps a cursor so an event is delivered once.
 
+### Any other token (the transfer tape)
+
+No launch record means no curve events, so the token's own `Transfer` log is read with the addresses of its pools. The direction is exact, not inferred:
+
+| Event | Read |
+| --- | --- |
+| sold-into-pool | `Transfer` with `to` = a pool from the chain's DEX table |
+| bought-from-pool | `Transfer` with `from` = a pool |
+| minted / burned | `Transfer` from the zero address, or to the zero or dead address |
+| moved | every other `Transfer` |
+
+A move is reported when it is 0.25% of supply or more, or when either side is a wallet the caller named — the deployer, the owner, a crew. No price is attached: the pool's own `Swap` log carries the quote amount and `Transfer` does not, so multiplying by the current spot would invent a figure that is worst exactly on the large sale that moved the price. The share of supply is printed instead, and a move too small to round says "under 0.01%" rather than "0.00%". The span adapts down to a single block, because the busiest tokens must not be the ones that cannot be watched. Which tape a token gets is decided in `src/bouncer/watchPlan.ts`, so the CLI, the bot and the site cannot disagree about it.
+
 ## The board
 
 Factory `TokenLaunched`, `LaunchSwept`, `PoolGraduated` over the window (adaptive chunks), folded per deployer: launched, swept, graduated. "Serial" = 5 or more launches and no graduation. Cover charge: every `CurveBuy` on the chain in the window (no address filter, adaptive chunks), the curve's own `creatorTaxBps()` per curve seen, and `cover = tax − quoteIn · creatorTaxBps / 1e4` when positive, summed per curve and per buyer. Buys whose curve is not in the window's launches are still counted (the curve, not the token, is shown).

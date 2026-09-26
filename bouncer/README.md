@@ -36,7 +36,7 @@ BOUNCER reads it and prints a slip: **ID check** (did the factory really deploy 
 
 **The sale simulation.** A sale is a transfer into the pool, and the common honeypot is a contract that lets you move tokens between wallets and refuses that one transfer. So every holder is simulated twice with `eth_call`, once to a fresh wallet and once into the deepest pool; nothing is signed or sent. The owner and the deployer are excluded from the sample, because they are exactly the addresses such a contract exempts. Three outcomes, never two: it goes through, it reverts, or the node would not run it. A call that could not be run is never reported as a revert, so a rate-limited endpoint can never make a healthy token look like a trap.
 
-For holders there is a **position** (one wallet on one launch: cost basis, fees and taxes paid, exit value now), a **receipt** (one trade itemised: protocol fee, creator tax, cover charge) and a **watch** (DEV MOVED: the deployer sold or moved tokens, the tax recipient moved, buyback flipped; CREW EXIT: the crew leaving together). For creators there is a **launch planner** (what a launch looks like under today's factory terms, before anything is signed). For everyone there is **the board** (tonight's deployers, serial launchers, cover charge collected and paid) and, for agents, a **read-only MCP server** with all of it as tools.
+For holders there is a **position** (one wallet on one launch: cost basis, fees and taxes paid, exit value now), a **receipt** (one trade itemised: protocol fee, creator tax, cover charge) and a **watch** (on a launch — DEV MOVED: the deployer sold or moved tokens, the tax recipient moved, buyback flipped; CREW EXIT: the crew leaving together. On any other token, its own transfers: into a pool is a sale, out of a pool is a purchase). For creators there is a **launch planner** (what a launch looks like under today's factory terms, before anything is signed). For everyone there is **the board** (tonight's deployers, serial launchers, cover charge collected and paid) and, for agents, a **read-only MCP server** with all of it as tools.
 
 The gorilla is the meme. The slip is the product.
 
@@ -90,7 +90,11 @@ node bin/bouncer.mjs dev 0xDEPLOYER --hours 48              # dev report card al
 node bin/bouncer.mjs watch 0xTOKEN --crew                   # one line per event, every 5 s, until you stop it
 ```
 
-DEV MOVED: the deployer sold on the curve or moved tokens out, the creator moved the tax recipient or flipped buyback, the curve was swept or graduated. CREW EXIT (with `--crew`): two or more of the wallets ONE CREW found sharing a funder leaving in the same window. The same watch runs in the Telegram bot (`/watch`) and in a browser tab (the "Watch in this tab" button on any slip, with browser notifications if you allow them).
+**On a launchpad token.** DEV MOVED: the deployer sold on the curve or moved tokens out, the creator moved the tax recipient or flipped buyback, the curve was swept or graduated. CREW EXIT (with `--crew`): two or more of the wallets ONE CREW found sharing a funder leaving in the same window.
+
+**On any other token** — which is what every ordinary memecoin is — there is no curve to read, so the token's own `Transfer` log is read instead, with the addresses of its pools: tokens into a pool is a sale, tokens out of a pool is a purchase, everything else is a move between wallets, and the deployer and the owner are reported however small the move. No event carries a price, so the share of supply is printed and never a figure multiplied by spot.
+
+All three surfaces run the same two tapes: the CLI, the Telegram bot (`/watch`), and a browser tab (the "Start watching" button on any slip, with browser notifications if you allow them). **The tab watch ends when the tab does**, and a hidden tab is throttled by the browser to a minute or more — it keeps a cursor so nothing is skipped, and it says on screen how large the last gap really was. For a watch that survives the laptop closing, use the CLI or the bot.
 
 ## The board
 
@@ -133,7 +137,7 @@ Deploys to GitHub Pages from `main` with `.github/workflows/pages.yml`.
 | `bouncer wallet <token> <wallet>` | the wallet's `CurveBuy`/`CurveSell`, `balanceOf`, the exit door | trades, cost basis, fees and taxes paid, exit value, unrealised |
 | `bouncer receipt <txhash>` | the transaction receipt's curve logs, the factory record, reserves at that block | one trade itemised, cover charge separated |
 | `bouncer plan [--config 0] [--tax 100] [--quote 0x…] [--buy 0.1]` | launch config, pair economics, launch fee, tax ceiling, anti-snipe terms, hook policy | start and graduation price, curve vs pool split, FDV at graduation, creator's take, door charge on a sample buy |
-| `bouncer watch <token> [--interval 5] [--crew] [--rounds n]` | deployer's `CurveSell` and `Transfer`, factory events for the token, crew wallets' sells and transfers | one line per event, until stopped |
+| `bouncer watch <token> [--interval 5] [--crew] [--rounds n]` | on a launch: deployer's `CurveSell` and `Transfer`, factory events for the token, crew wallets' sells and transfers. On any other token: the token's own `Transfer` log plus its pool addresses | one line per event, until stopped |
 | `bouncer board [--hours 1] [--top 10] [--no-cover]` | factory launches, sweeps and graduations in the window; every `CurveBuy` on the chain in the window; `creatorTaxBps()` per curve | the board |
 | `bouncer demo` | nothing (synthetic chain) | three slips offline |
 
@@ -166,7 +170,7 @@ Public RPCs often answer servers but not web pages ("Failed to fetch" in the bro
 TELEGRAM_BOT_TOKEN=… BOUNCER_SITE_URL=https://kepochnik.github.io/bouncer node bin/bouncer-bot.mjs
 ```
 
-Long polling, no webhook, no library. `/ca <token|curve>` prints the slip, `/dev <address>` the report card, `/exit <token> [tokens]` the exit door, `/board [hours]` the board, `/watch <token>` turns on DEV MOVED and CREW EXIT alerts for that chat (`/unwatch` stops them; set `BOUNCER_STATE_FILE=watches.json` to keep them across restarts), `/chain arc-testnet` switches chain for that chat. The bot holds one secret, its own token, and can only read.
+Long polling, no webhook, no library. `/ca <token|curve>` prints the slip, `/dev <address>` the report card, `/exit <token> [tokens]` the exit door, `/board [hours]` the board, `/watch <token>` turns on alerts for that chat — DEV MOVED and CREW EXIT on a launch, the transfer tape on any other token (`/unwatch` stops them; set `BOUNCER_STATE_FILE=watches.json` to keep them across restarts), `/chain arc-testnet` switches chain for that chat. The bot holds one secret, its own token, and can only read.
 
 ## Browser extension
 
@@ -217,6 +221,7 @@ src/bouncer/position.ts     one wallet on one launch
 src/bouncer/txReceipt.ts    one trade itemised
 src/bouncer/planner.ts      the launch planner
 src/bouncer/watch.ts        DEV MOVED and CREW EXIT events, and the poll loop
+src/bouncer/watchPlan.ts    which tape a token gets, and what that tape is blind to
 src/bouncer/leaderboard.ts  the board
 src/mcp/server.ts           the read-only MCP server (stdio, no dependencies)
 src/bouncer/door.ts         one address in, one slip out; the door notes

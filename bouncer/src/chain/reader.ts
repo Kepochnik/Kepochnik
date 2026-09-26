@@ -150,6 +150,12 @@ export function viewCall(to: string, data: Hex): { to: string; data: Hex } {
   return { to: normalizeAddress(to), data };
 }
 
+/** Total supply of any ERC-20. Throws when the call reverts or the address has no code. */
+export async function readSupply(rpc: RpcClient, token: string, blockNumber: number): Promise<bigint> {
+  const [raw] = await rpc.callBatch([{ to: token, data: encodeCall(ERC20_FUNCTIONS.totalSupply, []) }], blockNumber);
+  return decodeOutputs(ERC20_FUNCTIONS.totalSupply, raw)[0] as bigint;
+}
+
 /** Symbol and decimals of any ERC-20 (used for stock-token quote assets). */
 export async function readTokenMeta(rpc: RpcClient, address: string, blockNumber: number): Promise<{ symbol: string; decimals: number }> {
   const [symbolRaw, decimalsRaw] = await rpc.callBatch(

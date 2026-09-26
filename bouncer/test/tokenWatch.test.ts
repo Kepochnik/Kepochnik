@@ -139,3 +139,25 @@ test("an endpoint that refuses even a single block is an error, never a quietly 
     "a failed read must not look like a quiet token",
   );
 });
+
+/**
+ * A wallet the caller named is reported at any size, so this tape has to be
+ * able to print a move below its own threshold — and "(0.00% of supply)"
+ * reads as a measurement of nothing rather than as a move too small to round.
+ */
+test("a move too small to round says so rather than printing 0.00%", async () => {
+  const dust = SUPPLY / 1_000_000n;
+  const events = await readTokenWatchEvents(stub([transfer(10, DEV, POOL, dust)]), TOKEN, {
+    fromBlock: 0,
+    toBlock: 100,
+    pools: [POOL],
+    supply: SUPPLY,
+    watch: [DEV],
+  });
+  assert.equal(events.length, 1, "a watched wallet is reported at any size");
+  assert.ok(!events[0].text.includes("0.00%"), events[0].text);
+  assert.match(events[0].text, /under 0\.01% of supply/);
+  // A move that does round still prints its own number.
+  const real = await readTokenWatchEvents(stub([transfer(10, DEV, POOL, SUPPLY / 20n)]), TOKEN, { fromBlock: 0, toBlock: 100, pools: [POOL], supply: SUPPLY });
+  assert.match(real[0].text, /\(5\.00% of supply\)/);
+});
