@@ -1,0 +1,329 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FUEL · gas-free buys on Robinhood Chain</title>
+<meta name="description" content="Creators fill a gas tank for their Pons token. Buyers trade it gas-free. Robinhood Chain.">
+<link rel="icon" href="gus.svg">
+<style>
+  :root {
+    --bg: #0e100c; --panel: #171a14; --line: #2a2e25; --text: #f4f1e8; --muted: #9d9f92;
+    --lime: #c6f432; --pump: #ff4d2e; --warn: #ffd23f;
+    --mono: 'JetBrains Mono', ui-monospace, Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.5 var(--mono); }
+  a { color: var(--lime); }
+  .wrap { max-width: 960px; margin: 0 auto; padding: 24px 16px 64px; }
+  header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+  .brand { display: flex; align-items: center; gap: 12px; font-weight: 800; letter-spacing: 3px; }
+  .brand img { width: 44px; height: auto; image-rendering: pixelated; }
+  button { font: inherit; cursor: pointer; border-radius: 10px; border: 1px solid var(--line); background: var(--panel); color: var(--text); padding: 10px 16px; }
+  button.primary { background: var(--lime); color: #111; border-color: var(--lime); font-weight: 800; }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+  button:focus-visible, input:focus-visible { outline: 2px solid var(--lime); outline-offset: 2px; }
+  .hero { display: grid; grid-template-columns: 1fr auto; gap: 24px; align-items: center; margin: 40px 0 32px; }
+  .hero h1 { font-size: clamp(28px, 5vw, 46px); line-height: 1.1; margin: 0 0 12px; }
+  .hero p { color: var(--muted); margin: 0; max-width: 560px; }
+  .hero img { width: 180px; image-rendering: pixelated; }
+  .countdown { color: var(--warn); margin-top: 12px; }
+  .tabs { display: flex; gap: 8px; margin: 0 0 16px; flex-wrap: wrap; }
+  .tabs button[aria-selected="true"] { border-color: var(--lime); color: var(--lime); }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 16px; padding: 20px; }
+  .grid { display: grid; gap: 12px; }
+  .tank { display: grid; grid-template-columns: 1fr auto; gap: 8px 16px; padding: 14px 16px; border: 1px solid var(--line); border-radius: 12px; }
+  .tank h3 { margin: 0; font-size: 16px; }
+  .tank .meta { color: var(--muted); font-size: 13px; }
+  .gauge { grid-column: 1 / -1; height: 8px; border-radius: 4px; background: var(--line); overflow: hidden; }
+  .gauge i { display: block; height: 100%; background: var(--lime); }
+  .badge { font-size: 11px; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--lime); color: var(--lime); margin-left: 6px; }
+  .badge.fan { border-color: var(--muted); color: var(--muted); }
+  label { display: grid; gap: 6px; color: var(--muted); font-size: 13px; }
+  input { font: inherit; background: var(--bg); color: var(--text); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; width: 100%; }
+  .row { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; }
+  .note { color: var(--muted); font-size: 13px; }
+  .status { min-height: 1.5em; margin-top: 12px; }
+  .status.err { color: var(--pump); }
+  .status.ok { color: var(--lime); }
+  .empty { text-align: center; padding: 32px 16px; color: var(--muted); }
+  .how { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; margin-top: 32px; }
+  .how div { border: 1px dashed var(--line); border-radius: 12px; padding: 14px; color: var(--muted); font-size: 13px; }
+  .how b { color: var(--text); display: block; margin-bottom: 4px; }
+  [hidden] { display: none !important; }
+  .buy { display: flex; gap: 8px; align-items: end; }
+  .buy label { width: 120px; }
+  @media (max-width: 640px) {
+    .hero { grid-template-columns: 1fr; } .hero img { width: 120px; }
+    .tank { grid-template-columns: 1fr; }
+    .buy label { flex: 1; width: auto; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="brand"><img src="gus.svg" alt="">FUEL</div>
+    <button id="connect">Connect wallet</button>
+  </header>
+
+  <section class="hero">
+    <div>
+      <h1>Robinhood stopped paying your gas.<br>Your coin can.</h1>
+      <p>Creators fill a gas tank for their Pons token. Every buy through FUEL gets its gas paid back from that tank, in the same transaction. Any wallet works.</p>
+      <div class="countdown" id="countdown"></div>
+    </div>
+    <img src="gus.svg" alt="Gus, a pixel gas pump with a mischievous grin">
+  </section>
+
+  <div class="tabs" role="tablist">
+    <button role="tab" aria-selected="true" data-tab="pumps">Gas-free coins</button>
+    <button role="tab" aria-selected="false" data-tab="open">Open a tank</button>
+  </div>
+
+  <section id="pumps" class="panel">
+    <div id="tanks" class="grid"><div class="empty">Reading tanks…</div></div>
+  </section>
+
+  <section id="open" class="panel" hidden>
+    <form id="openForm" class="grid">
+      <label>Pons token address<input name="token" placeholder="0x…" required pattern="^0x[0-9a-fA-F]{40}$"></label>
+      <div class="row">
+        <label>First fill (ETH)<input name="fill" type="number" step="any" min="0" value="0.1"></label>
+        <label>Max refund per buy (ETH)<input name="perBuy" type="number" step="any" min="0" value="0.0005"></label>
+        <label>Daily cap per wallet (ETH)<input name="daily" type="number" step="any" min="0" value="0.002"></label>
+      </div>
+      <p class="note">A refund never exceeds the trade fee the buy paid, so wash-buying your tank dry costs the attacker more than it takes. You can pause or close the tank and take the rest back at any time.</p>
+      <button class="primary" type="submit">Open tank</button>
+      <div class="status" id="openStatus" role="status"></div>
+    </form>
+  </section>
+
+  <div class="how">
+    <div><b>1 · Fill</b>Anyone opens or refuels a tank for any Pons token still on its curve. Tanks opened by the token's creator get a badge.</div>
+    <div><b>2 · Buy</b>Buy through FUEL. The station buys on the official Pons curve and sends the tokens straight to you.</div>
+    <div><b>3 · Refund</b>Your gas (L2 + L1 data fee) comes back from the tank in the same transaction, up to the tank's caps.</div>
+  </div>
+</div>
+
+<template id="tankTpl">
+  <article class="tank">
+    <div>
+      <h3><span class="sym"></span><span class="badge"></span></h3>
+      <div class="meta"></div>
+    </div>
+    <form class="buy">
+      <label>ETH<input name="amount" type="number" step="any" min="0" value="0.01" required></label>
+      <button class="primary" type="submit">Buy</button>
+    </form>
+    <div class="gauge"><i></i></div>
+    <div class="status" role="status" style="grid-column:1/-1"></div>
+  </article>
+</template>
+
+<script type="module">
+import {
+  createPublicClient, createWalletClient, custom, http, defineChain,
+  formatEther, parseEther, getAddress, parseEventLogs,
+} from 'https://esm.sh/viem@2.21.55';
+
+// ---- config. `?station=0x…&rpc=…` overrides for local testing.
+const params = new URLSearchParams(location.search);
+const STATION = params.get('station') || '';
+const RPC = params.get('rpc') || 'https://rpc.mainnet.chain.robinhood.com';
+const SLIPPAGE_BPS = 300n;
+// Wallets estimate gas at a zero gas price, where the station skips its refund
+// bookkeeping and payout. Real transactions take that path, so leave room for it.
+// Unused gas is not charged.
+const REFUND_PATH_GAS = 120_000n;
+const SUBSIDY_ENDS = Date.parse('2026-09-29T00:00:00Z');
+
+const chain = defineChain({
+  id: Number(params.get('chainId') || 4663),
+  name: 'Robinhood Chain',
+  nativeCurrency: { name: 'Ether', symbol: 'ETH', decimals: 18 },
+  rpcUrls: { default: { http: [RPC] } },
+  blockExplorers: { default: { name: 'Blockscout', url: 'https://robinhoodchain.blockscout.com' } },
+});
+
+const stationAbi = [
+  { type: 'function', name: 'tankCount', stateMutability: 'view', inputs: [], outputs: [{ type: 'uint256' }] },
+  { type: 'function', name: 'tanks', stateMutability: 'view', inputs: [{ type: 'uint256' }], outputs: [
+    { name: 'sponsor', type: 'address' }, { name: 'tradeFeeBps', type: 'uint16' }, { name: 'official', type: 'bool' },
+    { name: 'paused', type: 'bool' }, { name: 'token', type: 'address' }, { name: 'curve', type: 'address' },
+    { name: 'balance', type: 'uint128' }, { name: 'maxRefundPerBuy', type: 'uint64' }, { name: 'dailyCapPerWallet', type: 'uint64' },
+  ] },
+  { type: 'function', name: 'buy', stateMutability: 'payable', inputs: [{ type: 'uint256' }, { type: 'uint256' }],
+    outputs: [{ name: 'tokensOut', type: 'uint256' }, { name: 'refund', type: 'uint256' }] },
+  { type: 'function', name: 'openTank', stateMutability: 'payable',
+    inputs: [{ type: 'address' }, { type: 'uint64' }, { type: 'uint64' }], outputs: [{ type: 'uint256' }] },
+  { type: 'function', name: 'refuel', stateMutability: 'payable', inputs: [{ type: 'uint256' }], outputs: [] },
+  { type: 'event', name: 'FueledBuy', inputs: [
+    { name: 'id', type: 'uint256', indexed: true }, { name: 'buyer', type: 'address', indexed: true },
+    { name: 'spent', type: 'uint256' }, { name: 'tokensOut', type: 'uint256' }, { name: 'refund', type: 'uint256' },
+  ] },
+];
+const erc20Abi = [{ type: 'function', name: 'symbol', stateMutability: 'view', inputs: [], outputs: [{ type: 'string' }] }];
+
+const publicClient = createPublicClient({ chain, transport: http(RPC) });
+let account = null;
+let wallet = null;
+const notices = new Map(); // tank id -> last status, kept across re-renders
+
+const $ = (sel, root = document) => root.querySelector(sel);
+const eth = (wei, digits = 4) => Number(formatEther(wei)).toFixed(digits).replace(/\.?0+$/, '') || '0';
+const short = (a) => `${a.slice(0, 6)}…${a.slice(-4)}`;
+
+function say(el, text, kind = '', id = null) {
+  el.textContent = text;
+  el.className = `status ${kind}`;
+  if (id != null) notices.set(id, { text, kind });
+}
+
+function explain(err) {
+  const msg = err?.shortMessage || err?.message || String(err);
+  if (/User rejected/i.test(msg)) return 'Cancelled in wallet.';
+  if (/SlippageExceeded/.test(msg)) return 'Price moved. Try again.';
+  if (/CurveGraduated/.test(msg)) return 'This coin graduated off the curve; FUEL covers curve buys only.';
+  return msg.split('\n')[0];
+}
+
+// ---- countdown to the end of the gas subsidy
+(function countdown() {
+  const left = SUBSIDY_ENDS - Date.now();
+  const el = $('#countdown');
+  if (left <= 0) { el.textContent = '⛽ The gas subsidy is over. Fuel your coin.'; return; }
+  const h = Math.floor(left / 3.6e6);
+  el.textContent = `⛽ Robinhood's gas subsidy ends in ${Math.floor(h / 24)}d ${h % 24}h`;
+  setTimeout(countdown, 60_000);
+})();
+
+// ---- tabs
+for (const tab of document.querySelectorAll('[role=tab]')) {
+  tab.addEventListener('click', () => {
+    for (const t of document.querySelectorAll('[role=tab]')) {
+      t.setAttribute('aria-selected', String(t === tab));
+      $(`#${t.dataset.tab}`).hidden = t !== tab;
+    }
+  });
+}
+
+// ---- wallet
+async function connect() {
+  if (!window.ethereum) throw new Error('No wallet found. Install one that supports Robinhood Chain.');
+  wallet = createWalletClient({ chain, transport: custom(window.ethereum) });
+  [account] = await wallet.requestAddresses();
+  try { await wallet.switchChain({ id: chain.id }); } catch { await wallet.addChain({ chain }); }
+  $('#connect').textContent = short(account);
+  return account;
+}
+$('#connect').addEventListener('click', () => connect().catch((e) => alert(explain(e))));
+
+async function send(request) {
+  if (!account) await connect();
+  const call = { ...request, address: STATION, abi: stationAbi, account };
+  const { request: tx } = await publicClient.simulateContract(call);
+  const gas = (await publicClient.estimateContractGas(call)) + REFUND_PATH_GAS;
+  const hash = await wallet.writeContract({ ...tx, gas });
+  const receipt = await publicClient.waitForTransactionReceipt({ hash });
+  if (receipt.status !== 'success') throw new Error(`Transaction reverted: ${short(hash)}`);
+  return { hash, receipt };
+}
+
+// ---- tanks
+async function loadTanks() {
+  const list = $('#tanks');
+  if (!STATION) {
+    list.innerHTML = '<div class="empty">FUEL deploys with the end of the gas subsidy. Tanks open soon.</div>';
+    return;
+  }
+  const count = Number(await publicClient.readContract({ address: STATION, abi: stationAbi, functionName: 'tankCount' }));
+  const ids = Array.from({ length: count }, (_, i) => BigInt(i + 1));
+  const tanks = await Promise.all(ids.map(async (id) => {
+    const t = await publicClient.readContract({ address: STATION, abi: stationAbi, functionName: 'tanks', args: [id] });
+    const [sponsor, tradeFeeBps, official, paused, token, curve, balance, maxRefundPerBuy, dailyCapPerWallet] = t;
+    const symbol = await publicClient.readContract({ address: token, abi: erc20Abi, functionName: 'symbol' }).catch(() => short(token));
+    return { id, sponsor, tradeFeeBps, official, paused, token, curve, balance, maxRefundPerBuy, dailyCapPerWallet, symbol };
+  }));
+  const live = tanks.filter((t) => !t.paused && t.balance > 0n).sort((a, b) => (b.balance > a.balance ? 1 : -1));
+  list.replaceChildren();
+  if (!live.length) {
+    list.innerHTML = '<div class="empty">No fuelled coins yet. Open the first tank.</div>';
+    return;
+  }
+  const max = live[0].balance;
+  for (const t of live) list.append(renderTank(t, max));
+}
+
+function renderTank(t, max) {
+  const node = $('#tankTpl').content.firstElementChild.cloneNode(true);
+  $('.sym', node).textContent = `$${t.symbol}`;
+  const badge = $('.badge', node);
+  badge.textContent = t.official ? 'creator' : 'community';
+  if (!t.official) badge.classList.add('fan');
+  $('.meta', node).textContent =
+    `${eth(t.balance)} ETH in tank · up to ${eth(t.maxRefundPerBuy, 6)} ETH per buy · ${eth(t.dailyCapPerWallet, 6)} ETH/day per wallet`;
+  $('.gauge i', node).style.width = `${Math.max(4, Number((t.balance * 100n) / max))}%`;
+  const status = $('.status', node);
+  const notice = notices.get(t.id);
+  if (notice) say(status, notice.text, notice.kind);
+  $('.buy', node).addEventListener('submit', async (ev) => {
+    ev.preventDefault();
+    const button = $('button', ev.target);
+    button.disabled = true;
+    try {
+      const value = parseEther(ev.target.amount.value);
+      if (!account) await connect();
+      say(status, 'Quoting…');
+      const { result: [expected] } = await publicClient.simulateContract({
+        address: STATION, abi: stationAbi, functionName: 'buy', args: [t.id, 0n], value, account,
+      });
+      const minOut = (expected * (10_000n - SLIPPAGE_BPS)) / 10_000n;
+      say(status, 'Confirm in your wallet…');
+      const { hash, receipt } = await send({ functionName: 'buy', args: [t.id, minOut], value });
+      const [fill] = parseEventLogs({ abi: stationAbi, eventName: 'FueledBuy', logs: receipt.logs });
+      const refund = fill?.args.refund ?? 0n;
+      const paid = receipt.gasUsed * receipt.effectiveGasPrice;
+      say(status, `Bought. Gas ${eth(paid, 7)} ETH, paid back ${eth(refund, 7)} ETH. ${short(hash)}`, 'ok', t.id);
+      loadTanks();
+    } catch (err) {
+      say(status, explain(err), 'err', t.id);
+    } finally {
+      button.disabled = false;
+    }
+  });
+  return node;
+}
+
+// ---- open a tank
+$('#openForm').addEventListener('submit', async (ev) => {
+  ev.preventDefault();
+  const f = ev.target;
+  const status = $('#openStatus');
+  const button = $('button', f);
+  button.disabled = true;
+  try {
+    if (!STATION) throw new Error('FUEL is not deployed yet.');
+    const token = getAddress(f.token.value.trim());
+    say(status, 'Confirm in your wallet…');
+    const { hash } = await send({
+      functionName: 'openTank',
+      args: [token, parseEther(f.perBuy.value || '0'), parseEther(f.daily.value || '0')],
+      value: parseEther(f.fill.value || '0'),
+    });
+    say(status, `Tank open. ${short(hash)}`, 'ok');
+    loadTanks();
+  } catch (err) {
+    say(status, explain(err), 'err');
+  } finally {
+    button.disabled = false;
+  }
+});
+
+loadTanks().catch((err) => {
+  const empty = Object.assign(document.createElement('div'), { className: 'empty', textContent: explain(err) });
+  $('#tanks').replaceChildren(empty);
+});
+</script>
+</body>
+</html>

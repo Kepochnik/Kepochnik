@@ -4,8 +4,8 @@ const i18next = require('eslint-plugin-i18next');
 module.exports = [
   ...expoConfig,
   {
-    // shoulda/ is a standalone Node CLI with its own tests; it moves to its own repo.
-    ignores: ['dist/*', 'drizzle/*', 'node_modules/*', '.expo/*', 'shoulda/**'],
+    // shoulda/ and fuel/ are standalone projects with their own tooling; they move to their own repos.
+    ignores: ['dist/*', 'drizzle/*', 'node_modules/*', '.expo/*', 'shoulda/**', 'fuel/**'],
   },
   {
     // "No hardcoded strings in the UI" is a build rule, not a convention people remember.
