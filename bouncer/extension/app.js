@@ -971,6 +971,60 @@
     return kind;
   }
 
+  // src/bouncer/verdict.ts
+  function readVerdict(notes, coverage, stage = "done") {
+    if (stage === "opening") {
+      return {
+        word: "READING",
+        kind: "reading",
+        line: "What the code can do and who holds the keys is below. The rest is still being read; there is no verdict until it is in.",
+        short: "still reading",
+        stop: 0,
+        watch: 0
+      };
+    }
+    const stop = notes.filter((n) => n.level === "stop").length;
+    const watch = notes.filter((n) => n.level === "watch").length;
+    const base = stop ? {
+      word: "STOP",
+      kind: "stop",
+      line: `${stop} thing${stop === 1 ? "" : "s"} here can cost you money outright.`,
+      short: `${stop} thing${stop === 1 ? "" : "s"} here can cost you money outright`,
+      stop,
+      watch
+    } : watch ? {
+      word: "WATCH",
+      kind: "watch",
+      line: `Nothing outright dangerous, ${watch} thing${watch === 1 ? "" : "s"} worth reading before you buy.`,
+      short: `${watch} thing${watch === 1 ? "" : "s"} worth reading before you buy`,
+      stop,
+      watch
+    } : {
+      word: "CLEAR",
+      kind: "clear",
+      line: "Nothing in what was read stands out. That is not a promise about the price.",
+      short: "nothing in what was read stands out",
+      stop,
+      watch
+    };
+    if (!coverage) return base;
+    const kind = qualify(base.kind, coverage);
+    if (kind === "incomplete") {
+      return {
+        ...base,
+        word: "INCOMPLETE",
+        kind,
+        line: `Nothing stood out in what was read \u2014 but ${coverage.line.replace(/^./, (c) => c.toLowerCase())} Until that is filled in, this is not a clean result.`,
+        short: "nothing stood out in what was read, and part of it was not read"
+      };
+    }
+    if (coverage.state === "thin") {
+      const said = coverage.line.replace(/^./, (c) => c.toUpperCase());
+      return { ...base, kind, line: `${base.line} ${said} There may be more.` };
+    }
+    return { ...base, kind };
+  }
+
   // src/bouncer/trade.ts
   var REFERRAL = { gmgn: "save", basedbot: "bot" };
   var VENUE_NAMES = { gmgn: "GMGN", basedbot: "BasedBot" };
@@ -6227,13 +6281,11 @@
     dim: "#6d7a76",
     dimmer: "#4e5a57"
   };
-  function cardVerdict(notes) {
+  function cardVerdict(notes, coverage) {
     const c = CARD_COLORS;
-    const stop = notes.filter((n) => n.level === "stop").length;
-    const watch = notes.filter((n) => n.level === "watch").length;
-    if (stop) return { word: "STOP", kind: "stop", color: c.stop, line: `${stop} thing${stop === 1 ? "" : "s"} here can cost you money outright` };
-    if (watch) return { word: "WATCH", kind: "watch", color: c.watch, line: `${watch} thing${watch === 1 ? "" : "s"} worth reading before you buy` };
-    return { word: "CLEAR", kind: "clear", color: c.ok, line: "nothing in what was read stands out" };
+    const v = readVerdict(notes, coverage ?? null);
+    const color = v.kind === "stop" ? c.stop : v.kind === "watch" ? c.watch : v.kind === "clear" ? c.ok : c.info;
+    return { word: v.word, kind: v.kind, color, line: v.short };
   }
   function facts(slip) {
     const o = slip.open;
@@ -6334,10 +6386,8 @@
   }
   function renderCard(model, options) {
     const c = CARD_COLORS;
-    const v0 = cardVerdict(model.notes);
+    const v = cardVerdict(model.notes, model.coverage);
     const cov = model.coverage;
-    const qualified = cov ? qualify(v0.kind, cov) : v0.kind;
-    const v = qualified === "incomplete" ? { ...v0, word: "INCOMPLETE", color: c.info, line: "Nothing stood out in what was read, and part of it was not read." } : v0;
     const rank = { stop: 0, watch: 1, info: 2 };
     const shown = [...model.notes].sort((a, b) => rank[a.level] - rank[b.level]).slice(0, 3);
     const levelColor = (l) => l === "stop" ? c.stop : l === "watch" ? c.watch : c.info;
@@ -6563,13 +6613,12 @@
   }
 
   // src/bouncer/changes.ts
-  function verdictWordOf(notes) {
-    if (notes.some((n) => n.level === "stop")) return "STOP";
-    if (notes.some((n) => n.level === "watch")) return "WATCH";
-    return "CLEAR";
+  function verdictWordOf(notes, coverage) {
+    return readVerdict(notes, coverage).word;
   }
   function snapshotOfDoor(slip) {
     const o = slip.open;
+    const coverage = doorCoverage(slip);
     const pool = (slip.open?.pools ?? []).filter((p) => (p.quoteReserve ?? 0n) > 0n).sort((a, b) => b.quoteReserve > a.quoteReserve ? 1 : -1)[0];
     return {
       v: 1,
@@ -6577,7 +6626,7 @@
       address: slip.subject.toLowerCase(),
       at: Math.floor(Date.now() / 1e3),
       height: slip.at.block,
-      verdict: verdictWordOf(slip.notes),
+      verdict: verdictWordOf(slip.notes, coverage),
       stamp: slip.stamp,
       symbol: slip.id.meta?.symbol ?? "",
       codes: slip.notes.map((n) => ({ code: n.code, level: n.level })),
@@ -6593,12 +6642,13 @@
         top10Bps: o?.holders?.top10WalletsBps ?? null,
         poolQuote: pool?.quoteReserve != null ? String(pool.quoteReserve) : null
       },
-      coverage: doorCoverage(slip).state
+      coverage: coverage.state
     };
   }
   function snapshotOfSpl(slip) {
     const fee = slip.mint?.extensions.find((e) => e.kind === "transfer-fee");
     const pool = slip.market?.pools.filter((p) => p.quoteReserve > 0n).sort((a, b) => b.quoteReserve > a.quoteReserve ? 1 : -1)[0];
+    const coverage = splCoverage(slip);
     return {
       v: 1,
       chain: slip.chain.key,
@@ -6606,7 +6656,7 @@
       address: slip.subject,
       at: Math.floor(Date.now() / 1e3),
       height: slip.at.span?.last ?? slip.at.slot,
-      verdict: verdictWordOf(slip.notes),
+      verdict: verdictWordOf(slip.notes, coverage),
       stamp: slip.stamp,
       symbol: slip.metadata?.symbol ?? "",
       codes: slip.notes.map((n) => ({ code: n.code, level: n.level })),
@@ -6618,7 +6668,7 @@
         top10Bps: slip.holders?.top10Bps ?? null,
         poolQuote: pool ? String(pool.quoteReserve) : null
       },
-      coverage: splCoverage(slip).state
+      coverage: coverage.state
     };
   }
   function movedBy(before, after2) {
@@ -8371,20 +8421,8 @@
     return sentence(parts);
   }
   function verdictOf(notes, stage = "done", coverage) {
-    if (stage === "opening") return { word: "READING", kind: "reading", line: "What the code can do and who holds the keys is below. The rest is still being read; there is no verdict until it is in." };
-    const stop = notes.filter((n) => n.level === "stop").length;
-    const watch = notes.filter((n) => n.level === "watch").length;
-    const base = stop ? { word: "STOP", kind: "stop", line: `${stop} thing${stop === 1 ? "" : "s"} here can cost you money outright.` } : watch ? { word: "WATCH", kind: "watch", line: `Nothing outright dangerous, ${watch} thing${watch === 1 ? "" : "s"} worth reading before you buy.` } : { word: "CLEAR", kind: "clear", line: "Nothing in what was read stands out. That is not a promise about the price." };
-    if (!coverage) return base;
-    const kind = qualify(base.kind, coverage);
-    if (kind === "incomplete") {
-      return { word: "INCOMPLETE", kind, line: `Nothing stood out in what was read \u2014 but ${coverage.line.replace(/^./, (c) => c.toLowerCase())} Until that is filled in, this is not a clean result.` };
-    }
-    if (coverage.state === "thin") {
-      const said = coverage.line.replace(/^./, (c) => c.toUpperCase());
-      return { ...base, kind, line: `${base.line} ${said} There may be more.` };
-    }
-    return { ...base, kind, line: base.line };
+    const v = readVerdict(notes, coverage ?? null, stage);
+    return { word: v.word, kind: v.kind, line: v.line };
   }
   var HISTORY_KEY = "bouncer.seen.v1";
   var HISTORY_MAX = 60;
@@ -8655,7 +8693,7 @@
   }
   function whyBody(notes, coverage, at, source) {
     const deciding = notes.filter((n) => n.level === "stop" || n.level === "watch");
-    const word = deciding.some((n) => n.level === "stop") ? "STOP" : deciding.length ? "WATCH" : coverage.state === "thin" ? "INCOMPLETE" : "CLEAR";
+    const word = readVerdict(notes, coverage).word;
     const why = deciding.length ? `<p class="whylead">The word <b>${word}</b> is these ${deciding.length} finding${deciding.length === 1 ? "" : "s"} and nothing else. Every other line on the slip is context.</p>
        <ol class="whylist">${deciding.map((n) => `<li><span class="whylvl ${n.level}">${n.level.toUpperCase()}</span><span>${esc2(n.text)}</span><code>${esc2(n.code)}</code></li>`).join("")}</ol>` : coverage.state === "thin" ? `<p class="whylead">The word <b>INCOMPLETE</b> is not a finding about the token. Nothing loud was found, and ${esc2(coverage.line.replace(/^./, (c) => c.toLowerCase()))}</p>` : `<p class="whylead">The word <b>CLEAR</b> is the absence of a finding, not the presence of a clean bill. It means every check below ran and none of them flagged anything \u2014 which is a smaller claim than it sounds.</p>`;
     const checks = `<ul class="whychecks">${coverage.checks.map(

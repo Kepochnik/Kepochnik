@@ -21,6 +21,7 @@ import { readCoverCharge } from "../bouncer/coverCharge.js";
 import { devReportLine, readDevReport } from "../bouncer/devReport.js";
 import { doorReceipt, findLaunchBlock, readDoor, slipJson } from "../bouncer/door.js";
 import { doorCoverage, splCoverage } from "../bouncer/coverage.js";
+import { readVerdict } from "../bouncer/verdict.js";
 import { readExitDoor } from "../bouncer/exitDoor.js";
 import { readBoard } from "../bouncer/leaderboard.js";
 import { readOneCrew } from "../bouncer/oneCrew.js";
@@ -121,11 +122,29 @@ export function createMcpServer(deps: McpDeps): { tools: ToolDef[]; handle: (mes
           // reading a slip with no findings needs the same warning a person
           // gets from the page, or it will report a clean bill off a reading
           // that never saw the holders or the pool.
-          return { text: renderReceipt(splReceipt(slip), "markdown"), structured: JSON.parse(slipJson({ stamp: slip.stamp, subject: slip.subject, chain: slip.chain, at: slip.at, notes: slip.notes, skipped: slip.skipped, coverage: splCoverage(slip) })) };
+          //
+          // And `verdict` rides along for the same reason one step further up.
+          // Without it an agent got fourteen notes and a coverage object and
+          // had to invent its own aggregation, so its answer and the website's
+          // answer about one token were free to differ. It is the same
+          // function the page and the share card use.
+          const splCov = splCoverage(slip);
+          return {
+            text: renderReceipt(splReceipt(slip), "markdown"),
+            structured: JSON.parse(
+              slipJson({ verdict: readVerdict(slip.notes, splCov), stamp: slip.stamp, subject: slip.subject, chain: slip.chain, at: slip.at, notes: slip.notes, skipped: slip.skipped, coverage: splCov }),
+            ),
+          };
         }
         const { factory, rpc, blockscout } = ctx(args);
         const slip = await readDoor(rpc, str(args.address, "address"), { chain, factory, blockscout, devHours: typeof args.dev_hours === "number" ? args.dev_hours : deps.demo ? 8 : 24, ...demoWindow });
-        return { text: renderReceipt(doorReceipt(slip), "markdown"), structured: JSON.parse(slipJson({ stamp: slip.stamp, subject: slip.subject, chain: slip.chain, at: slip.at, notes: slip.notes, skipped: slip.skipped, coverage: doorCoverage(slip) })) };
+        const cov = doorCoverage(slip);
+        return {
+          text: renderReceipt(doorReceipt(slip), "markdown"),
+          structured: JSON.parse(
+            slipJson({ verdict: readVerdict(slip.notes, cov), stamp: slip.stamp, subject: slip.subject, chain: slip.chain, at: slip.at, notes: slip.notes, skipped: slip.skipped, coverage: cov }),
+          ),
+        };
       },
     },
     {

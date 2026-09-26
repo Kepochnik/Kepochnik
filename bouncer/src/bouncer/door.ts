@@ -17,6 +17,7 @@ import type { BlockHeader, RpcClient } from "../chain/rpc.js";
 import { addressTopic, findBlockByTimestamp, readTapeAdaptive } from "../chain/tape.js";
 import { formatBps, formatDuration, formatUnits, isoUtc, shortAddress } from "../format.js";
 import type { Receipt } from "../receipt.js";
+import { readVerdict } from "./verdict.js";
 import { doorCoverage, type Coverage } from "./coverage.js";
 import { coverChargeLine, readCoverCharge, type CoverCharge } from "./coverCharge.js";
 import { devReportLine, readDevReport, type DevReport } from "./devReport.js";
@@ -1155,9 +1156,15 @@ export function doorReceipt(slip: DoorSlip): Receipt {
   const cov = coverageSection(coverage);
   if (cov) sections.push(cov);
   sections.push({ title: "Door notes", rows: slip.notes.map((n) => ({ label: n.level.toUpperCase(), value: n.text })) });
+  const verdict = readVerdict(slip.notes, coverage);
   return {
     title: `BOUNCER · ${title}`,
     subtitle: `${slip.stamp} · ${slip.chain.name} · block ${slip.at.block} · ${isoUtc(slip.at.timestamp)}`,
+    // The same word the site and the card lead with, from the same function.
+    // The terminal used to print the stamp and twenty notes and leave the
+    // aggregating to the reader, so two surfaces reading one token looked like
+    // two different answers.
+    verdict: { word: verdict.word, line: verdict.line },
     sections,
     footnotes: [
       coverage.state === "complete"

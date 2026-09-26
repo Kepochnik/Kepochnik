@@ -36,7 +36,8 @@ import type { DoorNote } from "./door.js";
 import type { DoorSlip } from "./door.js";
 import type { SplSlip } from "./spl.js";
 import { topicOf } from "./topics.js";
-import { doorCoverage, splCoverage } from "./coverage.js";
+import { doorCoverage, splCoverage, type Coverage } from "./coverage.js";
+import { readVerdict } from "./verdict.js";
 
 /**
  * What is kept between visits. Deliberately small and deliberately flat:
@@ -97,14 +98,22 @@ export interface Diff {
   confident: boolean;
 }
 
-function verdictWordOf(notes: DoorNote[]): string {
-  if (notes.some((n) => n.level === "stop")) return "STOP";
-  if (notes.some((n) => n.level === "watch")) return "WATCH";
-  return "CLEAR";
+/**
+ * The word the page showed, not a fourth opinion about it.
+ *
+ * This applied no completeness rule at all, so a reading the page headlined
+ * INCOMPLETE was stored as CLEAR — and "Checked before" then printed "read
+ * CLEAR 3 days ago" for a verdict the page had never given. A tool whose
+ * argument is that a confident word has to be earned cannot have its own
+ * history hand one out.
+ */
+function verdictWordOf(notes: DoorNote[], coverage: Coverage): string {
+  return readVerdict(notes, coverage).word;
 }
 
 export function snapshotOfDoor(slip: DoorSlip): Snapshot {
   const o = slip.open;
+  const coverage = doorCoverage(slip);
   const pool = (slip.open?.pools ?? []).filter((p) => (p.quoteReserve ?? 0n) > 0n).sort((a, b) => (b.quoteReserve! > a.quoteReserve! ? 1 : -1))[0];
   return {
     v: 1,
@@ -112,7 +121,7 @@ export function snapshotOfDoor(slip: DoorSlip): Snapshot {
     address: slip.subject.toLowerCase(),
     at: Math.floor(Date.now() / 1000),
     height: slip.at.block,
-    verdict: verdictWordOf(slip.notes),
+    verdict: verdictWordOf(slip.notes, coverage),
     stamp: slip.stamp,
     symbol: slip.id.meta?.symbol ?? "",
     codes: slip.notes.map((n) => ({ code: n.code, level: n.level })),
@@ -128,13 +137,14 @@ export function snapshotOfDoor(slip: DoorSlip): Snapshot {
       top10Bps: o?.holders?.top10WalletsBps ?? null,
       poolQuote: pool?.quoteReserve != null ? String(pool.quoteReserve) : null,
     },
-    coverage: doorCoverage(slip).state,
+    coverage: coverage.state,
   };
 }
 
 export function snapshotOfSpl(slip: SplSlip): Snapshot {
   const fee = slip.mint?.extensions.find((e) => e.kind === "transfer-fee");
   const pool = slip.market?.pools.filter((p) => p.quoteReserve > 0n).sort((a, b) => (b.quoteReserve > a.quoteReserve ? 1 : -1))[0];
+  const coverage = splCoverage(slip);
   return {
     v: 1,
     chain: slip.chain.key,
@@ -142,7 +152,7 @@ export function snapshotOfSpl(slip: SplSlip): Snapshot {
     address: slip.subject,
     at: Math.floor(Date.now() / 1000),
     height: slip.at.span?.last ?? slip.at.slot,
-    verdict: verdictWordOf(slip.notes),
+    verdict: verdictWordOf(slip.notes, coverage),
     stamp: slip.stamp,
     symbol: slip.metadata?.symbol ?? "",
     codes: slip.notes.map((n) => ({ code: n.code, level: n.level })),
@@ -154,7 +164,7 @@ export function snapshotOfSpl(slip: SplSlip): Snapshot {
       top10Bps: slip.holders?.top10Bps ?? null,
       poolQuote: pool ? String(pool.quoteReserve) : null,
     },
-    coverage: splCoverage(slip).state,
+    coverage: coverage.state,
   };
 }
 

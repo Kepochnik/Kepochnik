@@ -21,6 +21,16 @@ export interface ReceiptSection {
 export interface Receipt {
   title: string;
   subtitle?: string;
+  /**
+   * The one word, and the sentence under it.
+   *
+   * The website, the share card and the MCP server all lead with this; the
+   * terminal did not have it at all. A reader who checked a token on the site
+   * and then on the CLI got a headline WATCH in one place and a stamp plus
+   * twenty notes in the other, and had to do the aggregating themselves to see
+   * that the two agreed.
+   */
+  verdict?: { word: string; line: string };
   sections: ReceiptSection[];
   footnotes: string[];
   meta: Record<string, ReceiptValue>;
@@ -58,9 +68,11 @@ function renderText(receipt: Receipt): string {
     const text = `${formatValue(row.value)}${row.note ? `  (${plain(row.note)})` : ""}`;
     return text.length <= MAX_VALUE_WIDTH ? [text] : wrap(text, MAX_VALUE_WIDTH);
   };
+  const verdictLines = receipt.verdict ? [`${receipt.verdict.word}`, ...wrap(receipt.verdict.line, MAX_VALUE_WIDTH)] : [];
   const width = Math.max(
     receipt.title.length + 4,
     (receipt.subtitle?.length ?? 0) + 4,
+    ...verdictLines.map((l) => l.length + 4),
     ...receipt.sections.flatMap((section, index) =>
       section.rows.flatMap((row) => valueLines(row).map((line) => labelWidths[index] + 2 + line.length + 2)),
     ),
@@ -71,6 +83,10 @@ function renderText(receipt: Receipt): string {
   out.push(`┌${line}┐`);
   out.push(`│ ${receipt.title.padEnd(width - 1)}│`);
   if (receipt.subtitle) out.push(`│ ${receipt.subtitle.padEnd(width - 1)}│`);
+  if (verdictLines.length) {
+    out.push(`├${line}┤`);
+    for (const l of verdictLines) out.push(`│ ${l.padEnd(width - 1)}│`);
+  }
   for (const section of receipt.sections) {
     out.push(`├${line}┤`);
     out.push(`│ ${section.title.toUpperCase().padEnd(width - 1)}│`);
@@ -95,6 +111,7 @@ function renderText(receipt: Receipt): string {
 function renderMarkdown(receipt: Receipt): string {
   const out: string[] = [`## ${receipt.title}`];
   if (receipt.subtitle) out.push("", `_${receipt.subtitle}_`);
+  if (receipt.verdict) out.push("", `**${receipt.verdict.word}** — ${receipt.verdict.line}`);
   for (const section of receipt.sections) {
     out.push("", `### ${section.title}`, "", "| | |", "| --- | --- |");
     for (const row of section.rows) {

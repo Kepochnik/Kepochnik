@@ -64,7 +64,13 @@ const TYPES = { ".html": "text/html", ".js": "text/javascript", ".css": "text/cs
 const server = createServer((req, res) => {
   const path = normalize(decodeURIComponent((req.url ?? "/").split("?")[0])).replace(/^(\.\.[/\\])+/, "");
   const file = join("extension", path === "/" ? "popup.html" : path);
-  if (!existsSync(file)) { res.writeHead(404); res.end("no"); return; }
+  if (!existsSync(file)) {
+    // Anything else is a pretend explorer page: the badge's only input is
+    // location.href, so the body does not matter and the URL is everything.
+    res.writeHead(200, { "content-type": "text/html" });
+    res.end("<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><title>token</title></head><body><p>a pretend explorer page</p></body></html>");
+    return;
+  }
   res.writeHead(200, { "content-type": TYPES[extname(file)] ?? "application/octet-stream" });
   res.end(readFileSync(file));
 });
@@ -74,7 +80,13 @@ const base = `http://127.0.0.1:${server.address().port}`;
 let failures = 0;
 const fail = (what) => { failures++; console.error(`::error::popup: ${what}`); };
 
-const browser = await chromium.launch({ executablePath });
+const EXPLORERS = ["basescan.org", "solscan.io", "news.ycombinator.com"];
+const browser = await chromium.launch({
+  executablePath,
+  // So a page can be loaded AS basescan.org and location.href is the URL a
+  // reader would really be on. The badge reads nothing else.
+  args: [`--host-resolver-rules=${EXPLORERS.map((h) => `MAP ${h} 127.0.0.1:${server.address().port}`).join(",")}`],
+});
 console.log(`popup: opening extension/popup.html as Chrome does, over ${base}`);
 
 /**
@@ -160,10 +172,53 @@ for (const c of CASES) {
   await context.close();
 }
 
+/**
+ * And the badge, on a page that looks to the browser like a real explorer.
+ *
+ * content.js had never been run either. `--host-resolver-rules` points the
+ * explorer hostnames at the local server, so `location.href` inside the page
+ * is the URL a reader would really be on — which is the only input the badge
+ * has. The first run of this returned no badge at all: pageSubject keyed its
+ * table on URL.host, which carries the port, so "basescan.org:41234" matched
+ * nothing. No explorer serves on a port, so nobody would have hit it — but a
+ * lookup keyed on a string that can silently carry an extra field is a lookup
+ * waiting to miss, and it reads hostname now.
+ */
+{
+  const context = await browser.newContext({ ignoreHTTPSErrors: true });
+  const page = await context.newPage();
+  const errors = [];
+  page.on("pageerror", (e) => errors.push(String(e)));
+  await page.addInitScript("window.chrome = { storage: { sync: { get: (d, cb) => cb(d) } } };");
+  for (const [host, path, chain, address] of [
+    ["basescan.org", `/token/${EVM}`, "base", EVM],
+    ["solscan.io", `/token/${MINT}`, "solana", MINT],
+    ["news.ycombinator.com", "/", null, null],
+  ]) {
+    await page.goto(`http://${host}:${server.address().port}${path}`, { waitUntil: "load" });
+    await page.addScriptTag({ url: "/page-subject.js" });
+    await page.addScriptTag({ url: "/content.js" });
+    await page.waitForTimeout(300);
+    const href = await page.$eval("#bouncer-badge", (el) => el.getAttribute("href")).catch(() => null);
+    if (chain === null) {
+      if (href) fail(`the badge appeared on ${host}, which is not a token page: ${href}`);
+      else console.log(`  ok  no badge on ${host}`);
+      continue;
+    }
+    const want = `#/t/${address}?chain=${chain}`;
+    if (!href) fail(`no badge on ${host}${path}`);
+    else if (!href.endsWith(want)) fail(`the badge on ${host} links to "${href}", expected it to end "${want}"`);
+    else console.log(`  ok  the badge on ${host} points at ${chain}`);
+  }
+  if (errors.length) fail(`the badge threw on a page — ${errors.join(" | ")}`);
+  await page.close();
+  await context.close();
+}
+
 await browser.close();
 server.close();
 if (failures) {
   console.error(`\npopup: ${failures} problem${failures === 1 ? "" : "s"}.`);
   process.exit(1);
 }
-console.log("popup: every page shape opens the right token on the right chain");
+console.log("popup: every page shape opens the right token on the right chain, popup and badge alike");

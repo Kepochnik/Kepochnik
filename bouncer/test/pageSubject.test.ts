@@ -82,3 +82,11 @@ test("every host in the table names a chain the app can actually read", () => {
   assert.equal(hosts["robinhoodchain.blockscout.com"], "robinhood");
   assert.ok(MULTI_CHAIN_HOSTS.includes("dexscreener.com"));
 });
+
+test("a host with a port still resolves", () => {
+  // The table was keyed on URL.host, which carries the port, so a page served
+  // on one matched nothing. No explorer does that today; a lookup keyed on a
+  // string that can silently carry an extra field is the point.
+  assert.equal(pageSubject(`http://basescan.org:8443/token/${EVM}`)?.chain, "base");
+  assert.equal(pageSubject(`https://basescan.org:443/token/${EVM}`)?.chain, "base");
+});

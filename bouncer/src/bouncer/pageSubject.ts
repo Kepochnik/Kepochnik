@@ -75,7 +75,7 @@ export function tokenPageHosts(): Record<string, string> {
     for (const url of [chain.blockscout, chain.explorerUrl]) {
       if (!url) continue;
       try {
-        out[new URL(url).host.replace(/^www\./, "")] = chain.key;
+        out[new URL(url).hostname.replace(/^www\./, "")] = chain.key;
       } catch {
         /* a malformed entry in the table is not this function's to fix */
       }
@@ -106,7 +106,11 @@ export function pageSubject(url: string): PageSubject | null {
   try {
     const parsed = new URL(url);
     if (parsed.protocol !== "https:" && parsed.protocol !== "http:") return null;
-    host = parsed.host.replace(/^www\./, "");
+    // hostname, not host: host carries the port, and "basescan.org:8443"
+    // matches nothing in the table. No explorer serves on a port today, so
+    // this is not a bug anybody has hit — but a lookup keyed on a string that
+    // can silently carry an extra field is a lookup waiting to miss.
+    host = parsed.hostname.replace(/^www\./, "");
     segments = parsed.pathname.split("/").filter(Boolean);
   } catch {
     return null;

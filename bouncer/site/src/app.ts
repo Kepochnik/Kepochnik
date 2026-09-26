@@ -9,7 +9,8 @@
  */
 import { BlockscoutClient } from "../../src/chain/blockscout.js";
 import { TOPIC_TAG,TOPIC_BLURB, TOPIC_ORDER, TOPIC_QUESTION, topicOf } from "../../src/bouncer/topics.js";
-import { doorCoverage, plainReason, splCoverage, qualify, type Coverage } from "../../src/bouncer/coverage.js";
+import { doorCoverage, plainReason, splCoverage, type Coverage } from "../../src/bouncer/coverage.js";
+import { readVerdict, type VerdictKind } from "../../src/bouncer/verdict.js";
 import { missingVenues, tradeVenues } from "../../src/bouncer/trade.js";
 import { CHAINS, canDo, chainByKey, featureBlocker, type ChainConfig, type Feature } from "../../src/chain/chains.js";
 import { PHASE_LABEL } from "../../src/chain/pons.js";
@@ -1260,36 +1261,17 @@ function summarySentence(slip: DoorSlip): string {
  * reading it, and a STOP that turns into a CLEAR teaches a reader to ignore
  * the next one. So the first render says READING and means it.
  */
-type VerdictKind = "stop" | "watch" | "clear" | "reading" | "incomplete";
-
+/**
+ * The word, from the core.
+ *
+ * This function used to carry the rule — and so did card.ts, and so did the
+ * "Why this verdict" panel below, and so did the snapshot in changes.ts. The
+ * fourth copy disagreed with the other three, and the stored history printed
+ * CLEAR for a reading the page had headlined INCOMPLETE.
+ */
 function verdictOf(notes: DoorNote[], stage: Stage = "done", coverage?: Coverage): { word: string; kind: VerdictKind; line: string } {
-  if (stage === "opening") return { word: "READING", kind: "reading", line: "What the code can do and who holds the keys is below. The rest is still being read; there is no verdict until it is in." };
-  const stop = notes.filter((n) => n.level === "stop").length;
-  const watch = notes.filter((n) => n.level === "watch").length;
-  const base: { word: string; kind: "stop" | "watch" | "clear"; line: string } = stop
-    ? { word: "STOP", kind: "stop", line: `${stop} thing${stop === 1 ? "" : "s"} here can cost you money outright.` }
-    : watch
-      ? { word: "WATCH", kind: "watch", line: `Nothing outright dangerous, ${watch} thing${watch === 1 ? "" : "s"} worth reading before you buy.` }
-      : { word: "CLEAR", kind: "clear", line: "Nothing in what was read stands out. That is not a promise about the price." };
-  if (!coverage) return base;
-  const kind = qualify(base.kind, coverage);
-  // Only CLEAR can be qualified away, and the replacement has to explain
-  // itself in the same breath: a reader who sees a word they have not seen
-  // before, with no reason attached, reads it as a worse STOP.
-  if (kind === "incomplete") {
-    return { word: "INCOMPLETE", kind, line: `Nothing stood out in what was read — but ${coverage.line.replace(/^./, (c) => c.toLowerCase())} Until that is filled in, this is not a clean result.` };
-  }
-  // A STOP or a WATCH keeps its word and its count. What it must not keep
-  // is the impression that the count is the whole list.
-  if (coverage.state === "thin") {
-    // Sentence case, because this lands after a full stop. It read
-    // "…can cost you money outright. a simulated sale could not be read",
-    // which is the kind of seam that makes a reader trust the next
-    // sentence slightly less without being able to say why.
-    const said = coverage.line.replace(/^./, (c) => c.toUpperCase());
-    return { ...base, kind, line: `${base.line} ${said} There may be more.` };
-  }
-  return { ...base, kind, line: base.line };
+  const v = readVerdict(notes, coverage ?? null, stage);
+  return { word: v.word, kind: v.kind, line: v.line };
 }
 
 /**
@@ -1884,7 +1866,10 @@ function whyBody(
   source: Source,
 ): string {
   const deciding = notes.filter((n) => n.level === "stop" || n.level === "watch");
-  const word = deciding.some((n) => n.level === "stop") ? "STOP" : deciding.length ? "WATCH" : coverage.state === "thin" ? "INCOMPLETE" : "CLEAR";
+  // The headline's own word, not a second derivation of it. This line used to
+  // compute it from `coverage.state === "thin"` directly, which agreed with
+  // qualify() only as long as nobody changed qualify().
+  const word = readVerdict(notes, coverage).word;
   const why = deciding.length
     ? `<p class="whylead">The word <b>${word}</b> is these ${deciding.length} finding${deciding.length === 1 ? "" : "s"} and nothing else. Every other line on the slip is context.</p>
        <ol class="whylist">${deciding

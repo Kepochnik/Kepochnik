@@ -174,7 +174,7 @@
       for (const url of [chain.blockscout, chain.explorerUrl]) {
         if (!url) continue;
         try {
-          out[new URL(url).host.replace(/^www\./, "")] = chain.key;
+          out[new URL(url).hostname.replace(/^www\./, "")] = chain.key;
         } catch {
         }
       }
@@ -190,7 +190,7 @@
     try {
       const parsed = new URL(url);
       if (parsed.protocol !== "https:" && parsed.protocol !== "http:") return null;
-      host = parsed.host.replace(/^www\./, "");
+      host = parsed.hostname.replace(/^www\./, "");
       segments = parsed.pathname.split("/").filter(Boolean);
     } catch {
       return null;

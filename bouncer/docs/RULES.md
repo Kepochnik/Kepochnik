@@ -2,6 +2,20 @@
 
 Every line on a slip comes from one of the reads below, pinned to one head block. Nothing is sampled, inferred from a name, or taken from a list of "known" deployers.
 
+## The one word
+
+Five words, and the rule is one function (`src/bouncer/verdict.ts`) that the website, the terminal, the share card, the stored history and the MCP server all call. It used to be four functions, one per surface, and the fourth disagreed: the stored snapshot applied no completeness rule, so "Checked before" printed CLEAR for a reading the page had headlined INCOMPLETE.
+
+| Word | When |
+| --- | --- |
+| `READING` | the first render. The code and the keys are on screen; the rest is still being read, and a verdict off half the evidence is one that changes while you read it |
+| `STOP` | at least one `STOP` note. Something found here can cost you money outright |
+| `WATCH` | no `STOP` note, at least one `WATCH` note |
+| `CLEAR` | no `STOP` and no `WATCH` note, **and** every decisive check answered |
+| `INCOMPLETE` | no `STOP` and no `WATCH` note, and a decisive check did not answer |
+
+`INFO` notes never decide the word. `CLEAR` is the only word that is a claim about what was **looked at** rather than about what was found, which is why it is the only one a gap takes away: "nothing stands out" means "I looked and saw nothing", and with a decisive check unread the first half is false. A `STOP` keeps its word under any gap — a freeze authority that was found does not go away because the pool read failed — but its sentence then says what was missed and that there may be more. Which checks are decisive is in `src/bouncer/coverage.ts`.
+
 ## ID check
 
 | Fact | Read | Rule |

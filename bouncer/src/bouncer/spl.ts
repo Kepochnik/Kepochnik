@@ -31,6 +31,7 @@ import {
 } from "../chain/solana.js";
 import type { Receipt } from "../receipt.js";
 import type { DoorNote } from "./door.js";
+import { readVerdict } from "./verdict.js";
 import { splCoverage, type Coverage } from "./coverage.js";
 
 export interface SplHolder {
@@ -623,6 +624,10 @@ export function splReceipt(slip: SplSlip): Receipt {
   return {
     title: `BOUNCER · ${name}`,
     subtitle: `${slip.stamp} · ${slip.chain.name} · ${slip.at.slot ? `slot ${slip.at.slot}` : "slot not reported"}${slip.at.timestamp ? ` · ${new Date(slip.at.timestamp * 1000).toISOString().replace(/\.\d+Z$/, "Z")}` : ""}`,
+    // Same word, same function, as the site and the card. On this chain it is
+    // the one that matters most: a Solana slip whose holder list came back 403
+    // reads INCOMPLETE rather than CLEAR, which is the failure the audit found.
+    verdict: (() => { const v = readVerdict(slip.notes, coverage); return { word: v.word, line: v.line }; })(),
     sections,
     footnotes: [
       coverage.state === "complete"

@@ -18,7 +18,8 @@ import type { DoorSlip } from "./door.js";
 import type { DoorNote, NoteLevel } from "./door.js";
 import type { SplSlip } from "./spl.js";
 import { topicOf } from "./topics.js";
-import { doorCoverage, splCoverage, qualify, type Coverage } from "./coverage.js";
+import { doorCoverage, splCoverage, type Coverage } from "./coverage.js";
+import { readVerdict, type VerdictKind } from "./verdict.js";
 
 export interface CardOptions {
   /**
@@ -54,14 +55,18 @@ export const CARD_COLORS = {
   dimmer: "#4e5a57",
 };
 
-/** The one word, from the loudest note. Same rule as the page, kept here so the two cannot drift. */
-export function cardVerdict(notes: DoorNote[]): { word: string; kind: "stop" | "watch" | "clear"; color: string; line: string } {
+/**
+ * The one word, and the colour to draw it in.
+ *
+ * The word and its sentence come from the core (verdict.ts); this adds only
+ * the palette, which is the one thing a card needs and a page does not. It
+ * used to reimplement the rule, which is how four copies of it came to exist.
+ */
+export function cardVerdict(notes: DoorNote[], coverage?: Coverage | null): { word: string; kind: VerdictKind; color: string; line: string } {
   const c = CARD_COLORS;
-  const stop = notes.filter((n) => n.level === "stop").length;
-  const watch = notes.filter((n) => n.level === "watch").length;
-  if (stop) return { word: "STOP", kind: "stop", color: c.stop, line: `${stop} thing${stop === 1 ? "" : "s"} here can cost you money outright` };
-  if (watch) return { word: "WATCH", kind: "watch", color: c.watch, line: `${watch} thing${watch === 1 ? "" : "s"} worth reading before you buy` };
-  return { word: "CLEAR", kind: "clear", color: c.ok, line: "nothing in what was read stands out" };
+  const v = readVerdict(notes, coverage ?? null);
+  const color = v.kind === "stop" ? c.stop : v.kind === "watch" ? c.watch : v.kind === "clear" ? c.ok : c.info;
+  return { word: v.word, kind: v.kind, color, line: v.short };
 }
 
 /**
@@ -233,16 +238,11 @@ function coverageFoot(cov: Coverage | undefined): string {
 
 function renderCard(model: CardModel, options: CardOptions): string {
   const c = CARD_COLORS;
-  const v0 = cardVerdict(model.notes);
+  // One call, coverage included: CLEAR is a claim about what was looked at, so
+  // a decisive gap takes it away, and STOP and WATCH keep their word. The card
+  // used to do the qualifying itself, one line after asking for the word.
+  const v = cardVerdict(model.notes, model.coverage);
   const cov = model.coverage;
-  // Same rule as the page, from the same function: CLEAR is a claim about
-  // what was looked at, so a decisive gap takes it away. STOP and WATCH
-  // are claims about findings and keep their word.
-  const qualified = cov ? qualify(v0.kind, cov) : v0.kind;
-  const v =
-    qualified === "incomplete"
-      ? { ...v0, word: "INCOMPLETE", color: c.info, line: "Nothing stood out in what was read, and part of it was not read." }
-      : v0;
 
   // Loudest first, and never more than three: a card nobody finishes is a
   // card that said nothing.

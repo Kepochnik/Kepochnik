@@ -208,7 +208,19 @@ console.log("cli: the MCP server over stdio");
   if (!call) fail("the MCP server did not answer a tools/call");
   else if (call.isError) fail(`bouncer_check over MCP failed with --demo, so the flag is being ignored: ${JSON.stringify(call.content).slice(0, 140)}`);
   else if (!call.structuredContent) fail("bouncer_check returned no structured content for an agent to read");
-  else console.log(`  ok  ${tools.length} tools, and --demo is honoured`);
+  else {
+    // An agent has to be handed the word, not left to aggregate the notes
+    // itself: this payload carried fourteen notes and a coverage object and no
+    // verdict, so an agent's answer and the website's answer about one token
+    // were free to differ. That is the whole thing this tool is for.
+    const sc = call.structuredContent;
+    const word = sc.verdict?.word;
+    if (!word) fail("bouncer_check hands an agent no verdict, so it has to invent its own aggregation");
+    else if (!["STOP", "WATCH", "CLEAR", "INCOMPLETE"].includes(word)) fail(`bouncer_check reported the verdict "${word}"`);
+    else if (!sc.coverage) fail("bouncer_check hands an agent a verdict with no coverage behind it");
+    else if (!sc.verdict.line) fail("the verdict has a word but no sentence to explain it");
+    else console.log(`  ok  ${tools.length} tools, --demo is honoured, and a call answers ${word} with its coverage`);
+  }
 }
 
 // ---- the extension can reach every chain it offers

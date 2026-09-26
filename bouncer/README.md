@@ -223,6 +223,7 @@ src/bouncer/planner.ts      the launch planner
 src/bouncer/watch.ts        DEV MOVED and CREW EXIT events, and the poll loop
 src/bouncer/watchPlan.ts    which tape a token gets, and what that tape is blind to
 src/bouncer/pageSubject.ts  which token a web page is about, and on which chain (shared by the extension's badge and popup)
+src/bouncer/verdict.ts      the one word (STOP / WATCH / CLEAR / INCOMPLETE), shared by every surface
 src/bouncer/leaderboard.ts  the board
 src/mcp/server.ts           the read-only MCP server (stdio, no dependencies)
 src/bouncer/door.ts         one address in, one slip out; the door notes
