@@ -174,7 +174,7 @@ await walk("press Copy card, get a PNG", async (page) => {
   // because something always landed on the clipboard. So look at what
   // the card SAYS: open the preview and require the token's own ticker
   // in it. A card about the wrong token cannot pass that.
-  const ticker = await page.$eval(".vsym", (el) => el.textContent.trim());
+  const ticker = await page.$eval(".sym", (el) => el.textContent.trim());
   if (!ticker) throw new Error("the slip has no ticker to check the card against");
   // What the page says it put on the clipboard. One press builds one card,
   // and it is about the token on screen — a second handler bound to the
@@ -355,22 +355,34 @@ await walk("a reading with a hole says so where the verdict is", async (page) =>
   await page.goto(`${url}#/demo/0x00000000000000000000000000000000000bad01`, { waitUntil: "load" });
   await waitForDone(page);
 
-  const band = await page.$(".cov");
+  const band = await page.$(".band.gap");
   if (!band) throw new Error("the reading has an unread check and the page shows no completeness band");
 
-  // Above the fold of the verdict block, not in a strip below the page.
-  // Position is the entire fix here; the text was always right.
+  // With the word, not in a strip below the page.
+  //
+  // This used to assert the band was a DESCENDANT of the verdict block,
+  // which is a fact about one layout rather than about what a reader sees.
+  // The requirement is that the band is читаемо next to the word: after it,
+  // before the answers, and on the first screen. Stated that way it survives
+  // the page being rebuilt, which is what it just had to do.
   const order = await page.evaluate(() => {
-    const v = document.querySelector(".verdict");
-    const c = document.querySelector(".cov");
-    const u = document.querySelector(".unread, .strip");
-    return { insideVerdict: Boolean(v && c && v.contains(c)), covTop: c?.getBoundingClientRect().top ?? -1, unreadTop: u?.getBoundingClientRect().top ?? Infinity };
+    const word = document.querySelector(".vword");
+    const c = document.querySelector(".band.gap");
+    const answers = document.querySelector(".qs");
+    return {
+      wordTop: word?.getBoundingClientRect().top ?? -1,
+      covTop: c?.getBoundingClientRect().top ?? -1,
+      covBottom: c?.getBoundingClientRect().bottom ?? -1,
+      answersTop: answers?.getBoundingClientRect().top ?? Infinity,
+      viewport: window.innerHeight,
+    };
   });
-  if (!order.insideVerdict) throw new Error("the band is not inside the verdict block, which is the one place a reader looks");
-  if (order.covTop >= order.unreadTop) throw new Error("the band sits below the strip it was meant to replace");
+  if (order.covTop < order.wordTop) throw new Error("the band sits above the verdict it qualifies");
+  if (order.covTop > order.answersTop) throw new Error("the band sits below the answers, where a reader has already stopped");
+  if (order.covBottom > order.viewport) throw new Error(`the band starts below the fold (${Math.round(order.covBottom)}px into a ${order.viewport}px window)`);
 
   // It has to name the missing check and why, not just wave at one.
-  const rows = await page.$$eval(".cgap", (els) => els.map((e) => e.textContent.replace(/\s+/g, " ").trim()));
+  const rows = await page.$$eval(".band.gap .chgrows li", (els) => els.map((e) => e.textContent.replace(/\s+/g, " ").trim()));
   if (!rows.length) throw new Error("the band lists no gaps");
   if (!rows.some((r) => /simulated transfer/i.test(r))) throw new Error(`the unread check is not named: ${JSON.stringify(rows)}`);
   // And the standing limits ride along once the band is open, marked as
@@ -383,8 +395,14 @@ await walk("a reading with a hole says so where the verdict is", async (page) =>
   // pressing again changes the answer, and the page has to offer it.
   const retry = await page.$("#act-retry");
   if (!retry) throw new Error("an unread check with no way to ask again");
-  const box = await retry.boundingBox();
-  if (!box || box.height < 44) throw new Error(`the retry is ${box ? Math.round(box.height) : 0}px tall; a phone needs 44`);
+  // At phone width, because that is the claim. This measured at the walk's
+  // 1280px viewport and reported a laptop-sized button as too small for a
+  // finger — the check was right about the rule and wrong about where the
+  // rule applies, which made it argue with a correct design.
+  await page.setViewportSize({ width: 390, height: 844 });
+  const box = await (await page.$("#act-retry"))?.boundingBox();
+  if (!box || box.height < 44) throw new Error(`on a phone the retry is ${box ? Math.round(box.height) : 0}px tall; it needs 44`);
+  await page.setViewportSize({ width: 1280, height: 900 });
 });
 
 await walk("a clean-sounding word never sits over an unread check", async (page) => {
@@ -396,7 +414,7 @@ await walk("a clean-sounding word never sits over an unread check", async (page)
   for (const token of ["0x00000000000000000000000000000000000bad01", "0x0000000000000000000000000000000000f1a1a1"]) {
     await page.goto(`${url}#/demo/${token}`, { waitUntil: "load" });
     const word = await waitForDone(page);
-    const state = await page.$eval(".cov", (el) => el.dataset.coverage).catch(() => "complete");
+    const state = await page.$eval(".band.gap", (el) => el.dataset.coverage).catch(() => "complete");
     if (word === "CLEAR" && state === "thin") {
       throw new Error(`${token.slice(0, 10)} reads CLEAR over a reading missing a decisive check`);
     }
@@ -420,14 +438,14 @@ await walk("a feature a chain cannot serve says why, not Method not found", asyn
   await page.goto(`${url}#/`, { waitUntil: "load" });
   await page.selectOption("#chain", "solana");
   await page.waitForTimeout(800);
-  const links = await page.$$eval(".more a", (els) => els.map((e) => e.textContent.trim()));
+  const links = await page.$$eval(".morelinks a", (els) => els.map((e) => e.textContent.trim()));
   if (links.some((l) => /board|plan a launch/i.test(l))) throw new Error(`Solana is still offered ${JSON.stringify(links)}`);
 
   // But a chain that CAN serve them still gets them: a guard that hides
   // everything everywhere passes the check above and breaks the product.
   await page.selectOption("#chain", "robinhood");
   await page.waitForTimeout(800);
-  const ok = await page.$$eval(".more a", (els) => els.map((e) => e.textContent.trim()));
+  const ok = await page.$$eval(".morelinks a", (els) => els.map((e) => e.textContent.trim()));
   if (!ok.some((l) => /board/i.test(l))) throw new Error(`Robinhood Chain lost its board too: ${JSON.stringify(ok)}`);
 });
 // The venue strip needs a real chain: the demo chain deliberately has no
@@ -468,7 +486,7 @@ await walk("the exit calculator answers for a size, or says why it cannot", asyn
   // matters. A token with a healthy price over a thin pool is not an exit.
   await page.goto(`${url}#/demo/0x00000000000000000000000000000000000f2e54`, { waitUntil: "load" });
   await waitForDone(page);
-  await page.evaluate(() => document.querySelector("#s-calc")?.setAttribute("open", ""));
+  await page.evaluate(() => document.querySelector("#q-exit")?.setAttribute("open", ""));
   if (!(await page.$("#calc-size"))) throw new Error("no exit calculator on a slip that has a priceable venue");
 
   // A small size and a large one must not give the same answer. If they
@@ -498,7 +516,7 @@ await walk("the exit calculator answers for a size, or says why it cannot", asyn
   // quoting zero — the failure this whole release is about.
   await page.goto(`${url}#/demo/0x0000000000000000000000000000000000f1a1a1`, { waitUntil: "load" });
   await waitForDone(page);
-  await page.evaluate(() => document.querySelector("#s-calc")?.setAttribute("open", ""));
+  await page.evaluate(() => document.querySelector("#q-exit")?.setAttribute("open", ""));
   await page.fill("#calc-size", "1000");
   await page.click("#calc-go");
   await page.waitForTimeout(250);
@@ -555,7 +573,7 @@ await walk("a second look says what moved since the first", async (page) => {
   if (!/2 hours/.test(said)) throw new Error(`the age of the comparison is wrong or missing: "${said.slice(0, 140)}"`);
   if (!/was CLEAR/.test(said)) throw new Error(`a verdict that got worse must be named: "${said.slice(0, 200)}"`);
   const level = await page.$eval(".chg", (el) => el.className);
-  if (!/chg-stop/.test(level)) throw new Error(`a verdict falling to STOP is not a quiet change: "${level}"`);
+  if (!/\bstop\b/.test(level)) throw new Error(`a verdict falling to STOP is not a quiet change: "${level}"`);
 });
 await walk("the list of what you checked before never states a stale verdict as current", async (page) => {
   // The trap in this feature. The stored word is what the token read LAST

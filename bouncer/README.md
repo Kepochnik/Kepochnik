@@ -119,7 +119,21 @@ Nine read-only tools, every one annotated `readOnlyHint`: `bouncer_check` (the s
 
 ## The site
 
-The same read path runs in the browser, bundled into one HTML file (`npm run site` → `site/dist/index.html`). Paste an address, get the slip, watch the cover charge count down, leave the tab watching for the dev to move. Demo mode needs no network; live mode reads the chain you pick from your browser through an RPC you choose. Tabs for the door, a deployer, a wallet, a receipt, the planner and the board. Every view has a link: `#/t/0x…` (add `?watch=1` to start watching), `#/dev/0x…`, `#/wallet/0xT/0xW`, `#/tx/0x…`, `#/plan?tax=300`, `#/board?hours=1`, with `?chain=arc-testnet` for Arc.
+The same read path runs in the browser, bundled into one HTML file (`npm run site` → `site/dist/index.html`).
+
+**The page is five questions.** Paste an address and you get the word — STOP, WATCH, CLEAR or INCOMPLETE — and under it one row per question, each with an answer short enough to read at a glance:
+
+| | |
+| --- | --- |
+| Is this the right token? | `Ordinary token` · `Real Pons V2 launch` · `Wrong one` |
+| Can they take it from you? | `4 switches` · `No switches` · `Unreadable` |
+| Can you sell it right now? | `Yes` · `2 of 3 wallets` · `Not checked` |
+| What would you get out? | `0.0397 ETH` · `No pool` · `Not priced` |
+| Who else is inside? | `Top 10 hold 45%` · `25 buyers` · `Not read` |
+
+Tap a row and its evidence opens under it — the findings, the tables, the simulations, the pool reserves. Nothing is said in two places, and nothing that can cost you money is more than one tap away. A sixth row appears when something did not answer, greyed and always last, because a gap folded in among findings reads as a clean result. The answers are computed in `src/bouncer/answers.ts`, in the core, so the terminal and an agent can state the same ones.
+
+Watch the cover charge count down, leave the tab watching for the dev to move. Demo mode needs no network; live mode reads the chain you pick from your browser through an RPC you choose. Tabs for the door, a deployer, a wallet, a receipt, the planner and the board. Every view has a link: `#/t/0x…` (add `?watch=1` to start watching), `#/dev/0x…`, `#/wallet/0xT/0xW`, `#/tx/0x…`, `#/plan?tax=300`, `#/board?hours=1`, with `?chain=arc-testnet` for Arc.
 
 <p align="center"><img src="assets/readme/site.png" width="100%" alt="the BOUNCER site: search at the door, the FRESH slip with stamp, door notes, ID check, cover charge countdown, house rules and dev report card" /></p>
 

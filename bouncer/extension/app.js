@@ -649,14 +649,6 @@
     room: "holders",
     unread: "unread"
   };
-  var TOPIC_BLURB = {
-    id: "Whether the address is the contract behind the ticker, or something wearing its name.",
-    keep: "Powers in the code and hands on the liquidity: who can still change the rules or walk off with the pool.",
-    sell: "Whether a transfer goes through at all today, and what it costs when it does.",
-    exit: "Where it trades and what a sale of your size would really pay, at this block.",
-    room: "Who holds the supply, who launched it, and whether the early buyers knew each other.",
-    unread: "Reads that did not answer. A gap here is not a clean result; it is a question still open."
-  };
   var TOPIC_OF = {
     // ---- is this the token you meant
     "claimed-factory": "id",
@@ -7516,6 +7508,252 @@
     return events;
   }
 
+  // src/bouncer/answers.ts
+  var ANSWER_TOPICS = TOPIC_ORDER.filter((t) => t !== "unread");
+  var SHORT_QUESTION = {
+    id: "Is this the right token?",
+    keep: "Can they take it from you?",
+    sell: "Can you sell it right now?",
+    exit: "What would you get out?",
+    room: "Who else is inside?",
+    unread: "What could not be read"
+  };
+  var RANK = { stop: 0, watch: 1, info: 2 };
+  function notesFor(notes, topic) {
+    return notes.filter((n) => topicOf(n.code) === topic).sort((a, b) => RANK[a.level] - RANK[b.level]);
+  }
+  function toneOf(notes, fallback = "ok") {
+    if (notes.some((n) => n.level === "stop")) return "stop";
+    if (notes.some((n) => n.level === "watch")) return "warn";
+    return fallback;
+  }
+  function idAnswer(slip, notes) {
+    const mine = notesFor(notes, "id");
+    const meta = slip.id.meta;
+    let value;
+    let detail;
+    if (!meta) {
+      value = "Not a token";
+      detail = slip.known ?? "this address does not answer the ERC-20 views";
+    } else if (slip.id.v1) {
+      value = "Real Pons V1 launch";
+      detail = "the older factory's record names this token";
+    } else if (slip.id.registered) {
+      value = `Real ${slip.chain.launchpad ?? "launchpad"} launch`;
+      detail = "the factory's own record names this token";
+    } else if (mine.some((n) => n.code === "lookalike-impostor")) {
+      value = "Wrong one";
+      detail = "another token with this ticker launched first";
+    } else {
+      value = "Ordinary token";
+      detail = slip.chain.launchpad ? `no ${slip.chain.launchpad} record; checked as any ERC-20` : "checked as any ERC-20";
+    }
+    return { topic: "id", question: SHORT_QUESTION.id, value, tone: toneOf(mine), detail, notes: mine };
+  }
+  function keepAnswer(slip, notes) {
+    const mine = notesFor(notes, "keep");
+    const o = slip.open;
+    if (o?.surfaceFrom === "implementation-unreadable") {
+      return { topic: "keep", question: SHORT_QUESTION.keep, value: "Unreadable", tone: "unknown", detail: "this is a proxy and the code it points at would not load", notes: mine };
+    }
+    if (!o) {
+      const r = slip.rules;
+      if (!r) return { topic: "keep", question: SHORT_QUESTION.keep, value: "Not read", tone: "unknown", detail: "the house rules read did not run", notes: mine };
+      const moved = r.creatorFeeRecipientChanges.length;
+      const flips = r.buybackChanges.length;
+      const did = [
+        moved ? `moved the tax recipient ${moved === 1 ? "once" : `${moved} times`}` : null,
+        flips ? `flipped buyback ${flips === 1 ? "once" : `${flips} times`}` : null
+      ].filter((x) => Boolean(x));
+      const changed = moved + flips;
+      return {
+        topic: "keep",
+        question: SHORT_QUESTION.keep,
+        value: changed ? `${changed} change${changed === 1 ? "" : "s"} since launch` : "Factory rules",
+        tone: toneOf(mine),
+        detail: did.length ? `the creator has ${did.join(" and ")}` : `every trade pays ${formatBps(r.totalTradeBps)}, set by the factory, and the creator has changed nothing since launch`,
+        notes: mine
+      };
+    }
+    const kinds = powerKinds(o).filter((k) => k !== "exempt" && k !== "sweep");
+    const who = o.ownerUnread ? "owner() did not answer" : o.owner === null ? "no owner function in the code" : o.owner.renounced ? "ownership is renounced" : `owner ${shortAddress(o.owner.address)}${o.owner.isContract ? " (a contract)" : ""} has not renounced`;
+    return {
+      topic: "keep",
+      question: SHORT_QUESTION.keep,
+      value: kinds.length ? `${kinds.length} switch${kinds.length === 1 ? "" : "es"}` : "No switches",
+      tone: toneOf(mine),
+      detail: kinds.length ? `${kinds.join(", ")} \xB7 ${who}` : `no mint, pause, blacklist, fee or trading switch is in the code \xB7 ${who}`,
+      notes: mine
+    };
+  }
+  function sellAnswer(slip, notes) {
+    const mine = notesFor(notes, "sell");
+    const o = slip.open;
+    if (!o && slip.rules) {
+      const r = slip.rules;
+      const c = slip.cover;
+      if (c?.status === "open") {
+        return { topic: "sell", question: SHORT_QUESTION.sell, value: `Wait ${c.secondsLeft}s`, tone: "warn", detail: `the door tax is still on: a buy right now pays up to ${formatBps(c.terms.startBps)} to the creator`, notes: mine };
+      }
+      return {
+        topic: "sell",
+        question: SHORT_QUESTION.sell,
+        value: `Yes, ${formatBps(r.totalTradeBps)} fee`,
+        tone: toneOf(mine),
+        detail: r.phase === 0 ? "on the curve, which takes sells at any size" : "in the graduated pool",
+        notes: mine
+      };
+    }
+    const probes = o ? sellProbes(o) : [];
+    const ran = probes.filter((p) => p.status !== "unread");
+    if (o && !o.transferFunction) {
+      return { topic: "sell", question: SHORT_QUESTION.sell, value: "No transfer function", tone: toneOf(mine, "unknown"), detail: "no transfer(address,uint256) is in the code, so no sale could be simulated", notes: mine };
+    }
+    if (!ran.length) {
+      const why = o?.probesPending ? "the simulation has not run yet" : o?.probesSkipped ?? "no sale was simulated";
+      return { topic: "sell", question: SHORT_QUESTION.sell, value: "Not checked", tone: "unknown", detail: why, notes: mine };
+    }
+    const ok = ran.filter((p) => p.status === "ok").length;
+    const reason = ran.find((p) => p.status === "reverts")?.reason;
+    if (ok === ran.length) {
+      return { topic: "sell", question: SHORT_QUESTION.sell, value: "Yes", tone: toneOf(mine), detail: `a sale into the pool goes through for all ${ran.length} wallet${ran.length === 1 ? "" : "s"} tried, simulated at this block`, notes: mine };
+    }
+    if (ok === 0) {
+      return { topic: "sell", question: SHORT_QUESTION.sell, value: "No", tone: "stop", detail: `every wallet tried is refused${reason ? ` ("${reason}")` : ""}`, notes: mine };
+    }
+    return {
+      topic: "sell",
+      question: SHORT_QUESTION.sell,
+      value: `${ok} of ${ran.length} wallets`,
+      tone: toneOf(mine, "warn"),
+      detail: `the rest are refused${reason ? ` ("${reason}")` : ""} \u2014 a blacklist looks like this`,
+      notes: mine
+    };
+  }
+  function exitAnswer(slip, notes) {
+    const mine = notesFor(notes, "exit");
+    const e = slip.exit;
+    if (e && e.quotes.length) {
+      const q2 = e.quotes.find((x) => x.shareBps === 1e3) ?? e.quotes[0];
+      const quote = slip.rules?.quote ?? slip.chain.native;
+      return {
+        topic: "exit",
+        question: SHORT_QUESTION.exit,
+        value: `${formatUnits(q2.net, quote.decimals, 4)} ${quote.symbol}`,
+        tone: toneOf(mine),
+        detail: `for ${(q2.shareBps / 100).toFixed(0)}% of the position, on ${e.venue} \xB7 ${(q2.realisedBps / 100).toFixed(1)}% of spot`,
+        notes: mine
+      };
+    }
+    const m = slip.open?.market;
+    if (m?.best && m.quotes.length) {
+      const q2 = m.quotes[0];
+      const quote = slip.chain.native;
+      return {
+        topic: "exit",
+        question: SHORT_QUESTION.exit,
+        value: `${formatUnits(q2.out, quote.decimals, 4)} ${quote.symbol}`,
+        tone: toneOf(mine),
+        detail: `for ${(q2.shareBps / 100).toFixed(0)}% of the position on ${m.best.dex} \xB7 ${(q2.realisedBps / 100).toFixed(1)}% of spot`,
+        notes: mine
+      };
+    }
+    if (slip.open?.pools === null) {
+      return { topic: "exit", question: SHORT_QUESTION.exit, value: "Not checked", tone: "unknown", detail: "the pool read did not finish, so nothing can be said about selling", notes: mine };
+    }
+    if (slip.open && (slip.open.pools ?? []).length === 0) {
+      return { topic: "exit", question: SHORT_QUESTION.exit, value: "No pool", tone: toneOf(mine), detail: "no pool was found on this chain's DEX table; it may trade somewhere this does not read", notes: mine };
+    }
+    return { topic: "exit", question: SHORT_QUESTION.exit, value: "Not priced", tone: "unknown", detail: "a pool was found but nothing in it could be priced", notes: mine };
+  }
+  function roomAnswer(slip, notes) {
+    const mine = notesFor(notes, "room");
+    const h = slip.open?.holders;
+    const top = h?.top10WalletsBps ?? null;
+    if (top !== null) {
+      return {
+        topic: "room",
+        question: SHORT_QUESTION.room,
+        value: `Top 10 hold ${(top / 100).toFixed(0)}%`,
+        tone: toneOf(mine),
+        detail: h?.count ? `of supply \xB7 ${h.count} holders${slip.open?.deployer?.bps ? `, the deployer holds ${(slip.open.deployer.bps / 100).toFixed(1)}%` : ""}` : "of supply, over the page the explorer returned",
+        notes: mine
+      };
+    }
+    const room = slip.room;
+    if (room && room.buys > 0) {
+      return {
+        topic: "room",
+        question: SHORT_QUESTION.room,
+        value: `${room.buyers} buyers`,
+        tone: toneOf(mine),
+        detail: `the creator's own wallets funded ${(room.devShareBps / 100).toFixed(0)}% of everything bought`,
+        notes: mine
+      };
+    }
+    return { topic: "room", question: SHORT_QUESTION.room, value: "Not read", tone: "unknown", detail: "the holder list did not answer", notes: mine };
+  }
+  function doorAnswers(slip) {
+    return [idAnswer(slip, slip.notes), keepAnswer(slip, slip.notes), sellAnswer(slip, slip.notes), exitAnswer(slip, slip.notes), roomAnswer(slip, slip.notes)];
+  }
+  function splAnswers(slip) {
+    const notes = slip.notes;
+    const m = slip.mint;
+    const ext = (kind) => m?.extensions.find((e) => e.kind === kind) ?? null;
+    const idNotes = notesFor(notes, "id");
+    const id = {
+      topic: "id",
+      question: SHORT_QUESTION.id,
+      value: m ? m.token2022 ? "Token-2022 mint" : "SPL mint" : "Not a mint",
+      tone: toneOf(idNotes),
+      detail: m ? slip.metadata ? `${slip.metadata.name} (${slip.metadata.symbol})${slip.metadata.isMutable ? " \xB7 the name can still be changed" : " \xB7 the name is frozen"}` : "no metadata account was found" : slip.whatItIs ?? "this address is not an SPL mint",
+      notes: idNotes
+    };
+    const keepNotes = notesFor(notes, "keep");
+    const keys = m ? [m.mintAuthority ? "mint" : null, m.freezeAuthority ? "freeze" : null, ext("permanent-delegate") ? "permanent delegate" : null].filter(Boolean) : [];
+    const keep = {
+      topic: "keep",
+      question: SHORT_QUESTION.keep,
+      value: !m ? "Not read" : keys.length ? `${keys.length} authorit${keys.length === 1 ? "y" : "ies"}` : "No authorities",
+      tone: !m ? "unknown" : toneOf(keepNotes),
+      detail: !m ? "there is no mint account to read" : keys.length ? `${keys.join(", ")} still set` : "nobody can print more or freeze what you hold",
+      notes: keepNotes
+    };
+    const sellNotes = notesFor(notes, "sell");
+    const fee = ext("transfer-fee");
+    const sell = {
+      topic: "sell",
+      question: SHORT_QUESTION.sell,
+      value: !m ? "Not read" : ext("non-transferable") ? "No" : fee?.kind === "transfer-fee" ? `Yes, ${(fee.feeBps / 100).toFixed(2)}% fee` : "Yes",
+      tone: !m ? "unknown" : toneOf(sellNotes),
+      detail: !m ? "there is no mint account to read" : ext("non-transferable") ? "the token program itself refuses every transfer" : m.freezeAuthority ? "unless the freeze authority freezes your account first" : "the token program puts no rule in the way",
+      notes: sellNotes
+    };
+    const exitNotes = notesFor(notes, "exit");
+    const market = slip.market;
+    const pool = market?.pools.filter((p) => p.quoteReserve > 0n).sort((a, b) => b.quoteReserve > a.quoteReserve ? 1 : -1)[0];
+    const exitUnread = !market ? "the venue read did not run" : market.unread;
+    const exit = {
+      topic: "exit",
+      question: SHORT_QUESTION.exit,
+      value: exitUnread ? "Not checked" : pool ? `${formatUnits(pool.quoteReserve, pool.quoteDecimals, 2)} ${pool.quoteSymbol} pool` : "No pool found",
+      tone: exitUnread ? "unknown" : toneOf(exitNotes),
+      detail: exitUnread ? exitUnread : pool ? `the deepest venue found \xB7 ${market?.pools.length} in all` : "no venue answered; it may trade somewhere this does not read",
+      notes: exitNotes
+    };
+    const roomNotes = notesFor(notes, "room");
+    const top = slip.holders?.top10Bps ?? null;
+    const room = {
+      topic: "room",
+      question: SHORT_QUESTION.room,
+      value: top === null ? "Not read" : `Top 10 hold ${(top / 100).toFixed(0)}%`,
+      tone: top === null ? "unknown" : toneOf(roomNotes),
+      detail: top === null ? "the node refused the largest-accounts read" : `of supply \xB7 ${slip.holders?.distinctOwners ?? "an unknown number of"} distinct wallets behind the largest accounts`,
+      notes: roomNotes
+    };
+    return [id, keep, sell, exit, room];
+  }
+
   // src/bouncer/watchPlan.ts
   function wallets(...addresses) {
     const zero = "0x0000000000000000000000000000000000000000";
@@ -7664,6 +7902,7 @@
   }
 
   // site/src/app.ts
+  var LEVEL_WORD = { stop: "Stop", watch: "Careful", info: "Note" };
   var REPO = "github.com/Kepochnik/bouncer";
   var MARK = "$BOUNCER";
   var ADDR = /^0x[0-9a-fA-F]{40}$/;
@@ -7934,7 +8173,7 @@
       }
     }
     const more = document.createElement("div");
-    more.className = "more";
+    more.className = "morelinks";
     const c = mode === "demo" ? "demo" : chainSelect.value === "auto" ? chainOrNull()?.key ?? "auto" : chain().key;
     const here = mode === "demo" ? CHAINS.robinhood : chainOrNull();
     const offer = (feature, href, label) => !here || canDo(here, feature) ? `<a href="${href}">${label}</a>` : "";
@@ -8145,11 +8384,11 @@
     const rpc = rpcFor(true);
     if (options.blockscout) options.blockscout.prewarm(BlockscoutClient.doorPaths(address.toLowerCase()));
     let at;
-    const RANK = { opening: 0, fast: 1, done: 2 };
+    const RANK2 = { opening: 0, fast: 1, done: 2 };
     let drawn = null;
     const draw = (slip, stage) => {
       if (run !== doorRun) return false;
-      if (drawn !== null && RANK[stage] <= RANK[drawn]) return true;
+      if (drawn !== null && RANK2[stage] <= RANK2[drawn]) return true;
       const source = { endpoint: rpc.activeUrl, stats: rpc.stats() };
       if (drawn === null) renderSlip(slip, { stage, source });
       else keepPlace(() => renderSlip(slip, { stage, source }));
@@ -8479,41 +8718,37 @@
     const when = `${ago(d.ageSeconds)} ago`;
     if (!d.changes.length) {
       if (!d.confident) return "";
-      return `<section class="chg chg-quiet"><div class="chghead"><span class="chgword">NO CHANGE</span><span class="chgwhen">since you last checked this, ${esc2(when)}</span></div></section>`;
+      return `<section class="band chg"><span class="bandword">No change</span><div class="bandtext">since you last checked this, ${esc2(when)}</div></section>`;
     }
     const worst = d.changes[0].level;
     const loud = d.changes.filter((c) => c.level !== "info");
     const quiet = d.changes.filter((c) => c.level === "info");
     const tag = (c) => c.kind.startsWith("new:") ? "NEW" : c.kind.startsWith("gone:") ? "GONE" : c.kind === "verdict" ? "VERDICT" : "CHANGED";
-    const row = (c) => `<li class="chgrow chg-${c.level}"><span class="chglvl">${tag(c)}</span><span class="chgtext">${esc2(c.text)}</span></li>`;
+    const row = (c) => `<li><span class="chglvl ${c.level}">${tag(c)}</span><span>${esc2(c.text)}</span></li>`;
     const shown = [...loud, ...quiet.slice(0, Math.max(0, 4 - loud.length))];
     const rest = d.changes.length - shown.length;
-    const rows = shown.map(row).join("") + (rest ? `<li class="chgmore"><details><summary>${rest} more change${rest === 1 ? "" : "s"}, none of them urgent<span class="chev" aria-hidden="true"></span></summary><ul class="chgrows">${quiet.slice(shown.length - loud.length).map(row).join("")}</ul></details></li>` : "");
-    return `<section class="chg chg-${worst}" data-changes="${d.changes.length}">
-    <div class="chghead">
-      <span class="chgword">${d.changes.length} CHANGE${d.changes.length === 1 ? "" : "S"}</span>
-      <span class="chgwhen">since you last checked this, ${esc2(when)}${before.verdict !== after2.verdict ? "" : ` \xB7 it read ${esc2(before.verdict)} then and now`}</span>
+    const rows = shown.map(row).join("") + (rest ? `<li><details><summary>${rest} more change${rest === 1 ? "" : "s"}, none of them urgent</summary><ul class="chgrows">${quiet.slice(shown.length - loud.length).map(row).join("")}</ul></details></li>` : "");
+    return `<section class="band chg ${worst}" data-changes="${d.changes.length}">
+    <span class="bandword">${d.changes.length} change${d.changes.length === 1 ? "" : "s"}</span>
+    <div class="bandtext">
+      since you last checked this, ${esc2(when)}${before.verdict !== after2.verdict ? "" : ` \xB7 it read <b>${esc2(before.verdict)}</b> then and now`}
+      <ul class="chgrows">${rows}</ul>
+      <p class="seen-foot">Compared against what this browser saw last time. There is no account and no server behind this, so another device of yours has its own history and knows nothing about this one.</p>
     </div>
-    <ul class="chgrows">${rows}</ul>
-    <p class="chgfoot">Compared against what this browser saw last time. There is no account and no server behind this, so another device of yours has its own history and knows nothing about this one.</p>
   </section>`;
   }
   function coverageBand(coverage, stage) {
     if (stage !== "done" || coverage.state === "complete") return "";
-    const row = (g, limit) => `<li class="cgap${g.decisive && !limit ? " cgap-hard" : ""}${limit ? " cgap-limit" : ""}">
-        <span class="cgl">${esc2(g.label)}</span>
-        <span class="cgr">${esc2(g.reason ?? "did not answer")}</span>
-        <span class="cgt">${limit ? "not offered" : esc2(TOPIC_TAG[g.topic])}</span>
-      </li>`;
+    const row = (g, limit) => `<li class="${limit ? "cgap-limit" : "cgap-hole"}"><span class="chglvl${g.decisive && !limit ? " watch" : ""}">${limit ? "not offered" : esc2(TOPIC_TAG[g.topic])}</span><span>${esc2(g.label)} \u2014 ${esc2(g.reason ?? "did not answer")}</span></li>`;
     const rows = [...coverage.gaps.map((g) => row(g, false)), ...coverage.limits.map((g) => row(g, true))].join("");
     const retry = coverage.retryable ? `<button class="ghost" id="act-retry" type="button">Read the missing parts again</button>` : "";
-    return `<section class="cov cov-${coverage.state}" data-coverage="${coverage.state}">
-    <div class="covhead">
-      <span class="covword">${coverage.state === "thin" ? "INCOMPLETE CHECK" : "PARTIAL CHECK"}</span>
-      <span class="covcount">${coverage.read} of ${coverage.asked} checks answered</span>
-      ${retry}
+    return `<section class="band gap" data-coverage="${coverage.state}">
+    <span class="bandword">${coverage.state === "thin" ? "Incomplete" : "Partial"}</span>
+    <div class="bandtext">
+      <b>${coverage.read} of ${coverage.asked} checks answered.</b> ${esc2(coverage.line)}
+      <ul class="chgrows">${rows}</ul>
     </div>
-    <ul class="cgaps">${rows}</ul>
+    ${retry ? `<span class="bandact">${retry}</span>` : ""}
   </section>`;
   }
   var SOL_STILL_READING = "still reading who holds it and where it trades";
@@ -8522,33 +8757,23 @@
     fast: "still reading who holds the liquidity and the dev history",
     done: ""
   };
-  function verdictBlock(opts) {
+  function headBlock(opts) {
     const stage = opts.stage ?? "done";
     const v = verdictOf(opts.notes, stage, opts.coverage);
-    const stampClass = stampTone(opts.stamp);
+    const stampClass = stampTone(opts.stampKind);
     const pending = stage === "done" ? "" : `<span class="vpend">${esc2(opts.stillReading ?? STILL_READING[stage])}</span>`;
-    const findings = opts.notes.filter((n) => topicOf(n.code) !== "unread").length;
-    const counts = findings ? `${findings} finding${findings === 1 ? "" : "s"}` : "nothing to flag";
-    return `<section class="verdict v-${v.kind}"${stage === "done" ? "" : ' data-pending="1"'}>
-    <div class="vtop">
-      <div class="vcell">
-        <div class="vlevel">VERDICT</div>
-        <div class="vword" aria-label="Verdict">${v.word}</div>
-        <div class="vcounts">${counts}</div>
+    return `<section class="head"${stage === "done" ? "" : ' data-pending="1"'}>
+    <div class="head-top">
+      <div>
+        <div class="sym">${opts.sym}</div>
+        <div class="name">${opts.name}</div>
       </div>
-      <div class="vsay">
-        <div class="vwho">
-          <span class="vsym">${opts.sym}</span>
-          <span class="vname">${opts.name}</span>
-          <span class="vstamp ${stampClass}">${opts.stamp}</span>
-        </div>
-        <p class="vlead">${esc2(opts.lead)}</p>
-        <p class="vsub">${esc2(v.line)}${pending}</p>
-      </div>
+      <span class="stamp ${stampClass}">${opts.stamp}</span>
     </div>
-    ${opts.coverage ? coverageBand(opts.coverage, stage) : ""}
-    ${opts.changes ?? ""}
-    ${opts.tiles ?? ""}
+    <div class="verdict">
+      <span class="vword ${v.kind}" aria-label="Verdict">${v.word}</span>
+      <p class="vlead">${esc2(v.line)}${pending}</p>
+    </div>
     <div class="vfoot">
       <button class="vaddr" type="button" data-copy="${esc2(opts.address)}" title="Copy the address">${esc2(opts.address)}</button>
       <span class="vat">${opts.at}</span>
@@ -8556,40 +8781,55 @@
     </div>
   </section>`;
   }
+  function questionRows(answers, evidence, notes) {
+    const rows = answers.map((a) => qrow(a, evidence[a.topic] ?? "")).join("");
+    const unread = notes.filter((n) => topicOf(n.code) === "unread");
+    const gap = unread.length ? qrow(
+      {
+        topic: "unread",
+        question: SHORT_QUESTION.unread,
+        value: `${unread.length} question${unread.length === 1 ? "" : "s"}`,
+        tone: "unknown",
+        detail: "A read that did not answer is not a clean result. Each of these is a question still open, and most are worth one retry.",
+        notes: unread
+      },
+      evidence.unread ?? ""
+    ) : "";
+    return `<div class="qs">${rows}${gap}</div>`;
+  }
+  function qrow(a, evidence) {
+    const loud = a.notes.filter((n) => n.level !== "info");
+    const worst = loud.some((n) => n.level === "stop") ? "stop" : loud.length ? "warn" : "";
+    const badge = loud.length ? `<span class="qn ${worst}">${loud.length}</span>` : "";
+    return `<details class="q" id="q-${a.topic}">
+    <summary>
+      <span class="qdot ${a.tone}" aria-hidden="true"></span>
+      <span class="qq">${esc2(a.question)}</span>
+      <span class="qa"><span class="qv ${a.tone}">${esc2(a.value)}</span>${badge}</span>
+      <span class="chev" aria-hidden="true"></span>
+    </summary>
+    <div class="qbody">
+      ${a.detail ? `<p class="qdetail">${esc2(a.detail)}</p>` : ""}
+      ${findList(a.notes)}
+      ${evidence}
+    </div>
+  </details>`;
+  }
+  function findList(notes) {
+    if (!notes.length) return "";
+    const RANKED = { stop: 0, watch: 1, info: 2 };
+    const rows = [...notes].sort((a, b) => RANKED[a.level] - RANKED[b.level]).map((n) => `<li class="find lv-${n.level}"><span class="find-level">${LEVEL_WORD[n.level]}</span><span class="find-text">${glossed(n.text)}</span></li>`).join("");
+    return `<ul class="finds">${rows}</ul>`;
+  }
   function glossed(text) {
     return esc2(text).replace(
       /\(([^()]*\s[^()]*)\)/g,
       (whole, inner) => /0x|\d\s*%|block\s*\d/i.test(inner) ? whole : `<span class="gloss">(${inner})</span>`
     );
   }
-  function answerCards(notes) {
-    const RANKED = { stop: 0, watch: 1, info: 2 };
-    const mine = notes.filter((n) => topicOf(n.code) !== "unread").map((n, i) => ({ n, i, topic: topicOf(n.code) })).sort((a, b) => RANKED[a.n.level] - RANKED[b.n.level] || TOPIC_ORDER.indexOf(a.topic) - TOPIC_ORDER.indexOf(b.topic) || a.i - b.i);
-    if (!mine.length) return "";
-    const row = (x) => `<li class="find lv-${x.n.level}">
-    <span class="find-level">${x.n.level.toUpperCase()}</span>
-    <span class="find-text"><span class="find-topic">[${esc2(TOPIC_TAG[x.topic] ?? x.topic)}]</span> ${glossed(x.n.text)}</span>
-  </li>`;
-    const loud = mine.filter((x) => x.n.level !== "info");
-    const quiet = mine.filter((x) => x.n.level === "info");
-    const rest = quiet.length ? `<details class="find-rest"><summary>${quiet.length} more worth knowing, none of them dangerous</summary><ul class="finds">${quiet.map(row).join("")}</ul></details>` : "";
-    return `<section class="findings">
-    <ul class="finds">${loud.map(row).join("")}</ul>
-    ${rest}
-  </section>`;
-  }
-  function unreadStrip(notes, skipped) {
-    const mine = notes.filter((n) => topicOf(n.code) === "unread");
-    if (!mine.length) return "";
-    void skipped;
-    const rows = mine.map((n) => `<li>${esc2(n.text)}</li>`).join("");
-    return `<details class="unread">
-    <summary><span class="unread-n">${mine.length}</span> ${mine.length === 1 ? "question BOUNCER could not answer" : "questions BOUNCER could not answer"}<span class="chev" aria-hidden="true"></span></summary>
-    <div class="unread-body">
-      <p class="what">${esc2(TOPIC_BLURB.unread)}</p>
-      <ul>${rows}</ul>
-    </div>
-  </details>`;
+  function moreStack(sections) {
+    const body = sections.filter(Boolean).join("");
+    return body ? `<div class="more"><div class="more-head">More</div>${body}</div>` : "";
   }
   function buyStrip(chainKey, address, sellable = true, verdict = "clear") {
     if (!sellable) {
@@ -8792,32 +9032,35 @@
     const holdersBodyText = slip.holders && slip.holders.top.length ? `<dl class="kv"><dt>distinct wallets</dt><dd>${slip.holders.distinctOwners ?? "unknown"} among the ${slip.holders.top.length} largest accounts</dd>
         <dt>top 10</dt><dd>${slip.holders.top10Bps === null ? "unknown" : `${(slip.holders.top10Bps / 100).toFixed(1)}% of supply`}</dd></dl>
       <div class="tbl"><table class="buys"><thead><tr><th>#</th><th>wallet</th><th>share</th></tr></thead><tbody>${slip.holders.top.slice(0, 15).map((h, i) => `<tr><td>${i + 1}</td><td>${h.owner ? link(h.owner) : `${link(h.account)} <span class="flag">account</span>`}</td><td>${h.bps === null ? "unknown" : `${(h.bps / 100).toFixed(2)}%`}</td></tr>`).join("")}</tbody></table></div>` : "";
+    const evidence = {
+      id: idBody,
+      keep: extBody,
+      sell: extBody ? "" : "",
+      exit: exitCalcBody(m?.supply ?? null),
+      room: holdersBodyText
+    };
+    void blocked;
     out.innerHTML = `<div class="slip">
-    ${verdictBlock({
+    ${headBlock({
       sym,
       name,
       address: slip.subject,
       stamp: stampLabel(slip.stamp, null),
+      stampKind: slip.stamp,
       at: `${esc2(slip.chain.name)} \xB7 ${esc2(solanaWhen(slip))}${slip.at.timestamp ? ` \xB7 ${isoUtc(slip.at.timestamp)}` : ""}`,
       notes: slip.notes,
-      lead: splSentence(slip, blocked),
       stage: stage0,
       coverage,
-      changes,
-      tiles,
       stillReading: SOL_STILL_READING,
       actions: `<button class="ghost primary" id="act-share" type="button">Copy card</button><button class="ghost" id="act-link" type="button">Copy link</button><button class="ghost" id="act-json" type="button">JSON</button>`
     })}
-    ${answerCards(slip.notes)}
-    ${unreadStrip(slip.notes, slip.skipped)}
-    <div class="stack">
-      ${section("s-id", "Is it real?", "What this address actually is, who can print more of it, and who can freeze what you hold.", idBody, false)}
-      ${extBody ? section("s-ext", "Token-2022 extensions", "The rules the token program itself enforces on every transfer.", extBody, false) : ""}
-      ${holdersBodyText ? section("s-holders", "Who holds it", "The largest token accounts and the wallets behind them.", holdersBodyText, false) : ""}
-      ${m ? section("s-calc", "Could you get out?", "Your own position size, priced against the pool reserves read above. A price is not an exit: the two come apart exactly when it matters.", exitCalcBody(m.supply), false) : ""}
-      ${coverage && opts.source ? section("s-why", "Why this verdict", "The working behind the word: which findings made it, what was asked of the chain, which endpoint answered, and what was never checked.", whyBody(slip.notes, coverage, `${esc2(slip.chain.name)} \xB7 ${esc2(solanaWhen(slip))}${slip.at.timestamp ? ` \xB7 ${isoUtc(slip.at.timestamp)}` : ""}`, opts.source), false) : ""}
-      ${stage0 === "done" ? section("s-watch", "Watch for changes", "Whether this tab can follow the mint after you leave it.", watchBody(splWatch(slip)), false) : ""}
-    </div>
+    ${coverage ? coverageBand(coverage, stage0) : ""}
+    ${changes ?? ""}
+    ${questionRows(splAnswers(slip), evidence, slip.notes)}
+    ${moreStack([
+      coverage && opts.source ? section("s-why", "Why this verdict", "Which findings made the word, what was asked of the chain, and what was never checked.", whyBody(slip.notes, coverage, `${esc2(slip.chain.name)} \xB7 ${esc2(solanaWhen(slip))}${slip.at.timestamp ? ` \xB7 ${isoUtc(slip.at.timestamp)}` : ""}`, opts.source), false) : "",
+      stage0 === "done" ? section("s-watch", "Watch for changes", "Whether this tab can follow the mint after you leave it.", watchBody(splWatch(slip)), false) : ""
+    ])}
     ${buyStrip(slip.chain.key, slip.subject, Boolean(slip.mint), verdictOf(slip.notes, "done", coverage).kind)}
   </div>`;
     $("act-share").addEventListener("click", async (event) => {
@@ -9113,42 +9356,34 @@
     const lookBody = l ? `<h3 class="cap">Tokens carrying this ticker</h3><dl class="kv"><dt>${esc2(l.query)}</dt><dd>${esc2(lookalikeLine(l))}</dd></dl>
         <h3 class="cap">Every one found <b>\xB7 the factory decides, not the name</b></h3><div class="tbl"><table class="buys"><thead><tr><th>address</th><th>from the factory?</th><th>stage</th><th>launch block</th></tr></thead><tbody>${l.candidates.slice(0, 8).map((x) => `<tr><td><a href="#/${mode === "demo" ? "demo" : "t"}/${x.address}${routeChain()}">${shortAddress(x.address)}</a>${x.address === l.subject ? " \xB7 this one" : ""}</td><td>${x.registered ? '<span class="flag ok">yes</span>' : '<span class="flag bad">no</span>'}</td><td>${x.phase !== null ? PHASE_LABEL[x.phase] : "\u2014"}</td><td>${x.launchBlock ?? "\u2014"}</td></tr>`).join("")}</tbody></table></div>` : "";
     const offer = doorWatch(slip);
+    const evidence = {
+      id: idBody + lookBody,
+      keep: (o ? controlBody(slip) : "") + rulesBody + (v1 ? `<h3 class="cap">Rules of a Pons V1 launch</h3><ol class="rules">${v1.rules.map((x) => `<li>${esc2(x)}</li>`).join("")}</ol>` : ""),
+      sell: (o ? probeBody(slip) : "") + coverBody,
+      exit: tradesText + exitBody + exitCalcBody(slip.id.meta?.totalSupply ?? null),
+      room: (o && (o.holders || o.deployer || o.activity) ? holdersBody(slip) : "") + roomBody + crewBody + (d ? devSection(d, slip.subject, false, true) : "")
+    };
     out.innerHTML = `<div class="slip">
-    ${verdictBlock({
+    ${headBlock({
       sym,
       name,
       address: slip.subject,
       stamp: stampLabel(slip.stamp, slip.chain.launchpad),
+      stampKind: slip.stamp,
       at: `${mode === "demo" ? "DEMO \xB7 " : ""}${esc2(slip.chain.name)} \xB7 block ${slip.at.block} \xB7 ${isoUtc(slip.at.timestamp)}`,
       notes: slip.notes,
-      lead: summarySentence(slip),
       stage: stage0,
       coverage,
-      changes,
-      tiles,
       actions: `<button class="ghost primary" id="act-share" type="button">Copy card</button><button class="ghost" id="act-card" type="button">Preview</button><button class="ghost" id="act-link" type="button">Copy link</button><button class="ghost" id="act-json" type="button">JSON</button>`
     })}
+    ${coverage ? coverageBand(coverage, stage0) : ""}
+    ${changes ?? ""}
     <div class="card-wrap" id="card"></div>
-    ${answerCards(slip.notes)}
-    ${unreadStrip(slip.notes, slip.skipped)}
-    <h2 class="stack-head">The evidence</h2>
-    <div class="stack">
-      ${section("s-id", "Is it real?", "Did the launchpad's factory deploy this token, and can its code change later?", idBody, false)}
-      ${o ? section("s-control", "Who controls it", "Which switches the code has (mint, pause, blacklist, fees), who holds the keys, and whether holders can move tokens right now.", controlBody(slip), false) : ""}
-      ${o && tradesText ? section("s-trades", "Where it trades", "Pools on the chain's DEX factories and what they hold, plus the explorer's price feed.", tradesText, false) : ""}
-      ${o && (o.holders || o.deployer || o.activity) ? section("s-holders", "Who holds it", "The largest wallets, the deployer's share, what sits in pools and contracts, and when it last moved.", holdersBody(slip), false) : ""}
-      ${registered && !v1 ? section("s-cover", "Door tax", `The anti-snipe tax in the first ${c?.terms.seconds ?? 15} seconds, and who paid it.`, coverBody, c?.status === "open") : ""}
-      ${r ? section("s-rules", "Fees and rules", "What every trade costs, where the creator's cut goes, what buyback really does.", rulesBody, false) : ""}
-      ${v1 ? section("s-v1", "Rules (Pons V1)", "How this older kind of launch works: pool from block one, launch caps, locked liquidity.", `<ol class="rules">${v1.rules.map((x) => `<li>${esc2(x)}</li>`).join("")}</ol>`, false) : ""}
-      ${e ? section("s-exit", "Cash out now", "What you would actually get for selling part or all of a position right now.", exitBody, false) : ""}
-      ${section("s-calc", "Could you get out?", "Your own position size, priced against the reserves above. A price is not an exit: the two come apart exactly when it matters.", exitCalcBody(slip.id.meta?.totalSupply ?? null), false)}
-      ${coverage && opts.source ? section("s-why", "Why this verdict", "The working behind the word: which findings made it, what was asked of the chain, which endpoint answered, and what was never checked.", whyBody(slip.notes, coverage, `${esc2(slip.chain.name)} \xB7 block ${slip.at.block} \xB7 ${isoUtc(slip.at.timestamp)}`, opts.source), false) : ""}
-      ${room ? section("s-room", "Who is inside", "Every buyer since launch, how much the creator's own wallets put in, buys landing in the same block.", roomBody, false) : ""}
-      ${crew ? section("s-crew", "Same funder?", "Where the first buyers got their money. Wallets funded by one address before the launch are one group.", crewBody, false) : ""}
-      ${l ? section("s-look", "Same name", "Other tokens with this ticker on the chain, and which one launched first.", lookBody, false) : ""}
-      ${d ? section("s-dev", "This dev before", `Everything this deployer launched in the last ${mode === "demo" ? "8" : "24"} h and how it went.`, devSection(d, slip.subject, false, true), false) : ""}
-      ${stage0 === "done" ? section("s-watch", "Watch for changes", "Get told when the dev moves or tokens go into a pool, right in this tab.", watchBody(offer), new URLSearchParams(location.hash.split("?")[1] ?? "").get("watch") === "1") : ""}
-    </div>
+    ${questionRows(doorAnswers(slip), evidence, slip.notes)}
+    ${moreStack([
+      coverage && opts.source ? section("s-why", "Why this verdict", "Which findings made the word, what was asked of the chain, and what was never checked.", whyBody(slip.notes, coverage, `${esc2(slip.chain.name)} \xB7 block ${slip.at.block} \xB7 ${isoUtc(slip.at.timestamp)}`, opts.source), false) : "",
+      stage0 === "done" ? section("s-watch", "Watch for changes", "Get told when the dev moves or tokens go into a pool.", watchBody(offer), new URLSearchParams(location.hash.split("?")[1] ?? "").get("watch") === "1") : ""
+    ])}
     ${buyStrip(mode === "demo" ? "" : slip.chain.key, slip.subject, Boolean(slip.id.meta) && slip.open?.transferFunction !== false, verdictOf(slip.notes, "done", coverage).kind)}
   </div>`;
     const cardSvg = () => {
@@ -9282,17 +9517,23 @@
   }
   function controlBody(slip) {
     const o = slip.open;
-    const powers = o.powers.length ? `<h3 class="cap">What the code can do <b>\xB7 read off the bytecode</b></h3><div class="tbl"><table class="buys"><thead><tr><th>function in the code</th><th>lets whoever may call it</th></tr></thead><tbody>${o.powers.map((p) => `<tr><td><span class="mono">${esc2(p.signature)}</span></td><td>${esc2(POWER_MEANING[p.kind])}</td></tr>`).join("")}</tbody></table></div><p style="color:var(--dim);font-size:12px;margin:6px 0 0">A name in the dispatcher is not a permission. Whether each is guarded by the owner, by a role, or by nothing at all is not readable from bytecode.</p>` : o.surfaceFrom === "implementation-unreadable" ? `<p style="color:var(--muted);font-size:13px;margin:8px 0 0">The code this proxy points at could not be read, so no function list is shown. Its switches are unknown, not absent.</p>` : `<p style="color:var(--muted);font-size:13px;margin:8px 0 0">No mint, pause, blacklist, fee, limit, trading or upgrade function was seen among the ${o.selectors} four-byte selectors in the code.</p>`;
-    const probeRows = o.probes.length ? `<h3 class="cap">What happened when it was tried <b>\xB7 simulated, nothing signed</b></h3><div class="tbl"><table class="buys"><thead><tr><th>simulated</th><th>from</th><th>result</th></tr></thead><tbody>${o.probes.map(
-      (p) => `<tr><td>${p.target === "pool" ? "sale into the pool" : "transfer to a fresh wallet"}</td><td><span class="mono">${shortAddress(p.from)}</span>${p.source === "deployer" ? ' <span class="flag">deployer</span>' : ""}</td><td>${p.status === "ok" ? '<span class="flag ok">goes through</span>' : p.status === "reverts" ? `<span class="flag bad">reverts</span> ${esc2(clean(p.reason ?? ""))}` : `<span class="flag">not run</span> ${esc2(clean(p.reason ?? ""))}`}</td></tr>`
-    ).join("")}</tbody></table></div><p style="color:var(--dim);font-size:12px;margin:6px 0 0">Run with eth_call from wallets that hold the token; nothing was signed or sent. One unit, at this block: a fee on transfer, a cap on size, or a rule the owner flips tomorrow would not show up here.</p>` : o.probesSkipped ? `<p style="color:var(--muted);font-size:13px;margin:8px 0 0">No transfer was simulated: ${esc2(o.probesSkipped)}.</p>` : "";
+    const powers = o.powers.length ? `<h3 class="cap">What the code can do <b>\xB7 read off the bytecode</b></h3><div class="tbl"><table class="buys"><thead><tr><th>function in the code</th><th>lets whoever may call it</th></tr></thead><tbody>${o.powers.map((p) => `<tr><td><span class="mono">${esc2(p.signature)}</span></td><td>${esc2(POWER_MEANING[p.kind])}</td></tr>`).join("")}</tbody></table></div><p class="qdetail">A name in the dispatcher is not a permission. Whether each is guarded by the owner, by a role, or by nothing at all is not readable from bytecode.</p>` : o.surfaceFrom === "implementation-unreadable" ? `<p class="qdetail">The code this proxy points at could not be read, so no function list is shown. Its switches are unknown, not absent.</p>` : `<p class="qdetail">No mint, pause, blacklist, fee, limit, trading or upgrade function was seen among the ${o.selectors} four-byte selectors in the code.</p>`;
     return `<h3 class="cap">What the chain answered</h3><dl class="kv">
     <dt>owner</dt><dd>${o.ownerUnread ? "owner() is in the code but the chain would not answer it" : o.owner === null ? "no owner() function in the code" : o.owner.renounced ? '<span class="flag ok">renounced</span> nobody can call owner-only functions' : `<span class="mono">${esc2(o.owner.address)}</span>${o.owner.isContract ? " (a contract)" : ""}${o.ownerBalance?.bps != null ? ` \xB7 holds ${pctText(o.ownerBalance.bps)}` : ""}${o.ownable ? "" : " \xB7 no renounceOwnership()"}`}</dd>
     ${o.paused !== null ? `<dt>paused</dt><dd>${o.paused ? '<span class="flag bad">yes</span>' : '<span class="flag ok">no</span>'}</dd>` : ""}
     ${o.tradingOpen ? `<dt>${esc2(o.tradingOpen.view)}</dt><dd>${o.tradingOpen.open ? '<span class="flag ok">true</span> trading is open' : '<span class="flag bad">false</span> trading is switched off'}</dd>` : ""}
     <dt>source</dt><dd>${o.verified === null ? "explorer not reachable" : o.verified ? '<span class="flag ok">verified</span> the code can be read on the explorer' : '<span class="flag bad">not verified</span> only the bytes can be read'}</dd>
     <dt>read from</dt><dd>${o.surfaceFrom === "implementation" ? "the proxy's current implementation" : o.surfaceFrom === "implementation-unreadable" ? '<span class="flag bad">unreadable</span> this is a proxy and its implementation code did not load' : "the token's own bytecode"} \xB7 ${o.selectors} four-byte selectors${o.constants > o.selectors ? `, ${o.constants - o.selectors} shorter constants ignored` : ""}</dd>
-  </dl>${powers}${probeRows}`;
+  </dl>${powers}`;
+  }
+  function probeBody(slip) {
+    const o = slip.open;
+    if (!o.probes.length) {
+      return o.probesSkipped ? `<p class="qdetail">No transfer was simulated: ${esc2(o.probesSkipped)}.</p>` : "";
+    }
+    return `<h3 class="cap">What happened when it was tried <b>\xB7 simulated, nothing signed</b></h3><div class="tbl"><table class="buys"><thead><tr><th>simulated</th><th>from</th><th>result</th></tr></thead><tbody>${o.probes.map(
+      (p) => `<tr><td>${p.target === "pool" ? "sale into the pool" : "transfer to a fresh wallet"}</td><td><span class="mono">${shortAddress(p.from)}</span>${p.source === "deployer" ? ' <span class="flag">deployer</span>' : ""}</td><td>${p.status === "ok" ? '<span class="flag ok">goes through</span>' : p.status === "reverts" ? `<span class="flag bad">reverts</span> ${esc2(clean(p.reason ?? ""))}` : `<span class="flag">not run</span> ${esc2(clean(p.reason ?? ""))}`}</td></tr>`
+    ).join("")}</tbody></table></div><p class="qdetail">Run with eth_call from wallets that hold the token; nothing was signed or sent. One unit, at this block: a fee on transfer, a cap on size, or a rule the owner flips tomorrow would not show up here.</p>`;
   }
   function tradesBody(slip) {
     const o = slip.open;

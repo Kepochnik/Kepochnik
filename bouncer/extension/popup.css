@@ -4,62 +4,58 @@
    body. Everything the site lays out wide has to fold, and the header has
    to stop taking a third of the window.
 
-   Kept deliberately short. It used to carry ten rules for a design that
-   no longer exists — .qcard, .vbody, .stamp-row and the rest, all
-   matching nothing — plus two that still matched and fought the current
-   one: a 34-pixel glow behind the verdict, which the terminal design
-   removed on purpose, and a 28-pixel ticker from when the record line was
-   a poster. scripts/cli-check.mjs fails now if a selector here matches
-   nothing on a rendered popup, so this cannot silently rot again. */
+   Kept deliberately short, and checked: scripts/cli-check.mjs fails if a
+   selector here matches nothing the app can render. That check has now
+   caught this file twice — once after the terminal redesign left ten rules
+   pointing at a design that no longer existed, and once after the five-
+   questions redesign took .vtop, .vcell and .chgrow with it. */
 
 /* Chrome sizes an action popup to its content, up to 800×600. min-height
    beats max-height in CSS, so the old pair (min 640, max 600) meant "640,
    and the max is decoration" — say the one number that is true. */
-body{width:560px;max-height:600px;overflow-y:auto;background-image:none}
-.wrap{padding-inline:12px}
+body{width:560px;max-height:600px;overflow-y:auto}
+.wrap{padding-inline:14px}
 
 /* The header is chrome, not content: in a 600-pixel window it has to cost
    as little as possible before the answer starts. */
 header{position:static}
-.hbar{padding-inline:12px;padding-block:10px;gap:8px}
-.wordmark{font-size:22px}
-.mark{width:28px;height:28px}
+.hbar{padding-inline:14px;padding-block:9px;min-height:48px}
+.wordmark{font-size:14px}
+.mark{width:22px;height:22px}
 .ext{display:none}
 .chips{display:none}
 
 /* The pitch is for a first visit to the website. Somebody who installed
    the extension has already decided. */
-.hero{padding-block:12px 0}
-.hero h1{font-size:22px;letter-spacing:.05em}
+.hero{padding-block:16px 0}
+.hero h1{font-size:19px}
 .hero p{display:none}
-.door{margin-top:10px}
-.door input{font-size:13px;padding:11px}
-.btn{font-size:13px;min-height:44px;padding:0 16px}
+.door input{font-size:13.5px}
+.btn{font-size:13.5px;padding-inline:16px}
 .source{font-size:12px}
+.slip{margin-top:16px}
 
-/* One column for anything the site splits in two; the four tiles stay
-   two-by-two, which reads fine at this width. */
-.vtop{grid-template-columns:1fr}
-.vcell{border-right:0;border-bottom:1px solid var(--line)}
+/* One column for anything the site splits in two. */
 .grid{grid-template-columns:1fr}
-.exit-grid{grid-template-columns:1fr 1fr}
-.calc-res{grid-template-columns:1fr}
-.calc-fig{border-right:0;border-bottom:1px solid var(--line)}
+.exit-grid,.calc-res{grid-template-columns:1fr 1fr}
 
-/* The verdict is a statement here, not a billboard. No glow: the word
-   sits in its own hatched cell and does not need one to be found, and a
-   glow in a 560-pixel window is most of the window. */
-.vword{font-size:44px;line-height:.95;text-shadow:none}
-.vlead{font-size:14px}
-.vfoot{padding:10px 14px;gap:8px}
-.vacts{margin-left:0}
+/* The verdict is a statement here, not a headline: at this width the word
+   and its sentence fought for one line and the sentence lost. */
+.vword{font-size:26px}
+.verdict{gap:4px 12px;padding-block:14px 16px}
+.vlead{flex:1 1 100%;font-size:13.5px}
+.head-top,.verdict,.vfoot,.q>summary,.qbody,.sec>summary,.sec>.body,.more-head{padding-inline:16px}
+.vfoot{padding-block:10px}
+.vacts{margin-left:0;flex:1 1 100%}
 
-/* Rows that are three columns on a page and want to be stacked here. */
-.cgap,.whycheck,.chgrow{grid-template-columns:1fr;gap:3px}
-.seen-row a{grid-template-columns:18px 1fr;gap:4px 10px}
+/* The answer under the question, as on a phone: 560px is not enough for
+   both on one line once the answer is a sentence fragment. */
+.q>summary{flex-wrap:wrap;gap:5px 12px;min-height:0}
+.qdot{order:0} .qq{order:1;flex:1 1 auto} .q>summary .chev{order:2;margin-left:auto}
+.qa{order:3;flex:1 1 100%;text-align:left;margin-left:22px}
 
-.unread{padding:14px}
-details.sec>summary{padding:13px 14px}
-details.sec>.body{padding:0 14px 14px}
+.kv{grid-template-columns:1fr;gap:2px 0}
+.kv dt{margin-top:8px}
+.sec>summary .what{display:none}
 footer{margin-top:24px;font-size:11px}
-footer>span{flex:1 1 100%}
+footer span{flex:1 1 100%}

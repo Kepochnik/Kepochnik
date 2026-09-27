@@ -8,7 +8,7 @@
  * Add ?chain=arc-testnet to any live route.
  */
 import { BlockscoutClient } from "../../src/chain/blockscout.js";
-import { TOPIC_TAG,TOPIC_BLURB, TOPIC_ORDER, TOPIC_QUESTION, topicOf } from "../../src/bouncer/topics.js";
+import { TOPIC_TAG, TOPIC_QUESTION, topicOf, type Topic } from "../../src/bouncer/topics.js";
 import { doorCoverage, plainReason, splCoverage, type Coverage } from "../../src/bouncer/coverage.js";
 import { readVerdict, type VerdictKind } from "../../src/bouncer/verdict.js";
 import { missingVenues, tradeVenues } from "../../src/bouncer/trade.js";
@@ -38,6 +38,7 @@ import { roomLine } from "../../src/bouncer/room.js";
 import { readBoard, type Board } from "../../src/bouncer/leaderboard.js";
 import { readWatchEvents, type WatchEvent } from "../../src/bouncer/watch.js";
 import { readTokenWatchEvents, type TokenWatchEvent } from "../../src/bouncer/tokenWatch.js";
+import { doorAnswers, splAnswers, SHORT_QUESTION, type Answer } from "../../src/bouncer/answers.js";
 import { doorWatch, readLag, splWatch, type WatchOffer, type WatchPlan } from "../../src/bouncer/watchPlan.js";
 import { readTradeReceipt, type TradeReceipt } from "../../src/bouncer/txReceipt.js";
 import { formatBps, formatDuration, formatUnits, isoUtc, shortAddress } from "../../src/format.js";
@@ -459,7 +460,9 @@ function renderChips(): void {
     }
   }
   const more = document.createElement("div");
-  more.className = "more";
+  // Not "more": that class is the slip's secondary stack now, and this row
+  // took its card styling — a line of links rendered as a panel.
+  more.className = "morelinks";
   // With "auto" and no search run yet there is no chain to name, and
   // writing one into the link would be picking for the reader.
   const c = mode === "demo" ? "demo" : chainSelect.value === "auto" ? (chainOrNull()?.key ?? "auto") : chain().key;
@@ -1381,7 +1384,7 @@ function changesBand(before: Snapshot | null, after: Snapshot, key: string, code
     // came back to check. But only when both readings could see enough
     // for that to mean anything.
     if (!d.confident) return "";
-    return `<section class="chg chg-quiet"><div class="chghead"><span class="chgword">NO CHANGE</span><span class="chgwhen">since you last checked this, ${esc(when)}</span></div></section>`;
+    return `<section class="band chg"><span class="bandword">No change</span><div class="bandtext">since you last checked this, ${esc(when)}</div></section>`;
   }
   const worst = d.changes[0].level;
   // Everything that moved, but not all of it at full height.
@@ -1400,21 +1403,25 @@ function changesBand(before: Snapshot | null, after: Snapshot, key: string, code
   const tag = (c: (typeof d.changes)[number]) =>
     c.kind.startsWith("new:") ? "NEW" : c.kind.startsWith("gone:") ? "GONE" : c.kind === "verdict" ? "VERDICT" : "CHANGED";
   const row = (c: (typeof d.changes)[number]) =>
-    `<li class="chgrow chg-${c.level}"><span class="chglvl">${tag(c)}</span><span class="chgtext">${esc(c.text)}</span></li>`;
+    `<li><span class="chglvl ${c.level}">${tag(c)}</span><span>${esc(c.text)}</span></li>`;
   const shown = [...loud, ...quiet.slice(0, Math.max(0, 4 - loud.length))];
   const rest = d.changes.length - shown.length;
   const rows =
     shown.map(row).join("") +
     (rest
-      ? `<li class="chgmore"><details><summary>${rest} more change${rest === 1 ? "" : "s"}, none of them urgent<span class="chev" aria-hidden="true"></span></summary><ul class="chgrows">${quiet.slice(shown.length - loud.length).map(row).join("")}</ul></details></li>`
+      ? `<li><details><summary>${rest} more change${rest === 1 ? "" : "s"}, none of them urgent</summary><ul class="chgrows">${quiet.slice(shown.length - loud.length).map(row).join("")}</ul></details></li>`
       : "");
-  return `<section class="chg chg-${worst}" data-changes="${d.changes.length}">
-    <div class="chghead">
-      <span class="chgword">${d.changes.length} CHANGE${d.changes.length === 1 ? "" : "S"}</span>
-      <span class="chgwhen">since you last checked this, ${esc(when)}${before.verdict !== after.verdict ? "" : ` · it read ${esc(before.verdict)} then and now`}</span>
+  // The band carries how loud the loudest change was. The first pass of the
+  // redesign dropped that, so a verdict falling to STOP was drawn exactly
+  // like two new INFO lines — which is the one comparison a reader coming
+  // back to a token is making.
+  return `<section class="band chg ${worst}" data-changes="${d.changes.length}">
+    <span class="bandword">${d.changes.length} change${d.changes.length === 1 ? "" : "s"}</span>
+    <div class="bandtext">
+      since you last checked this, ${esc(when)}${before.verdict !== after.verdict ? "" : ` · it read <b>${esc(before.verdict)}</b> then and now`}
+      <ul class="chgrows">${rows}</ul>
+      <p class="seen-foot">Compared against what this browser saw last time. There is no account and no server behind this, so another device of yours has its own history and knows nothing about this one.</p>
     </div>
-    <ul class="chgrows">${rows}</ul>
-    <p class="chgfoot">Compared against what this browser saw last time. There is no account and no server behind this, so another device of yours has its own history and knows nothing about this one.</p>
   </section>`;
 }
 
@@ -1437,12 +1444,14 @@ function coverageBand(coverage: Coverage, stage: Stage): string {
   // band — they are true of every reading and would make it permanent —
   // but once it IS open they are the other half of "what this does not
   // tell you", and a reader looking at one gap should see the rest.
+  // A gap and a limit must not look alike. "This reading could not get an
+  // answer" is worth retrying; "BOUNCER does not offer this check at all"
+  // never will be, and a reader told to retry something that can never work
+  // learns to ignore the retry button. That distinction is the whole reason
+  // coverage.ts keeps `gaps` and `limits` apart, and the first pass of this
+  // redesign flattened them into one grey list.
   const row = (g: (typeof coverage.gaps)[number], limit: boolean) =>
-    `<li class="cgap${g.decisive && !limit ? " cgap-hard" : ""}${limit ? " cgap-limit" : ""}">
-        <span class="cgl">${esc(g.label)}</span>
-        <span class="cgr">${esc(g.reason ?? "did not answer")}</span>
-        <span class="cgt">${limit ? "not offered" : esc(TOPIC_TAG[g.topic])}</span>
-      </li>`;
+    `<li class="${limit ? "cgap-limit" : "cgap-hole"}"><span class="chglvl${g.decisive && !limit ? " watch" : ""}">${limit ? "not offered" : esc(TOPIC_TAG[g.topic])}</span><span>${esc(g.label)} — ${esc(g.reason ?? "did not answer")}</span></li>`;
   const rows = [...coverage.gaps.map((g) => row(g, false)), ...coverage.limits.map((g) => row(g, true))].join("");
   // The retry is offered only where pressing it could work. A button that
   // cannot change the answer is a button that teaches a reader the answer
@@ -1450,13 +1459,13 @@ function coverageBand(coverage: Coverage, stage: Stage): string {
   const retry = coverage.retryable
     ? `<button class="ghost" id="act-retry" type="button">Read the missing parts again</button>`
     : "";
-  return `<section class="cov cov-${coverage.state}" data-coverage="${coverage.state}">
-    <div class="covhead">
-      <span class="covword">${coverage.state === "thin" ? "INCOMPLETE CHECK" : "PARTIAL CHECK"}</span>
-      <span class="covcount">${coverage.read} of ${coverage.asked} checks answered</span>
-      ${retry}
+  return `<section class="band gap" data-coverage="${coverage.state}">
+    <span class="bandword">${coverage.state === "thin" ? "Incomplete" : "Partial"}</span>
+    <div class="bandtext">
+      <b>${coverage.read} of ${coverage.asked} checks answered.</b> ${esc(coverage.line)}
+      <ul class="chgrows">${rows}</ul>
     </div>
-    <ul class="cgaps">${rows}</ul>
+    ${retry ? `<span class="bandact">${retry}</span>` : ""}
   </section>`;
 }
 
@@ -1487,79 +1496,57 @@ const STILL_READING: Record<Stage, string> = {
  * The poster at the top of every slip: who it is, one word, one sentence, and
  * the count. Everything below is detail for somebody who wants it.
  */
-function verdictBlock(opts: {
+/**
+ * THE HEAD: what it is, what the answer is, when it was read.
+ *
+ * It used to be a four-cell billboard — a giant word in a hatched box, a
+ * lead paragraph, a sub-paragraph, a tally, and four tiles — all competing
+ * for the same first glance. Three lines do the same work: the ticker, the
+ * word with its one sentence, and the provenance strip. Everything that was
+ * in the tiles is now an ANSWER on the row of the question it answers,
+ * which is where somebody looking for it would go.
+ */
+function headBlock(opts: {
   sym: string;
   name: string;
   address: string;
+  /** The label to print. */
   stamp: string;
+  /** The raw stamp, which is what decides the colour. */
+  stampKind: Parameters<typeof stampTone>[0];
   at: string;
   notes: DoorNote[];
-  lead: string;
-  /** How far along this render is; anything but "done" means the tallies will change. */
   stage?: Stage;
   /** What is still being read, when it is not what the EVM door reads. */
   stillReading?: string;
-  /** What this reading covered. Absent on the demo slips, which are complete by construction. */
   coverage?: Coverage;
-  /** What moved since this browser last read the same token, when it has. */
-  changes?: string;
-  /**
-   * The four numbers that decide it, rendered inside the block rather than
-   * under it. They are the verdict said in figures; a separate row with its
-   * own margin made one idea look like two.
-   */
-  tiles?: string;
   actions: string;
 }): string {
   const stage = opts.stage ?? "done";
   const v = verdictOf(opts.notes, stage, opts.coverage);
-  const stampClass = stampTone(opts.stamp as never);
-  // The level counts are gone from here.
-  //
-  // They read "5 careful · 9 note" — fourteen — above a ledger showing two
-  // rows and eight folded, and a separate strip holding the other four. A
-  // number a reader cannot arrive at by counting what is in front of them
-  // is not a summary, it is a contradiction they have to resolve. The
-  // ledger is sorted by severity and says its own totals; the one thing
-  // this footer still has to say is that the totals are not final yet.
+  // The raw stamp, not the label. This read `stampTone(opts.stamp as never)`
+  // — and opts.stamp is already the printed label, "NOT A PONS V2 LAUNCH",
+  // which matches none of the cases and fell through to "no". So every
+  // ordinary token wore a red badge, against the core's own stated rule that
+  // a contract the launchpad did not make is a fact and not a thing to watch.
+  // The `as never` was the cast that let the two types be confused.
+  const stampClass = stampTone(opts.stampKind);
   const pending = stage === "done" ? "" : `<span class="vpend">${esc(opts.stillReading ?? STILL_READING[stage])}</span>`;
-  // Two counts, and both can be arrived at by counting what is on screen:
-  // the ledger's rows and the unread strip's. The old tallies counted by
-  // severity across both, which produced a fourteen nobody could find.
-  const findings = opts.notes.filter((n) => topicOf(n.code) !== "unread").length;
-  // One tally, because there used to be two and they disagreed. The cell
-  // said "2 unreadable" — notes in the strip — while the band below said
-  // "3 of 4 checks answered", and a reader cannot reconcile two numbers
-  // counting different things without being told which is which. The
-  // band counts CHECKS and owns the subject; this cell counts findings
-  // and says nothing about coverage.
-  const counts = findings ? `${findings} finding${findings === 1 ? "" : "s"}` : "nothing to flag";
-  // `data-pending` is the machine-readable half of that, and it is a
-  // contract: speed-check decides a slip is COMPLETE by the absence of this
-  // marker. Restyling the visible chip away without it would have made
-  // "complete" fire the moment a verdict appeared, so the headline number
-  // would have improved by two seconds while nothing got faster. The
-  // scripts assert the marker exists rather than trusting its absence.
-  return `<section class="verdict v-${v.kind}"${stage === "done" ? "" : ' data-pending="1"'}>
-    <div class="vtop">
-      <div class="vcell">
-        <div class="vlevel">VERDICT</div>
-        <div class="vword" aria-label="Verdict">${v.word}</div>
-        <div class="vcounts">${counts}</div>
+  // `data-pending` is a contract with speed-check and stage-check: a slip is
+  // COMPLETE by the absence of this marker. Restyling the visible chip away
+  // without it would make "complete" fire the moment a verdict appeared.
+  return `<section class="head"${stage === "done" ? "" : ' data-pending="1"'}>
+    <div class="head-top">
+      <div>
+        <div class="sym">${opts.sym}</div>
+        <div class="name">${opts.name}</div>
       </div>
-      <div class="vsay">
-        <div class="vwho">
-          <span class="vsym">${opts.sym}</span>
-          <span class="vname">${opts.name}</span>
-          <span class="vstamp ${stampClass}">${opts.stamp}</span>
-        </div>
-        <p class="vlead">${esc(opts.lead)}</p>
-        <p class="vsub">${esc(v.line)}${pending}</p>
-      </div>
+      <span class="stamp ${stampClass}">${opts.stamp}</span>
     </div>
-    ${opts.coverage ? coverageBand(opts.coverage, stage) : ""}
-    ${opts.changes ?? ""}
-    ${opts.tiles ?? ""}
+    <div class="verdict">
+      <span class="vword ${v.kind}" aria-label="Verdict">${v.word}</span>
+      <p class="vlead">${esc(v.line)}${pending}</p>
+    </div>
     <div class="vfoot">
       <button class="vaddr" type="button" data-copy="${esc(opts.address)}" title="Copy the address">${esc(opts.address)}</button>
       <span class="vat">${opts.at}</span>
@@ -1569,27 +1556,85 @@ function verdictBlock(opts: {
 }
 
 /**
- * The five questions, each with the notes that answer it. A question nobody
- * has an answer for is not shown — an empty card reads as "checked and fine",
- * and nothing here checked it.
+ * THE FIVE QUESTIONS, AND THE SIXTH ROW THAT IS NOT ONE.
  *
- * "What BOUNCER could not read" is never one of the cards. It is its own
- * strip below them, because a gap folded in among findings reads as a clean
- * result, and that is the one mistake this whole project is built to avoid.
+ * This replaces two things that used to say the same content twice: a flat
+ * ledger of every finding in prose at the top of the page, and eight
+ * accordions named by question underneath it. The findings already carried
+ * their topic as a tag, so the page was handing a reader both halves of a
+ * join and leaving them to do it.
+ *
+ * Now there is one row per question. The row states the answer in two or
+ * three words. Opening it shows the findings for that question and the
+ * evidence behind them — the tables, the simulations, the pool reserves.
+ * Nothing is said in two places, and nothing loud is more than one tap away.
+ *
+ * "What could not be read" is the sixth row and never one of the five. A gap
+ * folded in among findings reads as a clean result, which is the mistake
+ * this whole project exists to avoid — so it keeps its own row, its own grey,
+ * and the last position.
  */
+function questionRows(answers: Answer[], evidence: Partial<Record<Topic, string>>, notes: DoorNote[]): string {
+  const rows = answers.map((a) => qrow(a, evidence[a.topic] ?? "")).join("");
+  const unread = notes.filter((n) => topicOf(n.code) === "unread");
+  const gap = unread.length
+    ? qrow(
+        {
+          topic: "unread",
+          question: SHORT_QUESTION.unread,
+          value: `${unread.length} question${unread.length === 1 ? "" : "s"}`,
+          tone: "unknown",
+          detail: "A read that did not answer is not a clean result. Each of these is a question still open, and most are worth one retry.",
+          notes: unread,
+        },
+        evidence.unread ?? "",
+      )
+    : "";
+  return `<div class="qs">${rows}${gap}</div>`;
+}
+
+/** One question: the answer on the summary, the evidence behind it. */
+function qrow(a: Answer, evidence: string): string {
+  // The badge counts findings that can change a decision. INFO notes are
+  // true and worth having and are not worth a number on a closed row.
+  const loud = a.notes.filter((n) => n.level !== "info");
+  const worst = loud.some((n) => n.level === "stop") ? "stop" : loud.length ? "warn" : "";
+  const badge = loud.length ? `<span class="qn ${worst}">${loud.length}</span>` : "";
+  return `<details class="q" id="q-${a.topic}">
+    <summary>
+      <span class="qdot ${a.tone}" aria-hidden="true"></span>
+      <span class="qq">${esc(a.question)}</span>
+      <span class="qa"><span class="qv ${a.tone}">${esc(a.value)}</span>${badge}</span>
+      <span class="chev" aria-hidden="true"></span>
+    </summary>
+    <div class="qbody">
+      ${a.detail ? `<p class="qdetail">${esc(a.detail)}</p>` : ""}
+      ${findList(a.notes)}
+      ${evidence}
+    </div>
+  </details>`;
+}
+
+/** The findings for one question, worst first, each one line. */
+function findList(notes: DoorNote[]): string {
+  if (!notes.length) return "";
+  const RANKED: Record<Level, number> = { stop: 0, watch: 1, info: 2 };
+  const rows = [...notes]
+    .sort((a, b) => RANKED[a.level] - RANKED[b.level])
+    .map((n) => `<li class="find lv-${n.level}"><span class="find-level">${LEVEL_WORD[n.level]}</span><span class="find-text">${glossed(n.text)}</span></li>`)
+    .join("");
+  return `<ul class="finds">${rows}</ul>`;
+}
+
 /**
  * Dims the explanations a sentence carries in brackets.
  *
- * "The code carries mint (create new tokens out of thin air, diluting
- * every holder); pause (freeze every transfer); blacklist (block chosen
- * wallets from selling)" is three lines, and two of them are a glossary.
- * That glossary is the point of this project — somebody who has never read
- * a token contract should not have to know what "mint" means — so deleting
- * it would be deleting the reason the page exists.
- *
- * Hierarchy instead of deletion: the claim reads at full weight, the
- * glossary sits behind it. A reader who knows the words skims past them; a
- * reader who does not still has them, in place, no click required.
+ * "The code carries mint (create new tokens out of thin air, diluting every
+ * holder); pause (freeze every transfer)" is three lines and two of them are
+ * a glossary. That glossary is the point of this project — somebody who has
+ * never read a token contract should not have to know what "mint" means — so
+ * deleting it would delete the reason the page exists. Hierarchy instead:
+ * the claim reads at full weight, the glossary sits behind it.
  *
  * Only prose in brackets is dimmed. An address or a figure in brackets is
  * evidence, not explanation, and dimming it would bury the thing somebody
@@ -1601,67 +1646,16 @@ function glossed(text: string): string {
   );
 }
 
-function answerCards(notes: DoorNote[]): string {
-  // Worst first, and the topic is a tag on the row rather than a heading
-  // over a card. Five cards meant five headings, five paragraphs explaining
-  // what each heading meant, and a STOP that looked exactly as important as
-  // a note about the ticker. One ledger, sorted, says which line to read
-  // first by putting it first.
-  const RANKED: Record<Level, number> = { stop: 0, watch: 1, info: 2 };
-  const mine = notes
-    .filter((n) => topicOf(n.code) !== "unread")
-    .map((n, i) => ({ n, i, topic: topicOf(n.code) }))
-    .sort((a, b) => RANKED[a.n.level] - RANKED[b.n.level] || TOPIC_ORDER.indexOf(a.topic) - TOPIC_ORDER.indexOf(b.topic) || a.i - b.i);
-  if (!mine.length) return "";
-
-  // Two cells: the level, which is the thing to scan down, and the line.
-  // The topic rides inside the line in brackets rather than taking a
-  // column of its own — it says which question this answers, not how much
-  // it matters, and only one of those deserves a column.
-  const row = (x: (typeof mine)[number]) => `<li class="find lv-${x.n.level}">
-    <span class="find-level">${x.n.level.toUpperCase()}</span>
-    <span class="find-text"><span class="find-topic">[${esc(TOPIC_TAG[x.topic] ?? x.topic)}]</span> ${glossed(x.n.text)}</span>
-  </li>`;
-
-  const loud = mine.filter((x) => x.n.level !== "info");
-  const quiet = mine.filter((x) => x.n.level === "info");
-  // The quiet ones are true and worth having; they are not worth the top of
-  // the page. Folded, with a count, so the eye lands on what can cost money.
-  const rest = quiet.length
-    ? `<details class="find-rest"><summary>${quiet.length} more worth knowing, none of them dangerous</summary><ul class="finds">${quiet.map(row).join("")}</ul></details>`
-    : "";
-  return `<section class="findings">
-    <ul class="finds">${loud.map(row).join("")}</ul>
-    ${rest}
-  </section>`;
-}
-
-/** What did not answer. Its own strip, always, never folded in with the findings. */
-function unreadStrip(notes: DoorNote[], skipped: { section: string; reason: string }[]): string {
-  const mine = notes.filter((n) => topicOf(n.code) === "unread");
-  // No rows, no strip. The guard used to let `skipped` open the box on its
-  // own, and every skipped section already becomes a note — so the only way
-  // that branch could fire was with a heading saying something went unread
-  // above a list saying nothing did.
-  if (!mine.length) return "";
-  void skipped;
-  const rows = mine.map((n) => `<li>${esc(n.text)}</li>`).join("");
-  // Still its own block, still always announced, and still never folded in
-  // among the findings — a gap listed as a finding reads as a clean result,
-  // which is the one mistake this project is built to avoid.
-  //
-  // But it was the loudest thing on the page after the verdict: a striped
-  // box with a heading, a paragraph and four long sentences, sitting above
-  // findings that can cost somebody money. The claim it has to make is "N
-  // things could not be read", and that claim is in the summary, on screen,
-  // always. The four sentences are one click away.
-  return `<details class="unread">
-    <summary><span class="unread-n">${mine.length}</span> ${mine.length === 1 ? "question BOUNCER could not answer" : "questions BOUNCER could not answer"}<span class="chev" aria-hidden="true"></span></summary>
-    <div class="unread-body">
-      <p class="what">${esc(TOPIC_BLURB.unread)}</p>
-      <ul>${rows}</ul>
-    </div>
-  </details>`;
+/**
+ * Everything that is not one of the five.
+ *
+ * The working behind the verdict, the watch. They are real and they are not
+ * what somebody came for, so they sit under one heading below the answers
+ * rather than among them.
+ */
+function moreStack(sections: string[]): string {
+  const body = sections.filter(Boolean).join("");
+  return body ? `<div class="more"><div class="more-head">More</div>${body}</div>` : "";
 }
 
 /**
@@ -2052,32 +2046,36 @@ function renderSplSlip(slip: SplSlip, opts: { stage?: Stage; source?: Source } =
         .join("")}</tbody></table></div>`
     : "";
 
+  const evidence: Partial<Record<Topic, string>> = {
+    id: idBody,
+    keep: extBody,
+    sell: extBody ? "" : "",
+    exit: exitCalcBody(m?.supply ?? null),
+    room: holdersBodyText,
+  };
+  void blocked;
+
   out.innerHTML = `<div class="slip">
-    ${verdictBlock({
+    ${headBlock({
       sym,
       name,
       address: slip.subject,
       stamp: stampLabel(slip.stamp, null),
+      stampKind: slip.stamp,
       at: `${esc(slip.chain.name)} · ${esc(solanaWhen(slip))}${slip.at.timestamp ? ` · ${isoUtc(slip.at.timestamp)}` : ""}`,
       notes: slip.notes as DoorNote[],
-      lead: splSentence(slip, blocked),
       stage: stage0,
       coverage,
-      changes,
-      tiles,
       stillReading: SOL_STILL_READING,
       actions: `<button class="ghost primary" id="act-share" type="button">Copy card</button><button class="ghost" id="act-link" type="button">Copy link</button><button class="ghost" id="act-json" type="button">JSON</button>`,
     })}
-    ${answerCards(slip.notes as DoorNote[])}
-    ${unreadStrip(slip.notes as DoorNote[], slip.skipped)}
-    <div class="stack">
-      ${section("s-id", "Is it real?", "What this address actually is, who can print more of it, and who can freeze what you hold.", idBody, false)}
-      ${extBody ? section("s-ext", "Token-2022 extensions", "The rules the token program itself enforces on every transfer.", extBody, false) : ""}
-      ${holdersBodyText ? section("s-holders", "Who holds it", "The largest token accounts and the wallets behind them.", holdersBodyText, false) : ""}
-      ${m ? section("s-calc", "Could you get out?", "Your own position size, priced against the pool reserves read above. A price is not an exit: the two come apart exactly when it matters.", exitCalcBody(m.supply), false) : ""}
-      ${coverage && opts.source ? section("s-why", "Why this verdict", "The working behind the word: which findings made it, what was asked of the chain, which endpoint answered, and what was never checked.", whyBody(slip.notes as DoorNote[], coverage, `${esc(slip.chain.name)} · ${esc(solanaWhen(slip))}${slip.at.timestamp ? ` · ${isoUtc(slip.at.timestamp)}` : ""}`, opts.source), false) : ""}
-      ${stage0 === "done" ? section("s-watch", "Watch for changes", "Whether this tab can follow the mint after you leave it.", watchBody(splWatch(slip)), false) : ""}
-    </div>
+    ${coverage ? coverageBand(coverage, stage0) : ""}
+    ${changes ?? ""}
+    ${questionRows(splAnswers(slip), evidence, slip.notes as DoorNote[])}
+    ${moreStack([
+      coverage && opts.source ? section("s-why", "Why this verdict", "Which findings made the word, what was asked of the chain, and what was never checked.", whyBody(slip.notes as DoorNote[], coverage, `${esc(slip.chain.name)} · ${esc(solanaWhen(slip))}${slip.at.timestamp ? ` · ${isoUtc(slip.at.timestamp)}` : ""}`, opts.source), false) : "",
+      stage0 === "done" ? section("s-watch", "Watch for changes", "Whether this tab can follow the mint after you leave it.", watchBody(splWatch(slip)), false) : "",
+    ])}
     ${buyStrip(slip.chain.key, slip.subject, Boolean(slip.mint), verdictOf(slip.notes as DoorNote[], "done", coverage).kind)}
   </div>`;
   // Copy card, on the renderer that draws the button.
@@ -2558,42 +2556,41 @@ function renderSlip(slip: DoorSlip, opts: { stage?: Stage; source?: Source } = {
 
   const offer = doorWatch(slip);
 
+  // The evidence, filed under the question it answers.
+  //
+  // Every one of these blocks used to be an accordion of its own, under a
+  // heading that repeated a question the findings above were already tagged
+  // with. Filing them here is what lets the page say each thing once: the
+  // row states the answer, and everything behind that answer is inside it.
+  const evidence: Partial<Record<Topic, string>> = {
+    id: idBody + lookBody,
+    keep: (o ? controlBody(slip) : "") + rulesBody + (v1 ? `<h3 class="cap">Rules of a Pons V1 launch</h3><ol class="rules">${v1.rules.map((x) => `<li>${esc(x)}</li>`).join("")}</ol>` : ""),
+    sell: (o ? probeBody(slip) : "") + coverBody,
+    exit: tradesText + exitBody + exitCalcBody(slip.id.meta?.totalSupply ?? null),
+    room: (o && (o.holders || o.deployer || o.activity) ? holdersBody(slip) : "") + roomBody + crewBody + (d ? devSection(d, slip.subject, false, true) : ""),
+  };
+
   out.innerHTML = `<div class="slip">
-    ${verdictBlock({
+    ${headBlock({
       sym,
       name,
       address: slip.subject,
       stamp: stampLabel(slip.stamp, slip.chain.launchpad),
+      stampKind: slip.stamp,
       at: `${mode === "demo" ? "DEMO · " : ""}${esc(slip.chain.name)} · block ${slip.at.block} · ${isoUtc(slip.at.timestamp)}`,
       notes: slip.notes,
-      lead: summarySentence(slip),
       stage: stage0,
       coverage,
-      changes,
-      tiles,
       actions: `<button class="ghost primary" id="act-share" type="button">Copy card</button><button class="ghost" id="act-card" type="button">Preview</button><button class="ghost" id="act-link" type="button">Copy link</button><button class="ghost" id="act-json" type="button">JSON</button>`,
     })}
+    ${coverage ? coverageBand(coverage, stage0) : ""}
+    ${changes ?? ""}
     <div class="card-wrap" id="card"></div>
-    ${answerCards(slip.notes)}
-    ${unreadStrip(slip.notes, slip.skipped)}
-    <h2 class="stack-head">The evidence</h2>
-    <div class="stack">
-      ${section("s-id", "Is it real?", "Did the launchpad's factory deploy this token, and can its code change later?", idBody, false)}
-      ${o ? section("s-control", "Who controls it", "Which switches the code has (mint, pause, blacklist, fees), who holds the keys, and whether holders can move tokens right now.", controlBody(slip), false) : ""}
-      ${o && tradesText ? section("s-trades", "Where it trades", "Pools on the chain's DEX factories and what they hold, plus the explorer's price feed.", tradesText, false) : ""}
-      ${o && (o.holders || o.deployer || o.activity) ? section("s-holders", "Who holds it", "The largest wallets, the deployer's share, what sits in pools and contracts, and when it last moved.", holdersBody(slip), false) : ""}
-      ${registered && !v1 ? section("s-cover", "Door tax", `The anti-snipe tax in the first ${c?.terms.seconds ?? 15} seconds, and who paid it.`, coverBody, c?.status === "open") : ""}
-      ${r ? section("s-rules", "Fees and rules", "What every trade costs, where the creator's cut goes, what buyback really does.", rulesBody, false) : ""}
-      ${v1 ? section("s-v1", "Rules (Pons V1)", "How this older kind of launch works: pool from block one, launch caps, locked liquidity.", `<ol class="rules">${v1.rules.map((x) => `<li>${esc(x)}</li>`).join("")}</ol>`, false) : ""}
-      ${e ? section("s-exit", "Cash out now", "What you would actually get for selling part or all of a position right now.", exitBody, false) : ""}
-      ${section("s-calc", "Could you get out?", "Your own position size, priced against the reserves above. A price is not an exit: the two come apart exactly when it matters.", exitCalcBody(slip.id.meta?.totalSupply ?? null), false)}
-      ${coverage && opts.source ? section("s-why", "Why this verdict", "The working behind the word: which findings made it, what was asked of the chain, which endpoint answered, and what was never checked.", whyBody(slip.notes, coverage, `${esc(slip.chain.name)} · block ${slip.at.block} · ${isoUtc(slip.at.timestamp)}`, opts.source), false) : ""}
-      ${room ? section("s-room", "Who is inside", "Every buyer since launch, how much the creator's own wallets put in, buys landing in the same block.", roomBody, false) : ""}
-      ${crew ? section("s-crew", "Same funder?", "Where the first buyers got their money. Wallets funded by one address before the launch are one group.", crewBody, false) : ""}
-      ${l ? section("s-look", "Same name", "Other tokens with this ticker on the chain, and which one launched first.", lookBody, false) : ""}
-      ${d ? section("s-dev", "This dev before", `Everything this deployer launched in the last ${mode === "demo" ? "8" : "24"} h and how it went.`, devSection(d, slip.subject, false, true), false) : ""}
-      ${stage0 === "done" ? section("s-watch", "Watch for changes", "Get told when the dev moves or tokens go into a pool, right in this tab.", watchBody(offer), new URLSearchParams(location.hash.split("?")[1] ?? "").get("watch") === "1") : ""}
-    </div>
+    ${questionRows(doorAnswers(slip), evidence, slip.notes)}
+    ${moreStack([
+      coverage && opts.source ? section("s-why", "Why this verdict", "Which findings made the word, what was asked of the chain, and what was never checked.", whyBody(slip.notes, coverage, `${esc(slip.chain.name)} · block ${slip.at.block} · ${isoUtc(slip.at.timestamp)}`, opts.source), false) : "",
+      stage0 === "done" ? section("s-watch", "Watch for changes", "Get told when the dev moves or tokens go into a pool.", watchBody(offer), new URLSearchParams(location.hash.split("?")[1] ?? "").get("watch") === "1") : "",
+    ])}
     ${buyStrip(mode === "demo" ? "" : slip.chain.key, slip.subject, Boolean(slip.id.meta) && slip.open?.transferFunction !== false, verdictOf(slip.notes, "done", coverage).kind)}
   </div>`;
 
@@ -2738,27 +2735,41 @@ function controlBody(slip: DoorSlip): string {
   // and what actually happened when a transfer was tried. Each gets a
   // caption saying which it is.
   const powers = o.powers.length
-    ? `<h3 class="cap">What the code can do <b>· read off the bytecode</b></h3><div class="tbl"><table class="buys"><thead><tr><th>function in the code</th><th>lets whoever may call it</th></tr></thead><tbody>${o.powers.map((p) => `<tr><td><span class="mono">${esc(p.signature)}</span></td><td>${esc(POWER_MEANING[p.kind])}</td></tr>`).join("")}</tbody></table></div><p style="color:var(--dim);font-size:12px;margin:6px 0 0">A name in the dispatcher is not a permission. Whether each is guarded by the owner, by a role, or by nothing at all is not readable from bytecode.</p>`
+    ? `<h3 class="cap">What the code can do <b>· read off the bytecode</b></h3><div class="tbl"><table class="buys"><thead><tr><th>function in the code</th><th>lets whoever may call it</th></tr></thead><tbody>${o.powers.map((p) => `<tr><td><span class="mono">${esc(p.signature)}</span></td><td>${esc(POWER_MEANING[p.kind])}</td></tr>`).join("")}</tbody></table></div><p class="qdetail">A name in the dispatcher is not a permission. Whether each is guarded by the owner, by a role, or by nothing at all is not readable from bytecode.</p>`
     : o.surfaceFrom === "implementation-unreadable"
-      ? `<p style="color:var(--muted);font-size:13px;margin:8px 0 0">The code this proxy points at could not be read, so no function list is shown. Its switches are unknown, not absent.</p>`
-      : `<p style="color:var(--muted);font-size:13px;margin:8px 0 0">No mint, pause, blacklist, fee, limit, trading or upgrade function was seen among the ${o.selectors} four-byte selectors in the code.</p>`;
-  const probeRows = o.probes.length
-    ? `<h3 class="cap">What happened when it was tried <b>· simulated, nothing signed</b></h3><div class="tbl"><table class="buys"><thead><tr><th>simulated</th><th>from</th><th>result</th></tr></thead><tbody>${o.probes
-        .map(
-          (p) =>
-            `<tr><td>${p.target === "pool" ? "sale into the pool" : "transfer to a fresh wallet"}</td><td><span class="mono">${shortAddress(p.from)}</span>${p.source === "deployer" ? ' <span class="flag">deployer</span>' : ""}</td><td>${p.status === "ok" ? '<span class="flag ok">goes through</span>' : p.status === "reverts" ? `<span class="flag bad">reverts</span> ${esc(clean(p.reason ?? ""))}` : `<span class="flag">not run</span> ${esc(clean(p.reason ?? ""))}`}</td></tr>`,
-        )
-        .join("")}</tbody></table></div><p style="color:var(--dim);font-size:12px;margin:6px 0 0">Run with eth_call from wallets that hold the token; nothing was signed or sent. One unit, at this block: a fee on transfer, a cap on size, or a rule the owner flips tomorrow would not show up here.</p>`
-    : o.probesSkipped
-      ? `<p style="color:var(--muted);font-size:13px;margin:8px 0 0">No transfer was simulated: ${esc(o.probesSkipped)}.</p>`
-      : "";
+      ? `<p class="qdetail">The code this proxy points at could not be read, so no function list is shown. Its switches are unknown, not absent.</p>`
+      : `<p class="qdetail">No mint, pause, blacklist, fee, limit, trading or upgrade function was seen among the ${o.selectors} four-byte selectors in the code.</p>`;
   return `<h3 class="cap">What the chain answered</h3><dl class="kv">
     <dt>owner</dt><dd>${o.ownerUnread ? "owner() is in the code but the chain would not answer it" : o.owner === null ? "no owner() function in the code" : o.owner.renounced ? '<span class="flag ok">renounced</span> nobody can call owner-only functions' : `<span class="mono">${esc(o.owner.address)}</span>${o.owner.isContract ? " (a contract)" : ""}${o.ownerBalance?.bps != null ? ` · holds ${pctText(o.ownerBalance.bps)}` : ""}${o.ownable ? "" : " · no renounceOwnership()"}`}</dd>
     ${o.paused !== null ? `<dt>paused</dt><dd>${o.paused ? '<span class="flag bad">yes</span>' : '<span class="flag ok">no</span>'}</dd>` : ""}
     ${o.tradingOpen ? `<dt>${esc(o.tradingOpen.view)}</dt><dd>${o.tradingOpen.open ? '<span class="flag ok">true</span> trading is open' : '<span class="flag bad">false</span> trading is switched off'}</dd>` : ""}
     <dt>source</dt><dd>${o.verified === null ? "explorer not reachable" : o.verified ? '<span class="flag ok">verified</span> the code can be read on the explorer' : '<span class="flag bad">not verified</span> only the bytes can be read'}</dd>
     <dt>read from</dt><dd>${o.surfaceFrom === "implementation" ? "the proxy's current implementation" : o.surfaceFrom === "implementation-unreadable" ? '<span class="flag bad">unreadable</span> this is a proxy and its implementation code did not load' : "the token's own bytecode"} · ${o.selectors} four-byte selectors${o.constants > o.selectors ? `, ${o.constants - o.selectors} shorter constants ignored` : ""}</dd>
-  </dl>${powers}${probeRows}`;
+  </dl>${powers}`;
+}
+
+/**
+ * What happened when a sale was tried.
+ *
+ * Split out of controlBody, which used to carry three different kinds of
+ * thing at once: what the chain answered, what the code can do, and what a
+ * simulated transfer did. The first two answer "can they take it from you";
+ * this one answers "can you sell it right now", and they are different
+ * questions asked by different people at different moments.
+ */
+function probeBody(slip: DoorSlip): string {
+  const o = slip.open!;
+  if (!o.probes.length) {
+    return o.probesSkipped
+      ? `<p class="qdetail">No transfer was simulated: ${esc(o.probesSkipped)}.</p>`
+      : "";
+  }
+  return `<h3 class="cap">What happened when it was tried <b>· simulated, nothing signed</b></h3><div class="tbl"><table class="buys"><thead><tr><th>simulated</th><th>from</th><th>result</th></tr></thead><tbody>${o.probes
+    .map(
+      (p) =>
+        `<tr><td>${p.target === "pool" ? "sale into the pool" : "transfer to a fresh wallet"}</td><td><span class="mono">${shortAddress(p.from)}</span>${p.source === "deployer" ? ' <span class="flag">deployer</span>' : ""}</td><td>${p.status === "ok" ? '<span class="flag ok">goes through</span>' : p.status === "reverts" ? `<span class="flag bad">reverts</span> ${esc(clean(p.reason ?? ""))}` : `<span class="flag">not run</span> ${esc(clean(p.reason ?? ""))}`}</td></tr>`,
+    )
+    .join("")}</tbody></table></div><p class="qdetail">Run with eth_call from wallets that hold the token; nothing was signed or sent. One unit, at this block: a fee on transfer, a cap on size, or a rule the owner flips tomorrow would not show up here.</p>`;
 }
 
 function tradesBody(slip: DoorSlip): string {
