@@ -140,3 +140,29 @@ test("Solana answers the same five questions with its own reads", () => {
   assert.equal(by.exit.tone, "unknown");
   assert.match(by.exit.value, /Not checked/);
 });
+
+/**
+ * Both exit readers quote a reference position of 1% of the supply and then
+ * take shares OF THAT, so a quote's own 10% is a tenth of a percent of the
+ * supply. The row said "Selling 10% of the supply", which overstated it a
+ * hundredfold — on the one row that is about money.
+ */
+test("the exit row states a share of the supply, not a share of the sample position", async () => {
+  const slip = await slipFor(DEMO_PLAIN.token);
+  const exit = doorAnswers(slip).find((a) => a.topic === "exit")!;
+  const market = slip.open!.market!;
+  const q = market.quotes[0];
+  assert.equal(q.shareBps, 1_000, "the fixture's first quote is meant to be 10% of the position");
+
+  // The claim has to survive arithmetic: the figure divided by the spot price
+  // is the number of tokens, and that as a share of supply is what the
+  // sentence must say.
+  const tokens = (q.out * 10n ** 18n) / market.spot!;
+  const shareOfSupplyBps = Number((tokens * 10_000n) / slip.id.meta!.totalSupply);
+  assert.ok(shareOfSupplyBps >= 9 && shareOfSupplyBps <= 11, `the quote is ${shareOfSupplyBps} bps of supply, not ~10`);
+  assert.match(exit.value, /Selling 0\.1% of the supply/, exit.value);
+  assert.doesNotMatch(exit.value, /Selling 10% of the supply/);
+  // And the detail says where the sample size came from, so the figure can be
+  // scaled to whatever somebody actually holds.
+  assert.match(exit.detail ?? "", /reference position of 1% of the supply/);
+});

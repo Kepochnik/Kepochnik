@@ -115,6 +115,22 @@ function toneOf(notes: DoorNote[], fallback: Tone = "ok"): Tone {
   return fallback;
 }
 
+/**
+ * A share of the whole supply, written the way a person would say it.
+ *
+ * Both exit readers quote a REFERENCE POSITION of 1% of supply and then take
+ * shares of that, so a quote's own `shareBps` of 1000 is ten percent of one
+ * percent — a tenth of a percent of the supply. Saying "10% of the supply"
+ * over that figure overstates it a hundredfold, which on the one row that is
+ * about money is the worst place in the tool to be wrong.
+ */
+function shareOfSupply(quoteShareBps: number, positionBpsOfSupply = 100): string {
+  const bps = (quoteShareBps * positionBpsOfSupply) / 10_000;
+  if (bps >= 100) return `${(bps / 100).toFixed(0)}%`;
+  if (bps >= 10) return `${(bps / 100).toFixed(1)}%`;
+  return `${(bps / 100).toFixed(2)}%`;
+}
+
 /** Is it the token you meant? */
 function idAnswer(slip: DoorSlip, notes: DoorNote[]): Answer {
   const mine = notesFor(notes, "id");
@@ -260,9 +276,9 @@ function exitAnswer(slip: DoorSlip, notes: DoorNote[]): Answer {
     const amount = `${formatUnits(q.net, quote.decimals, 4)} ${quote.symbol}`;
     return plain(
       "exit",
-      `Selling ${(q.shareBps / 100).toFixed(0)}% of the position pays ${amount}`,
+      `Selling ${shareOfSupply(q.shareBps)} of the supply pays ${amount}`,
       toneOf(mine),
-      `on the ${e.venue}, after fees, at this block — ${(q.realisedBps / 100).toFixed(1)}% of what the quoted price says it is worth. The gap is what your own sale does to the price.`,
+      `that is ${(q.shareBps / 100).toFixed(0)}% of a reference position of 1% of the supply, sold on the ${e.venue} after fees at this block — ${(q.realisedBps / 100).toFixed(1)}% of what the quoted price says it is worth. The gap is what your own sale does to the price.`,
       mine,
       amount,
     );
@@ -274,9 +290,9 @@ function exitAnswer(slip: DoorSlip, notes: DoorNote[]): Answer {
     const amount = `${formatUnits(q.out, quote.decimals, 4)} ${quote.symbol}`;
     return plain(
       "exit",
-      `Selling ${(q.shareBps / 100).toFixed(0)}% of the supply pays ${amount}`,
+      `Selling ${shareOfSupply(q.shareBps)} of the supply pays ${amount}`,
       toneOf(mine),
-      `priced against the ${m.best.dex} pool's own reserves at this block — ${(q.realisedBps / 100).toFixed(1)}% of the quoted price. The token's own transfer tax, if it has one, is not included.`,
+      `that is ${(q.shareBps / 100).toFixed(0)}% of a reference position of 1% of the supply, priced against the ${m.best.dex} pool's own reserves at this block — ${(q.realisedBps / 100).toFixed(1)}% of the quoted price. The token's own transfer tax, if it has one, is not included.`,
       mine,
       amount,
     );

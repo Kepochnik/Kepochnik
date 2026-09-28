@@ -7546,6 +7546,12 @@
     if (notes.some((n) => n.level === "watch")) return "warn";
     return fallback;
   }
+  function shareOfSupply(quoteShareBps, positionBpsOfSupply = 100) {
+    const bps3 = quoteShareBps * positionBpsOfSupply / 1e4;
+    if (bps3 >= 100) return `${(bps3 / 100).toFixed(0)}%`;
+    if (bps3 >= 10) return `${(bps3 / 100).toFixed(1)}%`;
+    return `${(bps3 / 100).toFixed(2)}%`;
+  }
   function idAnswer(slip, notes) {
     const mine = notesFor(notes, "id");
     const meta = slip.id.meta;
@@ -7645,9 +7651,9 @@
       const amount = `${formatUnits(q2.net, quote.decimals, 4)} ${quote.symbol}`;
       return plain(
         "exit",
-        `Selling ${(q2.shareBps / 100).toFixed(0)}% of the position pays ${amount}`,
+        `Selling ${shareOfSupply(q2.shareBps)} of the supply pays ${amount}`,
         toneOf(mine),
-        `on the ${e.venue}, after fees, at this block \u2014 ${(q2.realisedBps / 100).toFixed(1)}% of what the quoted price says it is worth. The gap is what your own sale does to the price.`,
+        `that is ${(q2.shareBps / 100).toFixed(0)}% of a reference position of 1% of the supply, sold on the ${e.venue} after fees at this block \u2014 ${(q2.realisedBps / 100).toFixed(1)}% of what the quoted price says it is worth. The gap is what your own sale does to the price.`,
         mine,
         amount
       );
@@ -7659,9 +7665,9 @@
       const amount = `${formatUnits(q2.out, quote.decimals, 4)} ${quote.symbol}`;
       return plain(
         "exit",
-        `Selling ${(q2.shareBps / 100).toFixed(0)}% of the supply pays ${amount}`,
+        `Selling ${shareOfSupply(q2.shareBps)} of the supply pays ${amount}`,
         toneOf(mine),
-        `priced against the ${m.best.dex} pool's own reserves at this block \u2014 ${(q2.realisedBps / 100).toFixed(1)}% of the quoted price. The token's own transfer tax, if it has one, is not included.`,
+        `that is ${(q2.shareBps / 100).toFixed(0)}% of a reference position of 1% of the supply, priced against the ${m.best.dex} pool's own reserves at this block \u2014 ${(q2.realisedBps / 100).toFixed(1)}% of the quoted price. The token's own transfer tax, if it has one, is not included.`,
         mine,
         amount
       );
