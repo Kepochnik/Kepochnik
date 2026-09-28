@@ -121,15 +121,17 @@ Nine read-only tools, every one annotated `readOnlyHint`: `bouncer_check` (the s
 
 The same read path runs in the browser, bundled into one HTML file (`npm run site` → `site/dist/index.html`).
 
-**The page is five questions.** Paste an address and you get the word — STOP, WATCH, CLEAR or INCOMPLETE — and under it one row per question, each with an answer short enough to read at a glance:
+**The page is five questions.** Paste an address and you get the word — STOP, WATCH, CLEAR or INCOMPLETE — then the token's whole shape as five figures, then one row per question answering it in words anybody can act on:
 
-| | |
-| --- | --- |
-| Is this the right token? | `Ordinary token` · `Real Pons V2 launch` · `Wrong one` |
-| Can they take it from you? | `4 switches` · `No switches` · `Unreadable` |
-| Can you sell it right now? | `Yes` · `2 of 3 wallets` · `Not checked` |
-| What would you get out? | `0.0397 ETH` · `No pool` · `Not priced` |
-| Who else is inside? | `Top 10 hold 45%` · `25 buyers` · `Not read` |
+| Question | Figure | The answer |
+| --- | --- | --- |
+| Is this the right token? | `no record` | An ordinary token, not from Pons V2 |
+| Can they take it from you? | `4 switches` | Yes — whoever owns it can print more and freeze transfers +2 more |
+| Can you sell it right now? | `2/3` | Not everyone — 1 of the 3 wallets we tried is blocked |
+| What would you get out? | `0.0397 ETH` | Selling 10% of the supply pays 0.0397 ETH |
+| Who else is inside? | `45%` | The deployer alone holds 25% of everything |
+
+The figure is for the scan; the sentence is the answer. The first version of this page carried only the figures, and "4 switches" tells somebody who has never read a token contract nothing at all — the whole point of this tool is to translate, and compressing is not translating. Where the data makes a picture it draws one: which share of the supply sits where, which of the simulated wallets could sell.
 
 Tap a row and its evidence opens under it — the findings, the tables, the simulations, the pool reserves. Nothing is said in two places, and nothing that can cost you money is more than one tap away. A sixth row appears when something did not answer, greyed and always last, because a gap folded in among findings reads as a clean result. The answers are computed in `src/bouncer/answers.ts`, in the core, so the terminal and an agent can state the same ones.
 

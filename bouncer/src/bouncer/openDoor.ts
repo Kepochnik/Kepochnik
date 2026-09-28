@@ -34,6 +34,28 @@ export interface Power {
   signature: string;
 }
 
+/**
+ * The same powers as a short verb, for a one-line answer.
+ *
+ * POWER_MEANING below is the full explanation and belongs in a table. A row
+ * that has to say what four switches add up to needs them at three words
+ * each — "the owner can print more, freeze transfers and block wallets" is
+ * an answer somebody who has never read a contract can act on, and "4
+ * switches" is a number they have to go and look up.
+ */
+export const POWER_VERB: Record<PowerKind, string> = {
+  mint: "print more",
+  pause: "freeze transfers",
+  blacklist: "block wallets",
+  fees: "change the tax",
+  limits: "change the caps",
+  trading: "switch trading off",
+  upgrade: "replace the code",
+  "burn-others": "burn your tokens",
+  exempt: "exempt chosen wallets",
+  sweep: "sweep the contract",
+};
+
 /** What each power lets whoever may call it do, in plain words. */
 export const POWER_MEANING: Record<PowerKind, string> = {
   mint: "create new tokens out of thin air, diluting every holder",

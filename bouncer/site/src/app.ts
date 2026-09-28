@@ -1520,24 +1520,38 @@ function headBlock(opts: {
   /** What is still being read, when it is not what the EVM door reads. */
   stillReading?: string;
   coverage?: Coverage;
+  /** The five, for the strip that lets the whole token be read at a glance. */
+  answers?: Answer[];
   actions: string;
 }): string {
   const stage = opts.stage ?? "done";
   const v = verdictOf(opts.notes, stage, opts.coverage);
-  // The raw stamp, not the label. This read `stampTone(opts.stamp as never)`
-  // — and opts.stamp is already the printed label, "NOT A PONS V2 LAUNCH",
-  // which matches none of the cases and fell through to "no". So every
-  // ordinary token wore a red badge, against the core's own stated rule that
-  // a contract the launchpad did not make is a fact and not a thing to watch.
-  // The `as never` was the cast that let the two types be confused.
   const stampClass = stampTone(opts.stampKind);
   const pending = stage === "done" ? "" : `<span class="vpend">${esc(opts.stillReading ?? STILL_READING[stage])}</span>`;
+  // The scan layer.
+  //
+  // The rows below are the reading layer: a sentence per question and the
+  // evidence behind it. This is the same five at a different granularity —
+  // the figure alone, five across — and it exists because a page whose
+  // summary is six lines of prose has nothing to look AT. It also puts the
+  // whole shape of a token on one screen on a phone, where the rows are
+  // below the fold.
+  const strip = opts.answers?.length
+    ? `<div class="shape">${opts.answers
+        .map(
+          (a) => `<a class="cell" href="#q-${a.topic}" data-open="q-${a.topic}">
+            <span class="cell-l">${esc(SHAPE_LABEL[a.topic] ?? a.topic)}</span>
+            <span class="cell-v ${a.tone}">${esc(a.figure ?? shortValue(a.value))}</span>
+          </a>`,
+        )
+        .join("")}</div>`
+    : "";
   // `data-pending` is a contract with speed-check and stage-check: a slip is
   // COMPLETE by the absence of this marker. Restyling the visible chip away
   // without it would make "complete" fire the moment a verdict appeared.
-  return `<section class="head"${stage === "done" ? "" : ' data-pending="1"'}>
+  return `<section class="head v-${v.kind}"${stage === "done" ? "" : ' data-pending="1"'}>
     <div class="head-top">
-      <div>
+      <div class="head-who">
         <div class="sym">${opts.sym}</div>
         <div class="name">${opts.name}</div>
       </div>
@@ -1547,12 +1561,28 @@ function headBlock(opts: {
       <span class="vword ${v.kind}" aria-label="Verdict">${v.word}</span>
       <p class="vlead">${esc(v.line)}${pending}</p>
     </div>
+    ${strip}
     <div class="vfoot">
       <button class="vaddr" type="button" data-copy="${esc(opts.address)}" title="Copy the address">${esc(opts.address)}</button>
       <span class="vat">${opts.at}</span>
       <div class="vacts">${opts.actions}</div>
     </div>
   </section>`;
+}
+
+/** The shorthand each cell of the scan strip carries. */
+const SHAPE_LABEL: Partial<Record<Topic, string>> = {
+  id: "identity",
+  keep: "control",
+  sell: "can sell",
+  exit: "cash out",
+  room: "holders",
+};
+
+/** A fallback for a cell whose answer carries no figure: the first few words. */
+function shortValue(value: string): string {
+  const first = value.split(/[—·,(]/)[0].trim();
+  return first.length > 18 ? `${first.slice(0, 17)}…` : first;
 }
 
 /**
@@ -1582,8 +1612,11 @@ function questionRows(answers: Answer[], evidence: Partial<Record<Topic, string>
         {
           topic: "unread",
           question: SHORT_QUESTION.unread,
-          value: `${unread.length} question${unread.length === 1 ? "" : "s"}`,
+          value: unread.length === 1 ? "One question is still open" : `${unread.length} questions are still open`,
           tone: "unknown",
+          figure: `${unread.length}`,
+          chips: [],
+          bar: null,
           detail: "A read that did not answer is not a clean result. Each of these is a question still open, and most are worth one retry.",
           notes: unread,
         },
@@ -1593,18 +1626,35 @@ function questionRows(answers: Answer[], evidence: Partial<Record<Topic, string>
   return `<div class="qs">${rows}${gap}</div>`;
 }
 
-/** One question: the answer on the summary, the evidence behind it. */
+/**
+ * One question: the answer on the summary, the evidence behind it.
+ *
+ * Two lines, not one. The first is the question with its figure on the right,
+ * which is what a reader scans down. The second is the answer in words, which
+ * is what they actually came for — and it has to be visible without opening
+ * anything, because "4 switches" told nobody anything and the sentence that
+ * explains it was two taps away.
+ */
 function qrow(a: Answer, evidence: string): string {
-  // The badge counts findings that can change a decision. INFO notes are
-  // true and worth having and are not worth a number on a closed row.
+  // The badge counts findings that can change a decision. INFO notes are true
+  // and worth having and are not worth a number on a closed row.
   const loud = a.notes.filter((n) => n.level !== "info");
   const worst = loud.some((n) => n.level === "stop") ? "stop" : loud.length ? "warn" : "";
   const badge = loud.length ? `<span class="qn ${worst}">${loud.length}</span>` : "";
+  const chips = a.chips.length
+    ? `<div class="qchips">${a.chips.map((c) => `<span class="qchip ${c.tone}">${esc(c.text)}</span>`).join("")}</div>`
+    : "";
   return `<details class="q" id="q-${a.topic}">
     <summary>
       <span class="qdot ${a.tone}" aria-hidden="true"></span>
-      <span class="qq">${esc(a.question)}</span>
-      <span class="qa"><span class="qv ${a.tone}">${esc(a.value)}</span>${badge}</span>
+      <span class="qhead">
+        <span class="qq">${esc(a.question)}</span>
+        <span class="qv ${a.tone}">${esc(a.value)}</span>
+        ${chips}
+        ${bar(a.bar)}
+      </span>
+      ${a.figure ? `<span class="qfig ${a.tone}">${esc(a.figure)}</span>` : ""}
+      ${badge}
       <span class="chev" aria-hidden="true"></span>
     </summary>
     <div class="qbody">
@@ -1613,6 +1663,28 @@ function qrow(a: Answer, evidence: string): string {
       ${evidence}
     </div>
   </details>`;
+}
+
+/**
+ * The answer as a picture, where the data makes one.
+ *
+ * Who holds the supply is a shape, not a percentage: forty-five in the ten
+ * largest wallets reads differently next to what sits in pools and what is
+ * burned than it does alone. The same bar draws the sale simulations, one
+ * segment per wallet tried, so "2 of 3" is something you see rather than
+ * parse.
+ */
+function bar(segments: Answer["bar"]): string {
+  if (!segments || !segments.length) return "";
+  const total = segments.reduce((n, x) => n + x.bps, 0) || 1;
+  const cells = segments
+    .map((x) => `<span class="barseg ${x.tone}" style="flex:${x.bps}" title="${esc(x.label)} · ${(x.bps / 100).toFixed(1)}%"></span>`)
+    .join("");
+  const key = segments
+    .filter((x) => x.bps / total >= 0.06)
+    .map((x) => `<span class="barkey"><i class="${x.tone}"></i>${esc(x.label)}</span>`)
+    .join("");
+  return `<span class="qbar"><span class="barbody">${cells}</span><span class="barkeys">${key}</span></span>`;
 }
 
 /** The findings for one question, worst first, each one line. */
@@ -2054,6 +2126,7 @@ function renderSplSlip(slip: SplSlip, opts: { stage?: Stage; source?: Source } =
     room: holdersBodyText,
   };
   void blocked;
+  const answers = splAnswers(slip);
 
   out.innerHTML = `<div class="slip">
     ${headBlock({
@@ -2062,6 +2135,7 @@ function renderSplSlip(slip: SplSlip, opts: { stage?: Stage; source?: Source } =
       address: slip.subject,
       stamp: stampLabel(slip.stamp, null),
       stampKind: slip.stamp,
+      answers,
       at: `${esc(slip.chain.name)} · ${esc(solanaWhen(slip))}${slip.at.timestamp ? ` · ${isoUtc(slip.at.timestamp)}` : ""}`,
       notes: slip.notes as DoorNote[],
       stage: stage0,
@@ -2071,7 +2145,7 @@ function renderSplSlip(slip: SplSlip, opts: { stage?: Stage; source?: Source } =
     })}
     ${coverage ? coverageBand(coverage, stage0) : ""}
     ${changes ?? ""}
-    ${questionRows(splAnswers(slip), evidence, slip.notes as DoorNote[])}
+    ${questionRows(answers, evidence, slip.notes as DoorNote[])}
     ${moreStack([
       coverage && opts.source ? section("s-why", "Why this verdict", "Which findings made the word, what was asked of the chain, and what was never checked.", whyBody(slip.notes as DoorNote[], coverage, `${esc(slip.chain.name)} · ${esc(solanaWhen(slip))}${slip.at.timestamp ? ` · ${isoUtc(slip.at.timestamp)}` : ""}`, opts.source), false) : "",
       stage0 === "done" ? section("s-watch", "Watch for changes", "Whether this tab can follow the mint after you leave it.", watchBody(splWatch(slip)), false) : "",
@@ -2109,6 +2183,7 @@ function renderSplSlip(slip: SplSlip, opts: { stage?: Stage; source?: Source } =
     try { await navigator.clipboard.writeText(url); showToast("Link copied"); } catch { showToast(url); }
   });
   wireRetry();
+  wireShape();
   if (m) wireExitCalc(m.decimals, (tokens) => splExitFor(slip, tokens));
   if (after) remember({ ...after, chain: historyChain(after.chain) });
 }
@@ -2127,6 +2202,26 @@ function renderSplSlip(slip: SplSlip, opts: { stage?: Stage; source?: Source } =
  * ANSWERED last time are still in hand, so what actually goes back out is
  * roughly the part that failed.
  */
+/**
+ * The scan strip's cells open the row they name.
+ *
+ * Without this the strip is a picture of the answers and the reader has to
+ * find the matching row themselves — which makes it decoration, and
+ * decoration is what this page had too much of. With it, seeing that
+ * "control" is amber and reading why is one click.
+ */
+function wireShape(): void {
+  for (const cell of document.querySelectorAll<HTMLAnchorElement>(".cell[data-open]")) {
+    cell.addEventListener("click", (event) => {
+      event.preventDefault();
+      const row = document.getElementById(cell.dataset.open ?? "");
+      if (!(row instanceof HTMLDetailsElement)) return;
+      row.open = true;
+      row.scrollIntoView({ behavior: "smooth", block: "center" });
+    });
+  }
+}
+
 function wireRetry(): void {
   const button = document.getElementById("act-retry") as HTMLButtonElement | null;
   if (!button) return;
@@ -2570,6 +2665,8 @@ function renderSlip(slip: DoorSlip, opts: { stage?: Stage; source?: Source } = {
     room: (o && (o.holders || o.deployer || o.activity) ? holdersBody(slip) : "") + roomBody + crewBody + (d ? devSection(d, slip.subject, false, true) : ""),
   };
 
+  const answers = doorAnswers(slip);
+
   out.innerHTML = `<div class="slip">
     ${headBlock({
       sym,
@@ -2577,6 +2674,7 @@ function renderSlip(slip: DoorSlip, opts: { stage?: Stage; source?: Source } = {
       address: slip.subject,
       stamp: stampLabel(slip.stamp, slip.chain.launchpad),
       stampKind: slip.stamp,
+      answers,
       at: `${mode === "demo" ? "DEMO · " : ""}${esc(slip.chain.name)} · block ${slip.at.block} · ${isoUtc(slip.at.timestamp)}`,
       notes: slip.notes,
       stage: stage0,
@@ -2586,7 +2684,7 @@ function renderSlip(slip: DoorSlip, opts: { stage?: Stage; source?: Source } = {
     ${coverage ? coverageBand(coverage, stage0) : ""}
     ${changes ?? ""}
     <div class="card-wrap" id="card"></div>
-    ${questionRows(doorAnswers(slip), evidence, slip.notes)}
+    ${questionRows(answers, evidence, slip.notes)}
     ${moreStack([
       coverage && opts.source ? section("s-why", "Why this verdict", "Which findings made the word, what was asked of the chain, and what was never checked.", whyBody(slip.notes, coverage, `${esc(slip.chain.name)} · block ${slip.at.block} · ${isoUtc(slip.at.timestamp)}`, opts.source), false) : "",
       stage0 === "done" ? section("s-watch", "Watch for changes", "Get told when the dev moves or tokens go into a pool.", watchBody(offer), new URLSearchParams(location.hash.split("?")[1] ?? "").get("watch") === "1") : "",
@@ -2622,6 +2720,7 @@ function renderSlip(slip: DoorSlip, opts: { stage?: Stage; source?: Source } = {
     try { await navigator.clipboard.writeText(url); showToast("Link copied"); } catch { showToast(url); }
   });
   wireRetry();
+  wireShape();
   wireExitCalc(slip.id.meta?.decimals ?? 18, (tokens) => evmExitFor(slip, tokens));
   // Written after the band was drawn off the PREVIOUS snapshot; writing
   // first would compare the slip against itself and nothing would ever

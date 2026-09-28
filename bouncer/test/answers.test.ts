@@ -25,7 +25,12 @@ test("every token shape answers all five questions, in the order a reader asks t
     const a = doorAnswers(await slipFor(token));
     assert.deepEqual(a.map((x) => x.topic), ANSWER_TOPICS, token);
     for (const row of a) {
-      assert.ok(row.value.length > 0 && row.value.length <= 26, `${token} ${row.topic}: "${row.value}" is not a glanceable answer`);
+      // A sentence, not a metric, and short enough for one line of a row.
+      // The old ceiling was 26 characters, which is what forced values like
+      // "4 switches" — short, and meaningless to somebody who has never read
+      // a contract.
+      assert.ok(row.value.length > 0 && row.value.length <= 72, `${token} ${row.topic}: "${row.value}" is too long for a row`);
+      if (row.figure) assert.ok(row.figure.length <= 16, `${token} ${row.topic}: the figure "${row.figure}" will not fit the scan strip`);
       assert.ok(row.question.endsWith("?"), `${token} ${row.topic}: the question is not a question`);
     }
   }
@@ -79,7 +84,7 @@ test("the impostor's row says which question it failed, not just that it is red"
   assert.equal(id.tone, "stop");
   // A red row reading "Ordinary token" is a row whose colour and words
   // disagree: the reader has to open it to find out it means "wrong one".
-  assert.match(id.value, /Wrong one/i, `the red id row reads "${id.value}"`);
+  assert.match(id.value, /another token used this ticker first/i, `the red id row reads "${id.value}"`);
 });
 
 /**
@@ -98,7 +103,7 @@ test("an unread read is unknown, never a clean answer", () => {
   const rows = doorAnswers(blind);
   const by = Object.fromEntries(rows.map((r) => [r.topic, r]));
   assert.equal(by.keep.tone, "unknown");
-  assert.match(by.keep.value, /Unreadable/);
+  assert.match(by.keep.value, /could not be read/);
   assert.equal(by.exit.tone, "unknown", "a refused pool read is not 'no pool'");
   assert.equal(by.room.tone, "unknown");
   // Exactly one row is answered: the token's own symbol and supply came
@@ -126,8 +131,10 @@ test("Solana answers the same five questions with its own reads", () => {
   const rows = splAnswers(mint);
   assert.deepEqual(rows.map((r) => r.topic), ANSWER_TOPICS);
   const by = Object.fromEntries(rows.map((r) => [r.topic, r]));
-  assert.match(by.keep.value, /1 authority/, "a freeze authority is an authority still set");
+  assert.match(by.keep.value, /freeze what you hold/, "a freeze authority is something somebody can still do to you");
+  assert.deepEqual(by.keep.chips.map((c) => c.text), ["freeze"], "the authority is named as an object, not counted");
   assert.match(by.room.value, /42%/);
+  assert.ok(by.room.bar?.length, "who holds the supply reads as a shape, not a percentage alone");
   // No market read at all is not "no pool": it is a question nobody asked,
   // and answering it green would be the audit's own bug in miniature.
   assert.equal(by.exit.tone, "unknown");

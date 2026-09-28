@@ -32,7 +32,7 @@
  */
 import { formatBps, formatUnits, shortAddress } from "../format.js";
 import type { DoorNote, DoorSlip } from "./door.js";
-import { powerKinds, sellProbes, type OpenDoor } from "./openDoor.js";
+import { powerKinds, sellProbes, POWER_VERB } from "./openDoor.js";
 import type { SplSlip } from "./spl.js";
 import { TOPIC_ORDER, topicOf, type Topic } from "./topics.js";
 
@@ -50,13 +50,42 @@ export interface Answer {
   topic: Topic;
   /** The question, in the words a reader would use. Short enough for a row. */
   question: string;
-  /** The answer, short enough to read at a glance. Two or three words. */
+  /**
+   * The answer, in words somebody who has never read a contract can act on.
+   *
+   * This used to be the metric — "4 switches", "2 of 3 wallets" — which is
+   * short and says nothing. Four switches to do what? Three wallets out of
+   * which three? The whole point of this tool is to translate, and compressing
+   * is not translating. So the sentence is the answer and the metric moved to
+   * `figure`, where it supports rather than substitutes.
+   */
   value: string;
   tone: Tone;
-  /** One more line of context, or null when the value says it all. */
+  /** The number, for the scan down the right-hand edge. Null when there is none worth showing. */
+  figure: string | null;
+  /** Things worth seeing as objects rather than counting: switch names, extensions. */
+  chips: { text: string; tone: Tone }[];
+  /**
+   * The answer as a picture, when the data makes one: which share of the
+   * supply sits where, which simulated wallets could sell. Segments in basis
+   * points; they need not add to 10 000, and what is left is drawn as the rest.
+   */
+  bar: { label: string; bps: number; tone: Tone }[] | null;
+  /** One more line of context, shown when the row is opened. */
   detail: string | null;
   /** The findings behind this row, worst first. What opens when it is tapped. */
   notes: DoorNote[];
+}
+
+/** An answer with nothing but words: the common case. */
+function plain(topic: Topic, value: string, tone: Tone, detail: string | null, notes: DoorNote[], figure: string | null = null): Answer {
+  return { topic, question: SHORT_QUESTION[topic], value, tone, figure, chips: [], bar: null, detail, notes };
+}
+
+/** "a, b and c" — a list somebody reads rather than parses. */
+function listOf(items: string[]): string {
+  if (items.length <= 1) return items[0] ?? "";
+  return `${items.slice(0, -1).join(", ")} and ${items[items.length - 1]}`;
 }
 
 /** The five, in the order a reader asks them. `unread` is not one of them. */
@@ -90,90 +119,84 @@ function toneOf(notes: DoorNote[], fallback: Tone = "ok"): Tone {
 function idAnswer(slip: DoorSlip, notes: DoorNote[]): Answer {
   const mine = notesFor(notes, "id");
   const meta = slip.id.meta;
-  let value: string;
-  let detail: string | null;
-  if (!meta) {
-    value = "Not a token";
-    detail = slip.known ?? "this address does not answer the ERC-20 views";
-  } else if (slip.id.v1) {
-    // Before `registered`, not after it. A V1 token is registered too — the
-    // door reads it from the older factory — so asking `registered` first
-    // announced every V1 launch as a V2 one.
-    value = "Real Pons V1 launch";
-    detail = "the older factory's record names this token";
-  } else if (slip.id.registered) {
-    value = `Real ${slip.chain.launchpad ?? "launchpad"} launch`;
-    detail = "the factory's own record names this token";
-  } else if (mine.some((n) => n.code === "lookalike-impostor")) {
+  const t = (v: string, d: string | null, f: string | null = null) => plain("id", v, toneOf(mine), d, mine, f);
+  if (!meta) return { ...t("Not a token you can hold", slip.known ?? "this address does not answer the ERC-20 views"), tone: toneOf(mine, "stop") };
+  if (mine.some((n) => n.code === "lookalike-impostor")) {
     // A red row reading "Ordinary token" is a row whose colour and words
     // disagree. When the lookalike read found an older token with this
     // ticker, that IS the answer to "is this the right one".
-    value = "Wrong one";
-    detail = "another token with this ticker launched first";
-  } else {
-    value = "Ordinary token";
-    detail = slip.chain.launchpad ? `no ${slip.chain.launchpad} record; checked as any ERC-20` : "checked as any ERC-20";
+    return t("No — another token used this ticker first", "the factory decides which is real, not the name; the older one is listed inside", "lookalike");
   }
-  return { topic: "id", question: SHORT_QUESTION.id, value, tone: toneOf(mine), detail, notes: mine };
+  // `v1` before `registered`: a V1 token is registered too — the door reads it
+  // from the older factory — so asking `registered` first called every V1
+  // launch a V2 one.
+  if (slip.id.v1) return t("Yes — a real Pons V1 launch", "the older factory's own record names this token", "V1");
+  if (slip.id.registered) return t(`Yes — a real ${slip.chain.launchpad ?? "launchpad"} launch`, "the factory's own record names this token, which is the whole genuineness test", "on the list");
+  return t(
+    `An ordinary token, not from ${slip.chain.launchpad ?? "a launchpad"}`,
+    "that is what most tokens are; it means the checks below are read off its own code rather than a factory record",
+    "no record",
+  );
 }
 
 /**
  * Can they take it from you?
  *
- * The count is of switches the code carries, not of switches somebody can
- * pull: who may call a function is not readable from bytecode, and this row
- * must not imply otherwise. `exempt` and `sweep` are left out of the count
- * for the same reason the receipt leaves them out — they are housekeeping on
- * most tokens and would put a "2" on a contract with nothing dangerous in it.
+ * The count of switches is the figure; the ANSWER is what those switches let
+ * somebody do, in verbs. "4 switches" is a number a reader has to go and look
+ * up. "The owner can print more, freeze every transfer and block wallets from
+ * selling" is a thing they can act on.
+ *
+ * `exempt` and `sweep` stay out of the count for the same reason the receipt
+ * leaves them out: they are housekeeping on most tokens and would put a "2" on
+ * a contract with nothing dangerous in it.
  */
 function keepAnswer(slip: DoorSlip, notes: DoorNote[]): Answer {
   const mine = notesFor(notes, "keep");
   const o = slip.open;
   if (o?.surfaceFrom === "implementation-unreadable") {
-    return { topic: "keep", question: SHORT_QUESTION.keep, value: "Unreadable", tone: "unknown", detail: "this is a proxy and the code it points at would not load", notes: mine };
+    return plain("keep", "Unknown — the code that runs could not be read", "unknown", "this is a proxy and the implementation it points at would not load, so its switches are unknown rather than absent", mine, "unreadable");
   }
   if (!o) {
-    // A launchpad token has no bytecode surface to read: the same contract is
-    // deployed for every launch, and what the creator can still change is
-    // named by the factory's own events. Those are the switches here.
     const r = slip.rules;
-    if (!r) return { topic: "keep", question: SHORT_QUESTION.keep, value: "Not read", tone: "unknown", detail: "the house rules read did not run", notes: mine };
+    if (!r) return plain("keep", "Not read", "unknown", "the house rules read did not run", mine);
     const moved = r.creatorFeeRecipientChanges.length;
     const flips = r.buybackChanges.length;
-    // Only what actually changed gets a sentence. The first version printed
-    // "1 change" over a detail reading "moved the tax recipient 0 times",
-    // which is a row arguing with itself.
     const did = [
-      moved ? `moved the tax recipient ${moved === 1 ? "once" : `${moved} times`}` : null,
-      flips ? `flipped buyback ${flips === 1 ? "once" : `${flips} times`}` : null,
+      moved ? `moved where the tax goes ${moved === 1 ? "once" : `${moved} times`}` : null,
+      flips ? `switched buyback ${flips === 1 ? "once" : `${flips} times`}` : null,
     ].filter((x): x is string => Boolean(x));
-    const changed = moved + flips;
     return {
-      topic: "keep",
-      question: SHORT_QUESTION.keep,
-      value: changed ? `${changed} change${changed === 1 ? "" : "s"} since launch` : "Factory rules",
-      tone: toneOf(mine),
-      detail: did.length
-        ? `the creator has ${did.join(" and ")}`
-        : `every trade pays ${formatBps(r.totalTradeBps)}, set by the factory, and the creator has changed nothing since launch`,
-      notes: mine,
+      ...plain(
+        "keep",
+        did.length ? `The creator has ${listOf(did)}` : "No — the factory sets the rules, not the creator",
+        toneOf(mine),
+        did.length ? "the factory records every such change, and these are all of them since launch" : `every trade pays ${formatBps(r.totalTradeBps)} and the creator cannot change it`,
+        mine,
+        did.length ? `${moved + flips} change${moved + flips === 1 ? "" : "s"}` : "no changes",
+      ),
     };
   }
   const kinds = powerKinds(o).filter((k) => k !== "exempt" && k !== "sweep");
+  const renounced = o.owner?.renounced === true;
   const who = o.ownerUnread
-    ? "owner() did not answer"
+    ? "the owner() view is in the code but the chain would not answer it"
     : o.owner === null
-      ? "no owner function in the code"
-      : o.owner.renounced
-        ? "ownership is renounced"
-        : `owner ${shortAddress(o.owner.address)}${o.owner.isContract ? " (a contract)" : ""} has not renounced`;
+      ? "there is no owner() function, so no single address is named"
+      : renounced
+        ? "ownership is renounced, so nobody can call an owner-only function"
+        : `${shortAddress(o.owner.address)}${o.owner.isContract ? ", a contract," : ""} still owns it`;
+  const value = !kinds.length
+    ? "No — the code has no switch for it"
+    : renounced
+      ? `The switches are there, but ownership is renounced`
+      // Two verbs and a count, not three and a clause. The row has one line
+      // and a phone has 390 pixels of it; a sentence that wraps to three is
+      // back to being a paragraph.
+      : `Yes — whoever owns it can ${listOf(kinds.slice(0, 2).map((k) => POWER_VERB[k]))}${kinds.length > 2 ? ` +${kinds.length - 2} more` : ""}`;
   return {
-    topic: "keep",
-    question: SHORT_QUESTION.keep,
-    value: kinds.length ? `${kinds.length} switch${kinds.length === 1 ? "" : "es"}` : "No switches",
-    tone: toneOf(mine),
-    detail: kinds.length ? `${kinds.join(", ")} · ${who}` : `no mint, pause, blacklist, fee or trading switch is in the code · ${who}`,
-    notes: mine,
+    ...plain("keep", value, toneOf(mine), `${who}. Which of these is guarded, and by whom, is not readable from bytecode.`, mine, kinds.length ? `${kinds.length} switch${kinds.length === 1 ? "" : "es"}` : "none"),
+    chips: kinds.map((k) => ({ text: k, tone: renounced ? ("unknown" as Tone) : ("warn" as Tone) })),
   };
 }
 
@@ -188,45 +211,42 @@ function sellAnswer(slip: DoorSlip, notes: DoorNote[]): Answer {
     const r = slip.rules;
     const c = slip.cover;
     if (c?.status === "open") {
-      return { topic: "sell", question: SHORT_QUESTION.sell, value: `Wait ${c.secondsLeft}s`, tone: "warn", detail: `the door tax is still on: a buy right now pays up to ${formatBps(c.terms.startBps)} to the creator`, notes: mine };
+      return plain("sell", `Wait — the door tax is on for ${c.secondsLeft} more seconds`, "warn", `a buy in the launch second pays up to ${formatBps(c.terms.startBps)} to the creator; it decays to nothing over ${c.terms.seconds} s`, mine, `${c.secondsLeft}s`);
     }
-    return {
-      topic: "sell",
-      question: SHORT_QUESTION.sell,
-      value: `Yes, ${formatBps(r.totalTradeBps)} fee`,
-      tone: toneOf(mine),
-      detail: r.phase === 0 ? "on the curve, which takes sells at any size" : "in the graduated pool",
-      notes: mine,
-    };
+    return plain("sell", `Yes — the curve takes sells at any size`, toneOf(mine), `every trade pays ${formatBps(r.totalTradeBps)}, of which ${formatBps(r.creatorTaxBps)} goes to the creator`, mine, formatBps(r.totalTradeBps));
   }
   const probes = o ? sellProbes(o) : [];
   const ran = probes.filter((p) => p.status !== "unread");
   if (o && !o.transferFunction) {
-    // Tone from the notes, not asserted here. On a V1 launch the core files
-    // this as an INFO — the factory record already establishes what the token
-    // is — and a row shouting STOP over a calm finding is a row whose colour
-    // argues with the evidence it opens.
-    return { topic: "sell", question: SHORT_QUESTION.sell, value: "No transfer function", tone: toneOf(mine, "unknown"), detail: "no transfer(address,uint256) is in the code, so no sale could be simulated", notes: mine };
+    return plain("sell", "No transfer function is in the code", toneOf(mine, "unknown"), "so no sale could be simulated; whatever this contract is, it is not a plain ERC-20", mine);
   }
   if (!ran.length) {
     const why = o?.probesPending ? "the simulation has not run yet" : (o?.probesSkipped ?? "no sale was simulated");
-    return { topic: "sell", question: SHORT_QUESTION.sell, value: "Not checked", tone: "unknown", detail: why, notes: mine };
+    return plain("sell", "Not checked", "unknown", why, mine);
   }
   const ok = ran.filter((p) => p.status === "ok").length;
   const reason = ran.find((p) => p.status === "reverts")?.reason;
+  // Two segments, not one per wallet. One-per-wallet drew a legend of three
+  // truncated addresses under a three-part bar, which is noise: the thing
+  // being shown is the proportion that could sell, and nobody needs to know
+  // which anonymous holder was which to read it.
+  const blocked = ran.length - ok;
+  const bar = (
+    [
+      { label: `${ok} could sell`, bps: Math.round((10_000 * ok) / ran.length), tone: "ok" as Tone },
+      { label: `${blocked} refused`, bps: Math.round((10_000 * blocked) / ran.length), tone: "stop" as Tone },
+    ] as { label: string; bps: number; tone: Tone }[]
+  ).filter((x) => x.bps > 0);
+  const figure = `${ok}/${ran.length}`;
   if (ok === ran.length) {
-    return { topic: "sell", question: SHORT_QUESTION.sell, value: "Yes", tone: toneOf(mine), detail: `a sale into the pool goes through for all ${ran.length} wallet${ran.length === 1 ? "" : "s"} tried, simulated at this block`, notes: mine };
+    return { ...plain("sell", "Yes — every wallet we tried could sell", toneOf(mine), `simulated with eth_call at this block, nothing signed. A tax on the sale, a cap on its size, or a rule flipped tomorrow would not show up here.`, mine, figure), bar };
   }
   if (ok === 0) {
-    return { topic: "sell", question: SHORT_QUESTION.sell, value: "No", tone: "stop", detail: `every wallet tried is refused${reason ? ` ("${reason}")` : ""}`, notes: mine };
+    return { ...plain("sell", "No — every wallet we tried was refused", "stop", `the chain gave the reason${reason ? ` "${reason}"` : ""}. A token that takes your money and will not let it out looks exactly like this.`, mine, figure), bar };
   }
   return {
-    topic: "sell",
-    question: SHORT_QUESTION.sell,
-    value: `${ok} of ${ran.length} wallets`,
-    tone: toneOf(mine, "warn"),
-    detail: `the rest are refused${reason ? ` ("${reason}")` : ""} — a blacklist looks like this`,
-    notes: mine,
+    ...plain("sell", `Not everyone — ${ran.length - ok} of the ${ran.length} wallets we tried is blocked`, toneOf(mine), `the rest go through${reason ? `; the blocked one was refused with "${reason}"` : ""}. A blacklist, or a lock on chosen wallets, looks like this.`, mine, figure),
+    bar,
   };
 }
 
@@ -237,67 +257,91 @@ function exitAnswer(slip: DoorSlip, notes: DoorNote[]): Answer {
   if (e && e.quotes.length) {
     const q = e.quotes.find((x) => x.shareBps === 1_000) ?? e.quotes[0];
     const quote = slip.rules?.quote ?? slip.chain.native;
-    return {
-      topic: "exit",
-      question: SHORT_QUESTION.exit,
-      value: `${formatUnits(q.net, quote.decimals, 4)} ${quote.symbol}`,
-      tone: toneOf(mine),
-      detail: `for ${(q.shareBps / 100).toFixed(0)}% of the position, on ${e.venue} · ${(q.realisedBps / 100).toFixed(1)}% of spot`,
-      notes: mine,
-    };
+    const amount = `${formatUnits(q.net, quote.decimals, 4)} ${quote.symbol}`;
+    return plain(
+      "exit",
+      `Selling ${(q.shareBps / 100).toFixed(0)}% of the position pays ${amount}`,
+      toneOf(mine),
+      `on the ${e.venue}, after fees, at this block — ${(q.realisedBps / 100).toFixed(1)}% of what the quoted price says it is worth. The gap is what your own sale does to the price.`,
+      mine,
+      amount,
+    );
   }
   const m = slip.open?.market;
   if (m?.best && m.quotes.length) {
-    // The pools are paired against the chain's wrapped native coin, which is
-    // what `readMarket` was handed as the quote symbol and what every figure
-    // in `quotes` is denominated in.
     const q = m.quotes[0];
     const quote = slip.chain.native;
-    return {
-      topic: "exit",
-      question: SHORT_QUESTION.exit,
-      value: `${formatUnits(q.out, quote.decimals, 4)} ${quote.symbol}`,
-      tone: toneOf(mine),
-      detail: `for ${(q.shareBps / 100).toFixed(0)}% of the position on ${m.best.dex} · ${(q.realisedBps / 100).toFixed(1)}% of spot`,
-      notes: mine,
-    };
+    const amount = `${formatUnits(q.out, quote.decimals, 4)} ${quote.symbol}`;
+    return plain(
+      "exit",
+      `Selling ${(q.shareBps / 100).toFixed(0)}% of the supply pays ${amount}`,
+      toneOf(mine),
+      `priced against the ${m.best.dex} pool's own reserves at this block — ${(q.realisedBps / 100).toFixed(1)}% of the quoted price. The token's own transfer tax, if it has one, is not included.`,
+      mine,
+      amount,
+    );
   }
   if (slip.open?.pools === null) {
-    return { topic: "exit", question: SHORT_QUESTION.exit, value: "Not checked", tone: "unknown", detail: "the pool read did not finish, so nothing can be said about selling", notes: mine };
+    return plain("exit", "Not checked — the pool read did not finish", "unknown", "so nothing can be said about getting out; this is worth one retry", mine);
   }
   if (slip.open && (slip.open.pools ?? []).length === 0) {
-    return { topic: "exit", question: SHORT_QUESTION.exit, value: "No pool", tone: toneOf(mine), detail: "no pool was found on this chain's DEX table; it may trade somewhere this does not read", notes: mine };
+    return plain("exit", "Nowhere to sell it that this can see", toneOf(mine), "no pool on this chain's known DEX factories. It may trade on a venue this does not read, against another pair, or not at all.", mine, "no pool");
   }
-  return { topic: "exit", question: SHORT_QUESTION.exit, value: "Not priced", tone: "unknown", detail: "a pool was found but nothing in it could be priced", notes: mine };
+  return plain("exit", "A pool exists but nothing in it could be priced", "unknown", "the reserves did not come back, so a sale cannot be quoted", mine);
 }
 
-/** Who else is inside? The one number that decides how much of the float is somebody else's. */
+/**
+ * Who else is inside?
+ *
+ * The share of the supply that is somebody else's is the one number here, and
+ * it reads better as a picture than as a percentage: a bar showing what the
+ * ten largest wallets hold next to what sits in pools, what is burned, and
+ * what is left for everybody else.
+ */
 function roomAnswer(slip: DoorSlip, notes: DoorNote[]): Answer {
   const mine = notesFor(notes, "room");
   const h = slip.open?.holders;
   const top = h?.top10WalletsBps ?? null;
   if (top !== null) {
+    const dev = slip.open?.deployer?.bps ?? null;
+    const contracts = h?.contractsBps ?? 0;
+    const burned = h?.burnedBps ?? 0;
+    const rest = Math.max(0, 10_000 - top - contracts - burned);
+    const value =
+      dev !== null && dev >= 1_000
+        ? `The deployer alone holds ${(dev / 100).toFixed(0)}% of everything`
+        : `The ten largest wallets hold ${(top / 100).toFixed(0)}% between them`;
     return {
-      topic: "room",
-      question: SHORT_QUESTION.room,
-      value: `Top 10 hold ${(top / 100).toFixed(0)}%`,
-      tone: toneOf(mine),
-      detail: h?.count ? `of supply · ${h.count} holders${slip.open?.deployer?.bps ? `, the deployer holds ${(slip.open.deployer.bps / 100).toFixed(1)}%` : ""}` : "of supply, over the page the explorer returned",
-      notes: mine,
+      ...plain(
+        "room",
+        value,
+        toneOf(mine),
+        `${h?.count ? `${h.count} holders in all. ` : ""}Contracts — pools, lockers, the token itself — hold ${(contracts / 100).toFixed(0)}%, and ${(burned / 100).toFixed(0)}% is burned. Shares are computed over the page the explorer returned.`,
+        mine,
+        `${(top / 100).toFixed(0)}%`,
+      ),
+      bar: (
+        [
+          { label: "top 10 wallets", bps: top, tone: (top >= 5_000 ? "stop" : top >= 3_000 ? "warn" : "ok") as Tone },
+          { label: "in contracts", bps: contracts, tone: "unknown" as Tone },
+          { label: "burned", bps: burned, tone: "ok" as Tone },
+          { label: "everybody else", bps: rest, tone: "ok" as Tone },
+        ] as { label: string; bps: number; tone: Tone }[]
+      ).filter((x) => x.bps > 0),
     };
   }
   const room = slip.room;
   if (room && room.buys > 0) {
-    return {
-      topic: "room",
-      question: SHORT_QUESTION.room,
-      value: `${room.buyers} buyers`,
-      tone: toneOf(mine),
-      detail: `the creator's own wallets funded ${(room.devShareBps / 100).toFixed(0)}% of everything bought`,
-      notes: mine,
-    };
+    return plain(
+      "room",
+      room.devShareBps >= 2_000 ? `The creator's own wallets funded ${(room.devShareBps / 100).toFixed(0)}% of every buy` : `${room.buyers} wallets have bought since launch`,
+      toneOf(mine),
+      `${room.buys} buys and ${room.sells} sells on the curve so far`,
+      mine,
+      `${room.buyers} buyers`,
+    );
   }
-  return { topic: "room", question: SHORT_QUESTION.room, value: "Not read", tone: "unknown", detail: "the holder list did not answer", notes: mine };
+  return plain("room", "Not read — the holder list did not answer", "unknown", "who holds the supply is one of the two questions that decide whether you can get out, and it is open", mine);
 }
 
 /** The five rows for an EVM token. */
@@ -319,78 +363,110 @@ export function splAnswers(slip: SplSlip): Answer[] {
   const ext = (kind: string) => m?.extensions.find((e) => e.kind === kind) ?? null;
 
   const idNotes = notesFor(notes, "id");
-  const id: Answer = {
-    topic: "id",
-    question: SHORT_QUESTION.id,
-    value: m ? (m.token2022 ? "Token-2022 mint" : "SPL mint") : "Not a mint",
-    tone: toneOf(idNotes),
-    detail: m
+  const id: Answer = plain(
+    "id",
+    m
       ? slip.metadata
-        ? `${slip.metadata.name} (${slip.metadata.symbol})${slip.metadata.isMutable ? " · the name can still be changed" : " · the name is frozen"}`
-        : "no metadata account was found"
+        ? `${slip.metadata.name} — ${slip.metadata.isMutable ? "and the name can still be changed" : "and the name is frozen"}`
+        : "A mint with no metadata account"
+      : "Not a mint you can hold",
+    m ? toneOf(idNotes) : toneOf(idNotes, "stop"),
+    m
+      ? m.token2022
+        ? "a Token-2022 mint, which is the program where fees, hooks and permanent delegates live"
+        : "a classic SPL mint, which has no extensions and therefore no hidden transfer rules"
       : (slip.whatItIs ?? "this address is not an SPL mint"),
-    notes: idNotes,
-  };
+    idNotes,
+    m ? (m.token2022 ? "Token-2022" : "SPL") : null,
+  );
 
   const keepNotes = notesFor(notes, "keep");
-  const keys = m ? [m.mintAuthority ? "mint" : null, m.freezeAuthority ? "freeze" : null, ext("permanent-delegate") ? "permanent delegate" : null].filter(Boolean) : [];
+  const keys = m
+    ? [
+        m.mintAuthority ? { text: "mint", what: "print more" } : null,
+        m.freezeAuthority ? { text: "freeze", what: "freeze what you hold" } : null,
+        ext("permanent-delegate") ? { text: "delegate", what: "move your tokens without asking" } : null,
+      ].filter((x): x is { text: string; what: string } => Boolean(x))
+    : [];
   const keep: Answer = {
-    topic: "keep",
-    question: SHORT_QUESTION.keep,
-    value: !m ? "Not read" : keys.length ? `${keys.length} authorit${keys.length === 1 ? "y" : "ies"}` : "No authorities",
-    tone: !m ? "unknown" : toneOf(keepNotes),
-    detail: !m ? "there is no mint account to read" : keys.length ? `${keys.join(", ")} still set` : "nobody can print more or freeze what you hold",
-    notes: keepNotes,
+    ...plain(
+      "keep",
+      !m ? "Not read" : keys.length ? `Yes — someone can still ${listOf(keys.map((k) => k.what))}` : "No — nobody can print more or freeze you",
+      !m ? "unknown" : toneOf(keepNotes),
+      !m
+        ? "there is no mint account to read"
+        : keys.length
+          ? "these are fields on the mint account itself, which makes them the most certain answers on this chain"
+          : "the mint and freeze authorities are both unset, and neither can be set again",
+      keepNotes,
+      !m ? null : keys.length ? `${keys.length} key${keys.length === 1 ? "" : "s"}` : "none",
+    ),
+    chips: keys.map((k) => ({ text: k.text, tone: "warn" as Tone })),
   };
 
   const sellNotes = notesFor(notes, "sell");
   const fee = ext("transfer-fee");
-  const sell: Answer = {
-    topic: "sell",
-    question: SHORT_QUESTION.sell,
-    value: !m ? "Not read" : ext("non-transferable") ? "No" : fee?.kind === "transfer-fee" ? `Yes, ${(fee.feeBps / 100).toFixed(2)}% fee` : "Yes",
-    tone: !m ? "unknown" : toneOf(sellNotes),
-    detail: !m
-      ? "there is no mint account to read"
+  const sell: Answer = plain(
+    "sell",
+    !m
+      ? "Not read"
       : ext("non-transferable")
-        ? "the token program itself refuses every transfer"
-        : m.freezeAuthority
-          ? "unless the freeze authority freezes your account first"
-          : "the token program puts no rule in the way",
-    notes: sellNotes,
-  };
+        ? "No — the token program refuses every transfer"
+        : fee?.kind === "transfer-fee"
+          ? `Yes, but every transfer is taxed ${(fee.feeBps / 100).toFixed(2)}%`
+          : m.freezeAuthority
+            ? "Yes — unless your account gets frozen first"
+            : "Yes — the token program puts no rule in the way",
+    !m ? "unknown" : toneOf(sellNotes),
+    !m
+      ? "there is no mint account to read"
+      : "on Solana this is enforced by the token program itself rather than by the token's own code, so it is read rather than simulated",
+    sellNotes,
+    !m ? null : fee?.kind === "transfer-fee" ? `${(fee.feeBps / 100).toFixed(2)}%` : ext("non-transferable") ? "blocked" : "free",
+  );
 
   const exitNotes = notesFor(notes, "exit");
   const market = slip.market;
   const pool = market?.pools.filter((p) => p.quoteReserve > 0n).sort((a, b) => (b.quoteReserve > a.quoteReserve ? 1 : -1))[0];
   // `market: null` is a read that never ran, `market.unread` is one that was
-  // refused, and an empty `pools` is one that finished and found nothing.
-  // Only the third is "no pool found" — the first two are unknown, and
-  // painting them green as "no pool" is the same mistake, in miniature, that
-  // this whole module exists to stop: unreachable is not empty.
+  // refused, and an empty `pools` is one that finished and found nothing. Only
+  // the third is "no pool" — painting the first two green would be the same
+  // mistake, in miniature, that this module exists to stop.
   const exitUnread = !market ? "the venue read did not run" : market.unread;
-  const exit: Answer = {
-    topic: "exit",
-    question: SHORT_QUESTION.exit,
-    value: exitUnread ? "Not checked" : pool ? `${formatUnits(pool.quoteReserve, pool.quoteDecimals, 2)} ${pool.quoteSymbol} pool` : "No pool found",
-    tone: exitUnread ? "unknown" : toneOf(exitNotes),
-    detail: exitUnread
-      ? exitUnread
-      : pool
-        ? `the deepest venue found · ${market?.pools.length} in all`
-        : "no venue answered; it may trade somewhere this does not read",
-    notes: exitNotes,
-  };
+  const depth = pool ? `${formatUnits(pool.quoteReserve, pool.quoteDecimals, 2)} ${pool.quoteSymbol}` : null;
+  const exit: Answer = plain(
+    "exit",
+    exitUnread ? "Not checked" : depth ? `The deepest pool holds ${depth}` : "Nowhere to sell it that this can see",
+    exitUnread ? "unknown" : toneOf(exitNotes),
+    exitUnread
+      ? `${exitUnread} — an empty answer from a refused search proves nothing`
+      : depth
+        ? `${market?.pools.length} venue${market?.pools.length === 1 ? "" : "s"} found in all; what you would actually get for your own size is in the calculator inside`
+        : "no venue answered. It may trade somewhere this does not read.",
+    exitNotes,
+    depth,
+  );
 
   const roomNotes = notesFor(notes, "room");
   const top = slip.holders?.top10Bps ?? null;
   const room: Answer = {
-    topic: "room",
-    question: SHORT_QUESTION.room,
-    value: top === null ? "Not read" : `Top 10 hold ${(top / 100).toFixed(0)}%`,
-    tone: top === null ? "unknown" : toneOf(roomNotes),
-    detail: top === null ? "the node refused the largest-accounts read" : `of supply · ${slip.holders?.distinctOwners ?? "an unknown number of"} distinct wallets behind the largest accounts`,
-    notes: roomNotes,
+    ...plain(
+      "room",
+      top === null ? "Not read — the node refused the holder list" : `The ten largest accounts hold ${(top / 100).toFixed(0)}% between them`,
+      top === null ? "unknown" : toneOf(roomNotes),
+      top === null
+        ? "free Solana endpoints limit this read to paying keys. An empty answer from a refused search proves nothing."
+        : `behind them are ${slip.holders?.distinctOwners ?? "an unknown number of"} distinct wallets — one owner can hold many accounts, so accounts overstate how spread out a token is`,
+      roomNotes,
+      top === null ? null : `${(top / 100).toFixed(0)}%`,
+    ),
+    bar:
+      top === null
+        ? null
+        : [
+            { label: "top 10 accounts", bps: top, tone: (top >= 5_000 ? "stop" : top >= 3_000 ? "warn" : "ok") as Tone },
+            { label: "everybody else", bps: Math.max(0, 10_000 - top), tone: "ok" as Tone },
+          ],
   };
 
   return [id, keep, sell, exit, room];
