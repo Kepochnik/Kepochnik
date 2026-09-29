@@ -12,10 +12,11 @@
      the first pass and 1.6 s on the second, purely because the connection
      was already open. This opens it while the reader is still typing. -->
 <link rel="preconnect" href="https://bouncer-proxy.tarasenkosanja12.workers.dev" crossorigin>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;650;700&family=JetBrains+Mono:wght@400;500;700&display=swap">
 <style>
+/* @fonts — the build replaces this line with site/fonts.css: both faces,
+   latin subset, base64. Linked from Google they did not arrive at all on a
+   file:// page, in the extension popup or offline, and the whole page fell
+   back to the browser's default face without saying so. */
 /* ============================================================
    BOUNCER — an instrument that reads like a product.
 
@@ -46,13 +47,13 @@
 :root{
   /* Neutral near-black with a trace of blue. The old palette was olive,
      which reads as a terminal; this reads as a surface. */
-  --bg:#0a0b0d;
-  --surface:#101216;
-  --surface-2:#161920;
-  --surface-3:#1d212a;
+  --bg:#08090c;
+  --surface:#0e1014;
+  --surface-2:#14171e;
+  --surface-3:#1b1f28;
 
-  --line:rgba(255,255,255,.07);
-  --line-2:rgba(255,255,255,.12);
+  --line:rgba(255,255,255,.075);
+  --line-2:rgba(255,255,255,.13);
   --line-3:rgba(255,255,255,.2);
 
   --text:#f3f5f8;
@@ -72,8 +73,10 @@
   --brand-2:#f6d488;
   --brand-ink:#17140b;
 
-  --sans:"Inter",-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
+  --sans:"Geist",-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;
   --mono:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  /* Every figure on this page sits in a column under another figure. */
+  --tnum:tabular-nums;
 
   --r-sm:6px; --r:10px; --r-lg:14px; --r-xl:20px;
   --max:940px;
@@ -100,7 +103,7 @@ h1,h2,h3{margin:0;font-weight:600;letter-spacing:-.02em}
 p{margin:0}
 a{color:var(--brand);text-decoration:none}
 a:hover{text-decoration:underline}
-code,.mono{font-family:var(--mono);font-size:.92em;letter-spacing:0;font-variant-ligatures:none}
+code,.mono{font-family:var(--mono);font-size:.92em;letter-spacing:0;font-variant-ligatures:none;font-variant-numeric:var(--tnum)}
 :focus-visible{outline:none;box-shadow:var(--ring);border-radius:var(--r-sm)}
 .sr{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0}
 
@@ -136,7 +139,7 @@ header{position:sticky;top:0;z-index:40;background:rgba(10,11,13,.82);backdrop-f
 
 /* ---------------------------------------------------------------- the door */
 .hero{padding:48px 0 24px;max-width:620px}
-.hero h1{font-size:34px;line-height:1.12;letter-spacing:-.03em}
+.hero h1{font-size:34px;line-height:1.1;letter-spacing:-.035em;font-weight:650}
 .hero p{margin-top:14px;color:var(--muted);font-size:16px;line-height:1.55}
 .hero p b{color:var(--text);font-weight:500}
 
@@ -145,9 +148,11 @@ header{position:sticky;top:0;z-index:40;background:rgba(10,11,13,.82);backdrop-f
   border:1px solid var(--line-2);border-radius:var(--r);font:400 15px var(--mono);letter-spacing:-.01em}
 .door input::placeholder{color:var(--dimmer);font-family:var(--sans);letter-spacing:-.006em}
 .door input:focus{border-color:rgba(232,184,75,.5);box-shadow:var(--ring);outline:none}
-.btn{min-height:48px;padding:0 22px;background:var(--brand);color:var(--brand-ink);border:0;border-radius:var(--r);
-  font:600 14.5px var(--sans);letter-spacing:-.01em;cursor:pointer;white-space:nowrap}
-.btn:hover{background:var(--brand-2)}
+.btn{min-height:48px;padding:0 24px;background:var(--brand);color:var(--brand-ink);border:0;border-radius:var(--r);
+  font:650 14.5px var(--sans);letter-spacing:-.005em;cursor:pointer;white-space:nowrap;
+  box-shadow:0 1px 0 rgba(255,255,255,.22) inset,0 2px 10px -4px rgba(232,184,75,.6);
+  transition:background .12s ease,box-shadow .12s ease}
+.btn:hover{background:var(--brand-2);box-shadow:0 1px 0 rgba(255,255,255,.3) inset,0 4px 16px -4px rgba(232,184,75,.7)}
 .btn:disabled{opacity:.55;cursor:default}
 
 .chips{display:flex;flex-wrap:wrap;gap:7px;margin-top:12px}
@@ -211,7 +216,8 @@ header{position:sticky;top:0;z-index:40;background:rgba(10,11,13,.82);backdrop-f
    its rule, so it says here that it is a hook and not a style. */
 .head{}
 .doorway{display:grid;grid-template-columns:332px minmax(0,1fr);background:var(--surface);
-  border:1px solid var(--line);border-radius:var(--r-lg) var(--r-lg) 0 0;overflow:hidden;box-shadow:var(--shadow),var(--lip)}
+  border:1px solid var(--line);border-radius:var(--r-lg) var(--r-lg) 0 0;overflow:hidden;
+  box-shadow:0 1px 2px rgba(0,0,0,.5),0 24px 48px -28px rgba(0,0,0,.8),var(--lip)}
 /* One tone per verdict, set on the doorway and read by the stamp, the wash
    behind the bouncer and anything else that follows the word.
    Named `doorway`, not `door`: the page shell already calls the search box
@@ -223,7 +229,8 @@ header{position:sticky;top:0;z-index:40;background:rgba(10,11,13,.82);backdrop-f
 .doorway.v-clear{--tone:var(--ok);--tone-wash:rgba(61,214,140,.1)}
 
 /* the bouncer's side */
-.doorman{border-right:1px solid var(--line);background:var(--surface-2);display:flex;flex-direction:column;min-width:0}
+.doorman{border-right:1px solid var(--line);background:var(--surface-2);display:flex;flex-direction:column;min-width:0;
+  box-shadow:inset -1px 0 0 rgba(255,255,255,.02)}
 .stand{padding:24px 22px 20px;text-align:center;border-bottom:1px solid var(--line);position:relative}
 .stand::before{content:"";position:absolute;inset:0;pointer-events:none;
   background:radial-gradient(360px 200px at 50% -40px, var(--tone-wash), transparent 72%)}
@@ -232,14 +239,15 @@ header{position:sticky;top:0;z-index:40;background:rgba(10,11,13,.82);backdrop-f
    The tilt is small on purpose — a novelty angle would undercut the one word
    on the page that has to be taken seriously. */
 .verdict{position:relative}
-.vword{display:inline-block;margin-top:15px;padding:8px 17px;border:2px solid var(--tone);border-radius:8px;
-  color:var(--tone);font:800 21px var(--sans);letter-spacing:.05em;transform:rotate(-2.2deg)}
+.vword{display:inline-block;margin-top:16px;padding:9px 18px;border:2.5px solid var(--tone);border-radius:9px;
+  color:var(--tone);font:800 21px var(--sans);letter-spacing:.07em;transform:rotate(-2.2deg);
+  box-shadow:0 0 0 4px var(--tone-wash)}
 .lead{position:relative;margin-top:15px;color:var(--muted);font-size:13px;line-height:1.55;text-align:left}
 .lead .vpend{display:block;margin-top:6px;color:var(--dim);font-size:12px}
 
 .who2{padding:15px 22px;border-bottom:1px solid var(--line)}
-.cap-l{font-size:10px;letter-spacing:.09em;color:var(--dimmer);text-transform:uppercase}
-.sym{font-size:21px;font-weight:700;letter-spacing:-.025em;margin-top:6px;line-height:1.15}
+.cap-l{font:600 10px var(--sans);letter-spacing:.1em;color:var(--dimmer);text-transform:uppercase}
+.sym{font-size:21px;font-weight:700;letter-spacing:-.03em;margin-top:6px;line-height:1.15}
 .name{color:var(--dim);font-size:12.5px}
 .vaddr{display:block;width:100%;text-align:left;margin-top:8px;padding:0;background:none;border:0;
   font-family:var(--mono);font-size:11px;color:var(--dimmer);word-break:break-all;cursor:pointer}
@@ -262,21 +270,21 @@ header{position:sticky;top:0;z-index:40;background:rgba(10,11,13,.82);backdrop-f
 /* the figures */
 .facts{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px 10px;padding:15px 22px}
 .fact{min-width:0}
-.fact-l{font-size:10px;letter-spacing:.06em;color:var(--dimmer);text-transform:uppercase}
-.fact-v{font-family:var(--mono);font-size:15px;margin-top:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.fact-l{font:600 10px var(--sans);letter-spacing:.1em;color:var(--dimmer);text-transform:uppercase}
+.fact-v{font-family:var(--mono);font-variant-numeric:var(--tnum);font-size:15px;margin-top:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .fact-v.warn{color:var(--warn)}
 .fact-v.none{color:var(--dim)}
 .fact-n{font-size:10.5px;color:var(--dimmer);margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 
 .venues{padding:15px 22px;border-top:1px solid var(--line)}
 .venue{display:flex;justify-content:space-between;gap:10px;align-items:baseline;padding:6px 0;font-size:12px;color:var(--dim)}
-.venue b{color:var(--muted);font-family:var(--mono);font-weight:500}
+.venue b{color:var(--muted);font-family:var(--mono);font-variant-numeric:var(--tnum);font-weight:500}
 .venue+.venue{border-top:1px solid var(--line)}
 
 /* ---------------------------------------------------------------- the list */
 .list{display:flex;flex-direction:column;min-width:0}
 .list-head{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;padding:14px 22px 12px;border-bottom:1px solid var(--line)}
-.list-head h2{font-size:11px;letter-spacing:.1em;color:var(--dim);text-transform:uppercase;font-weight:600;white-space:nowrap}
+.list-head h2{font:600 10px var(--sans);letter-spacing:.1em;color:var(--dim);text-transform:uppercase;white-space:nowrap}
 .list-head span{color:var(--dimmer);font-size:11.5px}
 .list-head .vat{margin-left:auto;font-family:var(--mono);font-size:11px;color:var(--dimmer);white-space:nowrap}
 
@@ -292,10 +300,10 @@ header{position:sticky;top:0;z-index:40;background:rgba(10,11,13,.82);backdrop-f
 .qmark.warn{border-color:var(--warn);color:var(--warn)}
 .qmark.stop{border-color:var(--stop);color:var(--stop)}
 .qhead{flex-grow:1;min-width:0;display:grid;gap:4px}
-.qq{color:var(--dimmer);font-size:11px;letter-spacing:.05em;text-transform:uppercase}
+.qq{color:var(--dimmer);font:600 10px var(--sans);letter-spacing:.1em;text-transform:uppercase}
 .qv{font-size:15px;line-height:1.45;color:var(--text)}
 .qv.warn{color:var(--warn)} .qv.stop{color:var(--stop)} .qv.unknown{color:var(--dim)}
-.qfig{flex:none;align-self:center;font-family:var(--mono);font-size:14px;color:var(--dim);white-space:nowrap}
+.qfig{flex:none;align-self:center;font-family:var(--mono);font-variant-numeric:var(--tnum);font-size:14px;color:var(--dim);white-space:nowrap}
 .qfig.warn{color:var(--warn)} .qfig.stop{color:var(--stop)} .qfig.ok{color:var(--muted)}
 .qn{display:inline-flex;align-items:center;justify-content:center;min-width:18px;height:18px;padding:0 5px;flex:none;
   align-self:center;border-radius:999px;font:600 10.5px var(--sans);background:var(--surface-3);color:var(--dim)}
@@ -377,7 +385,7 @@ header{position:sticky;top:0;z-index:40;background:rgba(10,11,13,.82);backdrop-f
 .cap{margin:20px 0 0;font:600 10.5px var(--sans);letter-spacing:.1em;text-transform:uppercase;color:var(--dimmer)}
 .cap b{color:var(--muted);font-weight:600;letter-spacing:.02em;text-transform:none;font-size:12px}
 .tbl{margin-top:12px;overflow-x:auto;border:1px solid var(--line);border-radius:var(--r)}
-table.buys{width:100%;border-collapse:collapse;font-size:12.5px}
+table.buys{width:100%;border-collapse:collapse;font-size:12.5px;font-variant-numeric:var(--tnum)}
 table.buys th{text-align:left;padding:9px 13px;background:var(--surface-2);color:var(--dimmer);
   font:600 10px var(--sans);letter-spacing:.09em;text-transform:uppercase;white-space:nowrap;border-bottom:1px solid var(--line)}
 table.buys td{padding:9px 13px;border-top:1px solid var(--line);color:var(--muted);white-space:nowrap}
@@ -438,10 +446,9 @@ table.buys tr:first-child td{border-top:0}
 .whylist code{color:var(--dimmer);font-size:11.5px;margin-left:6px}
 
 /* ---------------------------------------------------------------- more */
-.more{background:var(--surface);border:1px solid var(--line);border-radius:var(--r-lg);overflow:hidden;box-shadow:var(--shadow),var(--lip)}
-.more-head{padding:13px 22px;font:600 10.5px var(--sans);letter-spacing:.1em;text-transform:uppercase;color:var(--dimmer);border-bottom:1px solid var(--line)}
+.more{border-top:1px solid var(--line)}
+.more-head{padding:13px 22px 0;font:600 10px var(--sans);letter-spacing:.1em;text-transform:uppercase;color:var(--dimmer)}
 .sec{border-top:1px solid var(--line)}
-.sec:first-of-type{border-top:0}
 .sec>summary{display:flex;align-items:center;gap:12px;padding:14px 22px;cursor:pointer;list-style:none;min-height:52px}
 .sec>summary::-webkit-details-marker{display:none}
 .sec>summary:hover{background:var(--surface-2)}

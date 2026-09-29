@@ -24,7 +24,11 @@ await build({
   tsconfigRaw: { compilerOptions: { target: "ES2022", strict: true } },
 });
 const js = readFileSync("site/dist/app.js", "utf8");
-const html = readFileSync("site/index.html", "utf8");
+// The faces go INTO the file. Linked, they were absent on file://, in the
+// extension popup and offline — and the page said nothing, it just rendered in
+// whatever the browser had.
+const fonts = readFileSync("site/fonts.css", "utf8");
+const html = readFileSync("site/index.html", "utf8").replace(/^\/\* @fonts.*?\*\/$/ms, fonts);
 const inlined = html.replace('<script src="app.js"></script>', `<script>\n${js.replace(/<\/script/g, "<\\/script")}\n</script>`);
 writeFileSync("site/dist/index.html", inlined);
 

@@ -9023,6 +9023,7 @@
       </div>
       <div class="qs">${rows}${gap}</div>
       ${findingsLog(opts.notes)}
+      ${opts.more ?? ""}
     </div>
   </section>
   <div class="vfoot"><div class="vacts">${opts.actions}</div></div>`;
@@ -9408,12 +9409,12 @@
       facts: splFacts(slip),
       bands: `${coverage ? coverageBand(coverage, stage0) : ""}${changes ?? ""}`,
       evidence,
+      more: moreStack([
+        coverage && opts.source ? section("s-why", "Why this verdict", "Which findings made the word, what was asked of the chain, and what was never checked.", whyBody(slip.notes, coverage, `${esc2(slip.chain.name)} \xB7 ${esc2(solanaWhen(slip))}${slip.at.timestamp ? ` \xB7 ${isoUtc(slip.at.timestamp)}` : ""}`, opts.source), false) : "",
+        stage0 === "done" ? section("s-watch", "Watch for changes", "Whether this tab can follow the mint after you leave it.", watchBody(splWatch(slip)), false) : ""
+      ]),
       actions: `<button class="ghost primary" id="act-share" type="button">Copy card</button><button class="ghost" id="act-link" type="button">Copy link</button><button class="ghost" id="act-json" type="button">JSON</button>`
     })}
-    ${moreStack([
-      coverage && opts.source ? section("s-why", "Why this verdict", "Which findings made the word, what was asked of the chain, and what was never checked.", whyBody(slip.notes, coverage, `${esc2(slip.chain.name)} \xB7 ${esc2(solanaWhen(slip))}${slip.at.timestamp ? ` \xB7 ${isoUtc(slip.at.timestamp)}` : ""}`, opts.source), false) : "",
-      stage0 === "done" ? section("s-watch", "Watch for changes", "Whether this tab can follow the mint after you leave it.", watchBody(splWatch(slip)), false) : ""
-    ])}
     ${buyStrip(slip.chain.key, slip.subject, Boolean(slip.mint), verdictOf(slip.notes, "done", coverage).kind)}
   </div>`;
     $("act-share").addEventListener("click", async (event) => {
@@ -9748,13 +9749,13 @@
       venues: venueList(slip.open?.pools, slip.rules?.quote ?? slip.chain.native, slip.id.meta?.decimals ?? 18),
       bands: `${coverage ? coverageBand(coverage, stage0) : ""}${changes ?? ""}`,
       evidence,
+      more: moreStack([
+        coverage && opts.source ? section("s-why", "Why this verdict", "Which findings made the word, what was asked of the chain, and what was never checked.", whyBody(slip.notes, coverage, `${esc2(slip.chain.name)} \xB7 block ${slip.at.block} \xB7 ${isoUtc(slip.at.timestamp)}`, opts.source), false) : "",
+        stage0 === "done" ? section("s-watch", "Watch for changes", "Get told when the dev moves or tokens go into a pool.", watchBody(offer), new URLSearchParams(location.hash.split("?")[1] ?? "").get("watch") === "1") : ""
+      ]),
       actions: `<button class="ghost primary" id="act-share" type="button">Copy card</button><button class="ghost" id="act-card" type="button">Preview</button><button class="ghost" id="act-link" type="button">Copy link</button><button class="ghost" id="act-json" type="button">JSON</button>`
     })}
     <div class="card-wrap" id="card"></div>
-    ${moreStack([
-      coverage && opts.source ? section("s-why", "Why this verdict", "Which findings made the word, what was asked of the chain, and what was never checked.", whyBody(slip.notes, coverage, `${esc2(slip.chain.name)} \xB7 block ${slip.at.block} \xB7 ${isoUtc(slip.at.timestamp)}`, opts.source), false) : "",
-      stage0 === "done" ? section("s-watch", "Watch for changes", "Get told when the dev moves or tokens go into a pool.", watchBody(offer), new URLSearchParams(location.hash.split("?")[1] ?? "").get("watch") === "1") : ""
-    ])}
     ${buyStrip(mode === "demo" ? "" : slip.chain.key, slip.subject, Boolean(slip.id.meta) && slip.open?.transferFunction !== false, verdictOf(slip.notes, "done", coverage).kind)}
   </div>`;
     if (stage0 === "done" && m.pool) void fillChart(slip, m);

@@ -244,6 +244,7 @@ src/bouncer/pageSubject.ts  which token a web page is about, and on which chain 
 src/bouncer/verdict.ts      the one word (STOP / WATCH / CLEAR / INCOMPLETE), shared by every surface
 src/bouncer/marketFacts.ts  price, market cap, liquidity, supply, holders, age — the figures a buyer looks for first
 src/chain/priceSeries.ts    the price line, read from the pool's own Swap log rather than an index
+site/fonts.css              both typefaces, base64, so the one-file site has type with no network
 src/bouncer/leaderboard.ts  the board
 src/mcp/server.ts           the read-only MCP server (stdio, no dependencies)
 src/bouncer/door.ts         one address in, one slip out; the door notes
