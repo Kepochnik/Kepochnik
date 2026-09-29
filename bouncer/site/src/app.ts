@@ -39,6 +39,9 @@ import { readBoard, type Board } from "../../src/bouncer/leaderboard.js";
 import { readWatchEvents, type WatchEvent } from "../../src/bouncer/watch.js";
 import { readTokenWatchEvents, type TokenWatchEvent } from "../../src/bouncer/tokenWatch.js";
 import { doorAnswers, splAnswers, SHORT_QUESTION, type Answer } from "../../src/bouncer/answers.js";
+import { marketFacts, type Fact } from "../../src/bouncer/marketFacts.js";
+import type { MarketPool } from "../../src/chain/market.js";
+import { readPriceSeries, seriesChangeBps, seriesRange, type PriceSeries } from "../../src/chain/priceSeries.js";
 import { doorWatch, readLag, splWatch, type WatchOffer, type WatchPlan } from "../../src/bouncer/watchPlan.js";
 import { readTradeReceipt, type TradeReceipt } from "../../src/bouncer/txReceipt.js";
 import { formatBps, formatDuration, formatUnits, isoUtc, shortAddress } from "../../src/format.js";
@@ -1459,13 +1462,20 @@ function coverageBand(coverage: Coverage, stage: Stage): string {
   const retry = coverage.retryable
     ? `<button class="ghost" id="act-retry" type="button">Read the missing parts again</button>`
     : "";
+  // The list folds.
+  //
+  // In the bouncer's rail this band is 332px wide, and the open list of gaps
+  // and standing limits ran to 1272 pixels of it — a caveat taller than the
+  // answer it qualifies. The claim is the headline; the list is the detail,
+  // and it is also in "Why this verdict" in full.
+  const n = coverage.gaps.length + coverage.limits.length;
   return `<section class="band gap" data-coverage="${coverage.state}">
     <span class="bandword">${coverage.state === "thin" ? "Incomplete" : "Partial"}</span>
     <div class="bandtext">
       <b>${coverage.read} of ${coverage.asked} checks answered.</b> ${esc(coverage.line)}
-      <ul class="chgrows">${rows}</ul>
+      ${n ? `<details class="bandmore"><summary>${n} thing${n === 1 ? "" : "s"} it did not tell you</summary><ul class="chgrows">${rows}</ul></details>` : ""}
+      ${retry ? `<span class="bandact">${retry}</span>` : ""}
     </div>
-    ${retry ? `<span class="bandact">${retry}</span>` : ""}
   </section>`;
 }
 
@@ -1506,7 +1516,26 @@ const STILL_READING: Record<Stage, string> = {
  * in the tiles is now an ANSWER on the row of the question it answers,
  * which is where somebody looking for it would go.
  */
-function headBlock(opts: {
+/**
+ * THE DOOR: the bouncer on the left, the guest list on the right.
+ *
+ * The left side is everything about the token as a thing in the market — who
+ * it is, what it costs, how deep the pool is, how old it is — with the stamp
+ * this reading put on it. The right side is the five questions, answered.
+ *
+ * A reader's eye lands on the stamp, then on the figures, then walks the
+ * list. Three seconds, thirty seconds, three minutes, in one page.
+ */
+/**
+ * The bouncer himself, from the same pixel grid the share card draws.
+ *
+ * A data URI rather than a file: the site is one HTML file that has to work
+ * from a USB stick and inside a Chrome popup, and a second request for an
+ * image is a second thing that can fail to arrive.
+ */
+const MASCOT_URL = `data:image/svg+xml,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" shape-rendering="crispEdges">${MASCOT_SVG_INNER}</svg>`)}`;
+
+function doorBlock(opts: {
   sym: string;
   name: string;
   address: string;
@@ -1520,54 +1549,258 @@ function headBlock(opts: {
   /** What is still being read, when it is not what the EVM door reads. */
   stillReading?: string;
   coverage?: Coverage;
-  /** The five, for the strip that lets the whole token be read at a glance. */
-  answers?: Answer[];
+  answers: Answer[];
+  /** The figures for the left rail; empty on a chain that has none. */
+  facts?: Fact[];
+  /** The price line, when one has been read. */
+  chart?: string;
+  /** Where it trades, for the foot of the rail. */
+  venues?: string;
+  /**
+   * The completeness band and the what-changed band.
+   *
+   * Under the stamp, not under the slip. They qualify the WORD — "nothing
+   * stood out, and part of it was not read" is a sentence about the verdict —
+   * and a reader who has walked the whole guest list has already decided.
+   */
+  bands?: string;
+  /** What opens under each question. */
+  evidence: Partial<Record<Topic, string>>;
   actions: string;
 }): string {
   const stage = opts.stage ?? "done";
   const v = verdictOf(opts.notes, stage, opts.coverage);
-  const stampClass = stampTone(opts.stampKind);
   const pending = stage === "done" ? "" : `<span class="vpend">${esc(opts.stillReading ?? STILL_READING[stage])}</span>`;
-  // The scan layer.
-  //
-  // The rows below are the reading layer: a sentence per question and the
-  // evidence behind it. This is the same five at a different granularity —
-  // the figure alone, five across — and it exists because a page whose
-  // summary is six lines of prose has nothing to look AT. It also puts the
-  // whole shape of a token on one screen on a phone, where the rows are
-  // below the fold.
-  const strip = opts.answers?.length
-    ? `<div class="shape">${opts.answers
-        .map(
-          (a) => `<a class="cell" href="#q-${a.topic}" data-open="q-${a.topic}">
-            <span class="cell-l">${esc(SHAPE_LABEL[a.topic] ?? a.topic)}</span>
-            <span class="cell-v ${a.tone}">${esc(a.figure ?? shortValue(a.value))}</span>
-          </a>`,
-        )
-        .join("")}</div>`
+  const unread = opts.notes.filter((n) => topicOf(n.code) === "unread");
+  const rows = opts.answers.map((a) => qrow(a, opts.evidence[a.topic] ?? "")).join("");
+  const gap = unread.length
+    ? qrow(
+        {
+          topic: "unread",
+          question: SHORT_QUESTION.unread,
+          value: unread.length === 1 ? "One question I could not answer" : `${unread.length} questions I could not answer`,
+          tone: "unknown",
+          figure: `${unread.length}`,
+          chips: [],
+          bar: null,
+          detail: "A read that did not answer is not a clean result. Each of these is a question still open, and most are worth one retry.",
+          notes: unread,
+        },
+        opts.evidence.unread ?? "",
+      )
     : "";
+
   // `data-pending` is a contract with speed-check and stage-check: a slip is
-  // COMPLETE by the absence of this marker. Restyling the visible chip away
-  // without it would make "complete" fire the moment a verdict appeared.
-  return `<section class="head v-${v.kind}"${stage === "done" ? "" : ' data-pending="1"'}>
-    <div class="head-top">
-      <div class="head-who">
+  // COMPLETE by the absence of this marker.
+  return `<section class="doorway head v-${v.kind}"${stage === "done" ? "" : ' data-pending="1"'}>
+    <aside class="doorman">
+      <div class="stand">
+        <img class="mascot" src="${MASCOT_URL}" alt="" width="104" height="104">
+        <div class="verdict">
+          <span class="vword ${v.kind}" aria-label="Verdict">${v.word}</span>
+          <p class="lead">${esc(v.line)}${pending}</p>
+        </div>
+      </div>
+      ${opts.bands ?? ""}
+      <div class="who2">
+        <div class="cap-l">At the door</div>
         <div class="sym">${opts.sym}</div>
         <div class="name">${opts.name}</div>
+        <button class="vaddr" type="button" data-copy="${esc(opts.address)}" title="Copy the address">${esc(opts.address)}</button>
+        <div><span class="stamp ${stampTone(opts.stampKind)}">${opts.stamp}</span></div>
       </div>
-      <span class="stamp ${stampClass}">${opts.stamp}</span>
+      ${opts.chart ?? ""}
+      ${opts.facts?.length ? `<div class="facts">${opts.facts.map(factCell).join("")}</div>` : ""}
+      ${opts.venues ?? ""}
+    </aside>
+    <div class="list">
+      <div class="list-head">
+        <h2>Guest list</h2>
+        <span>the five questions asked before any money moves</span>
+        <span class="vat">${opts.at}</span>
+      </div>
+      <div class="qs">${rows}${gap}</div>
+      ${findingsLog(opts.notes)}
     </div>
-    <div class="verdict">
-      <span class="vword ${v.kind}" aria-label="Verdict">${v.word}</span>
-      <p class="vlead">${esc(v.line)}${pending}</p>
+  </section>
+  <div class="vfoot"><div class="vacts">${opts.actions}</div></div>`;
+}
+
+/**
+ * The price line, cached per token for this tab.
+ *
+ * The slip is redrawn on every stage and again whenever a row opens, and the
+ * walk behind this costs seconds — so it runs once per address and the
+ * renders read the answer out of here.
+ */
+const SERIES = new Map<string, PriceSeries>();
+
+function seriesFor(address: string): PriceSeries | null {
+  return SERIES.get(address.toLowerCase()) ?? null;
+}
+
+/**
+ * Walks the pool's swaps and paints the panel in place.
+ *
+ * In place, not by re-rendering the slip: a reader who has opened a question
+ * should not have it close because a chart arrived.
+ */
+async function fillChart(slip: DoorSlip, m: ReturnType<typeof marketFacts>): Promise<void> {
+  const key = slip.subject.toLowerCase();
+  if (!m.pool || SERIES.has(key)) return;
+  // The slip only carries the chain's name and coin; the block rate lives on
+  // the picked chain, which is the same one this read came from.
+  const back = Math.round(24 * 3_600 * chain().blocksPerSecond);
+  try {
+    const series = await readPriceSeries(rpcFor(true), m.pool, {
+      fromBlock: Math.max(0, slip.at.block - back),
+      toBlock: slip.at.block,
+      tokenDecimals: slip.id.meta?.decimals ?? 18,
+      chunkSize: mode === "demo" ? 100_000 : undefined,
+    });
+    SERIES.set(key, series);
+    const box = document.getElementById("chart");
+    if (box) box.outerHTML = chartPanel(series, m.quoteSymbol, m.quoteDecimals, m.spot);
+  } catch (error) {
+    SERIES.set(key, { points: [], venue: m.pool.dex, poolAddress: m.pool.address, fromBlock: 0, toBlock: 0, swaps: 0, unread: plainReason(error instanceof Error ? error.message : String(error)) });
+    const box = document.getElementById("chart");
+    if (box) box.outerHTML = chartPanel(SERIES.get(key)!, m.quoteSymbol, m.quoteDecimals, m.spot);
+  }
+}
+
+/**
+ * The same left rail for a Solana mint: different reads, same questions a
+ * buyer asks first. There is no price line here — the chain has no log filter
+ * to walk — and the panel says so rather than leaving a hole.
+ */
+function splFacts(slip: SplSlip): Fact[] {
+  const m = slip.mint;
+  const pool = slip.market?.pools.filter((x) => x.quoteReserve > 0n).sort((a, b) => (b.quoteReserve > a.quoteReserve ? 1 : -1))[0] ?? null;
+  const top = slip.holders?.top10Bps ?? null;
+  return [
+    pool
+      ? { label: "Liquidity", value: `${formatUnits(pool.quoteReserve, pool.quoteDecimals, 2)} ${pool.quoteSymbol}`, note: `deepest of ${slip.market?.pools.length ?? 1}`, source: "chain" as const }
+      : { label: "Liquidity", value: null, note: "in a pool", source: "chain" as const, why: slip.market?.unread ?? "no venue answered" },
+    m
+      ? { label: "Supply", value: formatSupply(m.supply, m.decimals), note: `${m.decimals} decimals`, source: "chain" as const }
+      : { label: "Supply", value: null, note: "tokens", source: "chain" as const, why: "there is no mint account to read" },
+    top === null
+      ? { label: "Top 10", value: null, note: "of supply", source: "chain" as const, why: "the node refused the largest-accounts read" }
+      : { label: "Top 10", value: `${(top / 100).toFixed(0)}%`, note: "of supply", source: "chain" as const, warn: top >= 5_000 },
+    {
+      label: "Program",
+      value: m ? (m.token2022 ? "Token-2022" : "SPL Token") : null,
+      note: m?.token2022 ? "fees, hooks, delegates live here" : "no extensions",
+      source: "chain" as const,
+      why: "this address is not a mint",
+    },
+  ];
+}
+
+/**
+ * Where it trades, at the foot of the rail.
+ *
+ * Reserves, not a venue name alone: "Uniswap V3" tells a reader nothing about
+ * whether they can get out, and twelve ETH tells them everything.
+ */
+function venueList(pools: MarketPool[] | null | undefined, quote: { symbol: string; decimals: number }, tokenDecimals: number): string {
+  if (pools === null || pools === undefined) return "";
+  if (!pools.length) {
+    return `<div class="venues"><div class="cap-l">Where it trades</div><div class="venue">nothing on this chain's known DEX factories</div></div>`;
+  }
+  const rows = pools
+    .slice(0, 4)
+    .map(
+      (p) => `<div class="venue"><span>${esc(p.dex)} · ${(p.feeBps / 100).toFixed(2)}%</span><b>${p.quoteReserve === null ? "unread" : `${formatUnits(p.quoteReserve, quote.decimals, 2)} ${esc(quote.symbol)}`}</b></div>
+        <div class="venue"><span>tokens inside</span><b>${p.tokenReserve === null ? "unread" : formatUnits(p.tokenReserve, tokenDecimals, 0)}</b></div>`,
+    )
+    .join("");
+  return `<div class="venues"><div class="cap-l">Where it trades</div>${rows}</div>`;
+}
+
+/** One figure on the left rail. A read that failed says so instead of showing a zero. */
+function factCell(f: Fact): string {
+  return `<div class="fact">
+    <div class="fact-l">${esc(f.label)}</div>
+    <div class="fact-v ${f.value === null ? "none" : f.warn ? "warn" : ""}">${f.value === null ? "not read" : esc(f.value)}</div>
+    <div class="fact-n">${esc(f.value === null ? (f.why ?? f.note) : f.note)}</div>
+  </div>`;
+}
+
+/**
+ * Everything that was found, as a log under the list.
+ *
+ * The rows above answer the five questions; this is the raw tape behind them,
+ * for somebody who wants to see every line rather than the five conclusions.
+ * The quiet ones fold, because a token with twelve INFO notes would otherwise
+ * bury the three that can cost money.
+ */
+function findingsLog(notes: DoorNote[]): string {
+  const mine = notes.filter((n) => topicOf(n.code) !== "unread");
+  if (!mine.length) return "";
+  const RANKED: Record<Level, number> = { stop: 0, watch: 1, info: 2 };
+  const row = (n: DoorNote) => `<div class="log-row"><span class="log-lvl ${n.level}">${LEVEL_WORD[n.level]}</span><span>${glossed(n.text)}</span></div>`;
+  const loud = mine.filter((n) => n.level !== "info").sort((a, b) => RANKED[a.level] - RANKED[b.level]);
+  const quiet = mine.filter((n) => n.level === "info");
+  // Folded. Every line here also sits inside the question it answers, so
+  // printing it open is the page saying everything twice — the exact thing
+  // this redesign started by removing. It stays because "show me all of it
+  // at once" is a real thing to want; it just is not the default.
+  return `<details class="log">
+    <summary><span class="cap-l">Everything I found</span> <span class="log-n">${mine.length} line${mine.length === 1 ? "" : "s"}</span><span class="chev" aria-hidden="true"></span></summary>
+    <div class="log-body">
+      ${loud.map(row).join("")}
+      ${quiet.length ? `<details class="log-more"><summary>${quiet.length} more worth knowing, none of them dangerous</summary>${quiet.map(row).join("")}</details>` : ""}
     </div>
-    ${strip}
-    <div class="vfoot">
-      <button class="vaddr" type="button" data-copy="${esc(opts.address)}" title="Copy the address">${esc(opts.address)}</button>
-      <span class="vat">${opts.at}</span>
-      <div class="vacts">${opts.actions}</div>
+  </details>`;
+}
+
+/**
+ * The price, from the pool's own swaps.
+ *
+ * Every chart on every token site is an index's opinion. This one is the
+ * pool's Swap log, read the same way as everything else on the slip — so a
+ * reader can check it against the chain by hand, which is the whole argument
+ * of this tool applied to the one panel that usually gets a free pass.
+ *
+ * A window with no swaps draws nothing and says so. A flat line between two
+ * real points would hide exactly the thing worth seeing on a token nobody is
+ * trading.
+ */
+function chartPanel(series: PriceSeries | null, quoteSymbol: string, quoteDecimals: number, spot: bigint | null): string {
+  const head = `<div class="chart-head"><span class="cap-l">Price · from the pool's swaps</span>`;
+  if (!series) {
+    return `<div class="chartbox" id="chart">${head}</div><p class="chart-no">Reading the pool's swap log…</p></div>`;
+  }
+  if (series.unread || series.points.length < 2) {
+    const why = series.unread ?? (series.swaps === 0 ? "no swap in the window this read: nobody traded it" : "one swap in the window, which is not a line");
+    return `<div class="chartbox" id="chart">${head}</div><p class="chart-no">${esc(why)}</p></div>`;
+  }
+  const range = seriesRange(series)!;
+  const span = range.high > range.low ? range.high - range.low : 1n;
+  const w = 286;
+  const h = 76;
+  const points = series.points
+    .map((p, i) => {
+      const x = (i / (series.points.length - 1)) * w;
+      const y = h - Number(((p.price - range.low) * 1000n) / span) / 1000 * (h - 8) - 4;
+      return `${x.toFixed(1)},${y.toFixed(1)}`;
+    })
+    .join(" ");
+  const change = seriesChangeBps(series);
+  const tone = change === null ? "flat" : change > 50 ? "up" : change < -50 ? "down" : "flat";
+  const move = change === null ? "" : `<span class="move ${tone}">${change > 0 ? "+" : ""}${(change / 100).toFixed(1)}%</span>`;
+  const stroke = tone === "down" ? "var(--stop)" : tone === "up" ? "var(--ok)" : "var(--dim)";
+  return `<div class="chartbox" id="chart">
+    ${head}${move}</div>
+    <svg class="chart" viewBox="0 0 ${w} ${h}" role="img" aria-label="Price over the window read, from the pool's own swaps">
+      <polyline points="${points}" fill="none" stroke="${stroke}" stroke-width="1.8" stroke-linejoin="round"/>
+    </svg>
+    <div class="chart-foot">
+      <span>${series.swaps} swap${series.swaps === 1 ? "" : "s"} · ${esc(series.venue)}</span>
+      <span>${spot === null ? "" : `${formatUnits(spot, quoteDecimals, 10).replace(/0+$/, "").replace(/\.$/, "")} ${esc(quoteSymbol)}`}</span>
     </div>
-  </section>`;
+  </div>`;
 }
 
 /** The shorthand each cell of the scan strip carries. */
@@ -2129,29 +2362,30 @@ function renderSplSlip(slip: SplSlip, opts: { stage?: Stage; source?: Source } =
   const answers = splAnswers(slip);
 
   out.innerHTML = `<div class="slip">
-    ${headBlock({
+    ${doorBlock({
       sym,
       name,
       address: slip.subject,
       stamp: stampLabel(slip.stamp, null),
       stampKind: slip.stamp,
-      answers,
       at: `${esc(slip.chain.name)} · ${esc(solanaWhen(slip))}${slip.at.timestamp ? ` · ${isoUtc(slip.at.timestamp)}` : ""}`,
       notes: slip.notes as DoorNote[],
       stage: stage0,
       coverage,
       stillReading: SOL_STILL_READING,
+      answers,
+      facts: splFacts(slip),
+      bands: `${coverage ? coverageBand(coverage, stage0) : ""}${changes ?? ""}`,
+      evidence,
       actions: `<button class="ghost primary" id="act-share" type="button">Copy card</button><button class="ghost" id="act-link" type="button">Copy link</button><button class="ghost" id="act-json" type="button">JSON</button>`,
     })}
-    ${coverage ? coverageBand(coverage, stage0) : ""}
-    ${changes ?? ""}
-    ${questionRows(answers, evidence, slip.notes as DoorNote[])}
     ${moreStack([
       coverage && opts.source ? section("s-why", "Why this verdict", "Which findings made the word, what was asked of the chain, and what was never checked.", whyBody(slip.notes as DoorNote[], coverage, `${esc(slip.chain.name)} · ${esc(solanaWhen(slip))}${slip.at.timestamp ? ` · ${isoUtc(slip.at.timestamp)}` : ""}`, opts.source), false) : "",
       stage0 === "done" ? section("s-watch", "Watch for changes", "Whether this tab can follow the mint after you leave it.", watchBody(splWatch(slip)), false) : "",
     ])}
     ${buyStrip(slip.chain.key, slip.subject, Boolean(slip.mint), verdictOf(slip.notes as DoorNote[], "done", coverage).kind)}
   </div>`;
+
   // Copy card, on the renderer that draws the button.
   //
   // This handler was registered in renderSlip — the EVM one — against a
@@ -2666,31 +2900,41 @@ function renderSlip(slip: DoorSlip, opts: { stage?: Stage; source?: Source } = {
   };
 
   const answers = doorAnswers(slip);
+  const m = marketFacts(slip);
+  // The chart is a fourth read, started after the slip is on screen and
+  // painted in place when it lands. It walks a log, which is the one thing
+  // here measured in seconds, and nothing above it should wait for that.
+  const chart = chartPanel(seriesFor(slip.subject), m.quoteSymbol, m.quoteDecimals, m.spot);
 
   out.innerHTML = `<div class="slip">
-    ${headBlock({
+    ${doorBlock({
       sym,
       name,
       address: slip.subject,
       stamp: stampLabel(slip.stamp, slip.chain.launchpad),
       stampKind: slip.stamp,
-      answers,
       at: `${mode === "demo" ? "DEMO · " : ""}${esc(slip.chain.name)} · block ${slip.at.block} · ${isoUtc(slip.at.timestamp)}`,
       notes: slip.notes,
       stage: stage0,
       coverage,
+      answers,
+      facts: m.facts,
+      chart,
+      venues: venueList(slip.open?.pools, slip.rules?.quote ?? slip.chain.native, slip.id.meta?.decimals ?? 18),
+      bands: `${coverage ? coverageBand(coverage, stage0) : ""}${changes ?? ""}`,
+      evidence,
       actions: `<button class="ghost primary" id="act-share" type="button">Copy card</button><button class="ghost" id="act-card" type="button">Preview</button><button class="ghost" id="act-link" type="button">Copy link</button><button class="ghost" id="act-json" type="button">JSON</button>`,
     })}
-    ${coverage ? coverageBand(coverage, stage0) : ""}
-    ${changes ?? ""}
     <div class="card-wrap" id="card"></div>
-    ${questionRows(answers, evidence, slip.notes)}
     ${moreStack([
       coverage && opts.source ? section("s-why", "Why this verdict", "Which findings made the word, what was asked of the chain, and what was never checked.", whyBody(slip.notes, coverage, `${esc(slip.chain.name)} · block ${slip.at.block} · ${isoUtc(slip.at.timestamp)}`, opts.source), false) : "",
       stage0 === "done" ? section("s-watch", "Watch for changes", "Get told when the dev moves or tokens go into a pool.", watchBody(offer), new URLSearchParams(location.hash.split("?")[1] ?? "").get("watch") === "1") : "",
     ])}
     ${buyStrip(mode === "demo" ? "" : slip.chain.key, slip.subject, Boolean(slip.id.meta) && slip.open?.transferFunction !== false, verdictOf(slip.notes, "done", coverage).kind)}
   </div>`;
+
+  // Start the swap walk once, on the complete slip, and repaint just the panel.
+  if (stage0 === "done" && m.pool) void fillChart(slip, m);
 
   const cardSvg = () => {
     noteCard("door", slip.id.meta?.symbol ?? slip.subject);

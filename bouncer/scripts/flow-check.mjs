@@ -360,26 +360,28 @@ await walk("a reading with a hole says so where the verdict is", async (page) =>
 
   // With the word, not in a strip below the page.
   //
-  // This used to assert the band was a DESCENDANT of the verdict block,
-  // which is a fact about one layout rather than about what a reader sees.
-  // The requirement is that the band is читаемо next to the word: after it,
-  // before the answers, and on the first screen. Stated that way it survives
-  // the page being rebuilt, which is what it just had to do.
+  // This has now been wrong twice about layout and right both times about the
+  // requirement. First it asserted the band was a DESCENDANT of the verdict
+  // block; then that it sat ABOVE the answers, which reads "before" as
+  // vertical and fails the moment the answers are a second column. What a
+  // reader actually needs is: the band is under the word, in the same column
+  // as the word, and on the first screen. That holds in any layout.
   const order = await page.evaluate(() => {
-    const word = document.querySelector(".vword");
-    const c = document.querySelector(".band.gap");
-    const answers = document.querySelector(".qs");
+    const word = document.querySelector(".vword")?.getBoundingClientRect();
+    const c = document.querySelector(".band.gap")?.getBoundingClientRect();
     return {
-      wordTop: word?.getBoundingClientRect().top ?? -1,
-      covTop: c?.getBoundingClientRect().top ?? -1,
-      covBottom: c?.getBoundingClientRect().bottom ?? -1,
-      answersTop: answers?.getBoundingClientRect().top ?? Infinity,
+      ok: Boolean(word && c),
+      below: word && c ? c.top >= word.top : false,
+      // Same column: the band's horizontal span overlaps the word's own.
+      sameColumn: word && c ? c.left < word.right && c.right > word.left : false,
+      bottom: c?.bottom ?? -1,
       viewport: window.innerHeight,
     };
   });
-  if (order.covTop < order.wordTop) throw new Error("the band sits above the verdict it qualifies");
-  if (order.covTop > order.answersTop) throw new Error("the band sits below the answers, where a reader has already stopped");
-  if (order.covBottom > order.viewport) throw new Error(`the band starts below the fold (${Math.round(order.covBottom)}px into a ${order.viewport}px window)`);
+  if (!order.ok) throw new Error("no completeness band on a reading with an unread check");
+  if (!order.below) throw new Error("the band sits above the verdict it qualifies");
+  if (!order.sameColumn) throw new Error("the band is in a different column from the word, so the two do not read as one statement");
+  if (order.bottom > order.viewport) throw new Error(`the band ends below the fold (${Math.round(order.bottom)}px into a ${order.viewport}px window)`);
 
   // It has to name the missing check and why, not just wave at one.
   const rows = await page.$$eval(".band.gap .chgrows li", (els) => els.map((e) => e.textContent.replace(/\s+/g, " ").trim()));

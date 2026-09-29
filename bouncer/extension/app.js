@@ -3136,8 +3136,8 @@
   }
   function marketNote(pools, best, quotes) {
     const concentrated = pools.filter((p) => p.concentrated);
-    const deepest = pools[0];
-    const muchDeeper = deepest && deepest !== best && deepest.concentrated && best.quoteReserve > 0n && deepest.quoteReserve / best.quoteReserve >= 2n ? ` The deepest venue for this token is in fact a ${deepest.name}, holding about ${(Number(deepest.quoteReserve) / Number(best.quoteReserve)).toFixed(0)}x more ${deepest.quoteSymbol} than the pool priced here, and a real sale would mostly go through it \u2014 so treat the figures above as a floor from one pool rather than as what the market would pay.` : "";
+    const deepest2 = pools[0];
+    const muchDeeper = deepest2 && deepest2 !== best && deepest2.concentrated && best.quoteReserve > 0n && deepest2.quoteReserve / best.quoteReserve >= 2n ? ` The deepest venue for this token is in fact a ${deepest2.name}, holding about ${(Number(deepest2.quoteReserve) / Number(best.quoteReserve)).toFixed(0)}x more ${deepest2.quoteSymbol} than the pool priced here, and a real sale would mostly go through it \u2014 so treat the figures above as a floor from one pool rather than as what the market would pay.` : "";
     const drained = quotes.some((q2) => q2.drainsPool) ? " Sizes marked as emptying the pool take essentially all the quote asset it holds; that is the pool telling you it is too small for this position, not a price you would get." : "";
     return `Priced on the deepest constant-product pool (${best.name}) at a 0.25% fee${concentrated.length ? `; ${concentrated.length} concentrated pool${concentrated.length === 1 ? "" : "s"} found and deliberately not priced, since their vault balances are not what a trade moves through` : ""}.${muchDeeper}${drained} Pools against pairs other than SOL and USDC are not counted.`;
   }
@@ -5281,21 +5281,21 @@
         pools = null;
       }
       const readable = (pools ?? []).filter((p) => p.kind === "v2" || p.kind === "v3" || p.kind === "solidly");
-      const deepest = readable[0] ?? pools?.[0] ?? null;
-      if (deepest && options.liquidity !== false) {
+      const deepest2 = readable[0] ?? pools?.[0] ?? null;
+      if (deepest2 && options.liquidity !== false) {
         try {
           const LIQUIDITY_BUDGET_MS = options.liquidityDeadlineMs ?? 3500;
           liquidity = await Promise.race([
-            readPoolLock(rpc, deepest, options.lockers, options.dex.v3PositionManager, block, {
+            readPoolLock(rpc, deepest2, options.lockers, options.dex.v3PositionManager, block, {
               fromBlock: Math.max(0, options.liquidityFromBlock ?? block - 5e5),
               budgetMs: options.liquidityBudgetMs ?? 2500
             }),
             new Promise(
               (resolve) => setTimeout(
                 () => resolve({
-                  pool: deepest.address,
-                  dex: deepest.dex,
-                  kind: deepest.kind,
+                  pool: deepest2.address,
+                  dex: deepest2.dex,
+                  kind: deepest2.kind,
                   read: false,
                   burnedBps: 0,
                   lockedBps: 0,
@@ -5322,7 +5322,7 @@
             liquidity = await Promise.race([named, new Promise((resolve) => setTimeout(() => resolve(liquidity), 1500))]);
           }
           const total = (pools ?? []).reduce((a, p) => a + (depth(p) > 0n ? depth(p) : 0n), 0n);
-          const mine = depth(deepest) > 0n ? depth(deepest) : 0n;
+          const mine = depth(deepest2) > 0n ? depth(deepest2) : 0n;
           liquidity.shareOfLiquidityBps = total > 0n ? Number(mine * 10000n / total) : 1e4;
         } catch {
           liquidity = null;
@@ -5417,11 +5417,11 @@
       if (!candidates.length) {
         probesSkipped = "no wallet with a readable balance to simulate from";
       } else {
-        const deepest = (pools ?? []).filter((p) => (p.quoteReserve ?? 0n) > 0n || canPrice(p))[0] ?? null;
+        const deepest2 = (pools ?? []).filter((p) => (p.quoteReserve ?? 0n) > 0n || canPrice(p))[0] ?? null;
         const wanted = [];
         for (const c of candidates) {
           wanted.push({ from: c.address, to: PROBE_RECIPIENT, target: "fresh-wallet", source: c.source });
-          if (deepest) wanted.push({ from: c.address, to: deepest.address, target: "pool", source: c.source });
+          if (deepest2) wanted.push({ from: c.address, to: deepest2.address, target: "pool", source: c.source });
         }
         probes.push(...await probeTransfers(rpc, address, wanted, block));
       }
@@ -6196,11 +6196,11 @@
       const whole = m.quotes.find((x) => x.shareBps === 1e4);
       const dec = slip.id.meta?.decimals ?? 18;
       if (whole) {
-        const thin = whole.realisedBps > 0 && whole.realisedBps < 5e3;
+        const thin2 = whole.realisedBps > 0 && whole.realisedBps < 5e3;
         notes.push({
-          level: thin ? "watch" : "info",
+          level: thin2 ? "watch" : "info",
           code: "sale-price",
-          text: `Selling ${formatUnits(whole.tokensIn, dec, 0)} tokens into the ${m.best.dex} pool would quote ${formatUnits(whole.out, q2.decimals, 4)} W${q2.symbol}` + (thin ? `, which is ${(whole.realisedBps / 100).toFixed(0)}% of the marginal price: the pool is thin for a position that size.` : ".") + (whole.beyondTick ? " That size leaves the pool's current tick, so the real figure depends on liquidity this does not read." : "") + " The token's own transfer tax, if it has one, is not included."
+          text: `Selling ${formatUnits(whole.tokensIn, dec, 0)} tokens into the ${m.best.dex} pool would quote ${formatUnits(whole.out, q2.decimals, 4)} W${q2.symbol}` + (thin2 ? `, which is ${(whole.realisedBps / 100).toFixed(0)}% of the marginal price: the pool is thin for a position that size.` : ".") + (whole.beyondTick ? " That size leaves the pool's current tick, so the real figure depends on liquidity this does not read." : "") + " The token's own transfer tax, if it has one, is not included."
         });
       }
     }
@@ -7795,6 +7795,180 @@
     return [id, keep, sell, exit, room];
   }
 
+  // src/bouncer/marketFacts.ts
+  function grouped(value, decimals) {
+    const whole = value / 10n ** BigInt(decimals);
+    return whole.toLocaleString("en-US");
+  }
+  function shortAge(seconds) {
+    if (seconds < 90) return `${Math.max(0, Math.round(seconds))} s`;
+    const m = Math.round(seconds / 60);
+    if (m < 60) return `${m} m`;
+    const h = Math.floor(seconds / 3600);
+    if (h < 48) return `${h} h ${Math.round((seconds - h * 3600) / 60)} m`;
+    return `${Math.floor(seconds / 86400)} d`;
+  }
+  function deepest(pools) {
+    if (!pools || !pools.length) return null;
+    return [...pools].sort((a, b) => depth(b) > depth(a) ? 1 : depth(b) < depth(a) ? -1 : 0)[0] ?? null;
+  }
+  function marketFacts(slip) {
+    const o = slip.open;
+    const meta = slip.id.meta;
+    const quote = slip.rules?.quote ?? slip.chain.native;
+    const decimals = meta?.decimals ?? 18;
+    const pool = deepest(o?.pools);
+    const spot = pool ? spotPrice(pool, decimals) : null;
+    const facts2 = [];
+    facts2.push(
+      spot !== null ? { label: "Price", value: formatUnits(spot, quote.decimals, 10).replace(/0+$/, "").replace(/\.$/, ""), note: `${quote.symbol} per token \xB7 from the pool`, source: "chain" } : { label: "Price", value: null, note: quote.symbol, source: "chain", why: o?.pools === null ? "the pool read did not finish" : "no pool could be priced" }
+    );
+    const supply = meta?.totalSupply ?? null;
+    facts2.push(
+      spot !== null && supply ? { label: "Market cap", value: `${formatUnits(spot * supply / 10n ** BigInt(decimals), quote.decimals, 2)} ${quote.symbol}`, note: "price \xD7 supply", source: "derived" } : { label: "Market cap", value: null, note: "price \xD7 supply", source: "derived", why: spot === null ? "no price to multiply" : "the supply could not be read" }
+    );
+    const liquid = pool?.quoteReserve ?? null;
+    facts2.push(
+      liquid !== null ? {
+        label: "Liquidity",
+        value: `${formatUnits(liquid, quote.decimals, 2)} ${quote.symbol}`,
+        note: (o?.pools ?? []).length > 1 ? `deepest of ${(o?.pools ?? []).length} pools` : "one pool",
+        source: "chain",
+        // A pool holding less than the price of a decent sale is not a
+        // market, and the figure should say so before somebody buys into it.
+        warn: liquid < 10n ** BigInt(quote.decimals)
+      } : { label: "Liquidity", value: null, note: quote.symbol, source: "chain", why: o?.pools === null ? "the pool read did not finish" : "no pool was found" }
+    );
+    facts2.push(
+      supply ? { label: "Supply", value: grouped(supply, decimals), note: `${decimals} decimals`, source: "chain" } : { label: "Supply", value: null, note: "tokens", source: "chain", why: "totalSupply did not answer" }
+    );
+    const holders = o?.holders?.count ?? null;
+    facts2.push(
+      holders !== null ? { label: "Holders", value: holders.toLocaleString("en-US"), note: o?.holders?.transfers ? `${o.holders.transfers.toLocaleString("en-US")} transfers` : "from the explorer", source: "explorer" } : { label: "Holders", value: null, note: "wallets", source: "explorer", why: "the explorer's holder list did not answer" }
+    );
+    const born = o?.deployer?.createdAt ?? null;
+    const age = born === null ? null : Math.max(0, slip.at.timestamp - born);
+    facts2.push(
+      age !== null ? {
+        label: "Age",
+        value: shortAge(age),
+        note: o?.activity?.lastTransferAt ? `last transfer ${shortAge(Math.max(0, slip.at.timestamp - o.activity.lastTransferAt))} ago` : "since deployment",
+        source: "chain",
+        // Under a day old is the single most reliable predictor of the kind
+        // of token this tool exists for.
+        warn: age < 86400
+      } : { label: "Age", value: null, note: "since deployment", source: "chain", why: "the deployment could not be dated" }
+    );
+    const v = o?.explorer?.volume24hUsd ?? null;
+    facts2.push(
+      v !== null ? { label: "Volume 24h", value: `$${Math.round(v).toLocaleString("en-US")}`, note: "the explorer's feed", source: "explorer" } : { label: "Volume 24h", value: null, note: "the explorer's feed", source: "explorer", why: o?.explorer ? "the explorer does not report volume for this token" : "the explorer could not be read" }
+    );
+    return { facts: facts2, pool, spot, quoteSymbol: quote.symbol, quoteDecimals: quote.decimals };
+  }
+
+  // src/chain/priceSeries.ts
+  init_tape();
+  var V3_SWAP = {
+    name: "Swap",
+    inputs: [
+      { name: "sender", type: "address", indexed: true },
+      { name: "recipient", type: "address", indexed: true },
+      { name: "amount0", type: "int256", indexed: false },
+      { name: "amount1", type: "int256", indexed: false },
+      { name: "sqrtPriceX96", type: "uint160", indexed: false },
+      { name: "liquidity", type: "uint128", indexed: false },
+      { name: "tick", type: "int24", indexed: false }
+    ]
+  };
+  var V2_SWAP = {
+    name: "Swap",
+    inputs: [
+      { name: "sender", type: "address", indexed: true },
+      { name: "amount0In", type: "uint256", indexed: false },
+      { name: "amount1In", type: "uint256", indexed: false },
+      { name: "amount0Out", type: "uint256", indexed: false },
+      { name: "amount1Out", type: "uint256", indexed: false },
+      { name: "to", type: "address", indexed: true }
+    ]
+  };
+  var Q963 = 1n << 96n;
+  function priceFromSqrt(sqrt, tokenIsToken0, one) {
+    if (sqrt <= 0n) return null;
+    return tokenIsToken0 ? sqrt * sqrt * one / (Q963 * Q963) : Q963 * Q963 * one / (sqrt * sqrt);
+  }
+  async function readPriceSeries(rpc, pool, options) {
+    const base = {
+      points: [],
+      venue: pool.dex,
+      poolAddress: pool.address,
+      fromBlock: options.fromBlock,
+      toBlock: options.toBlock,
+      swaps: 0,
+      unread: null
+    };
+    const event = pool.kind === "v3" || pool.kind === "v4" ? V3_SWAP : pool.kind === "v2" || pool.kind === "solidly" ? V2_SWAP : null;
+    if (!event) return { ...base, unread: `a ${pool.kind} pool's swaps are not read here` };
+    const one = 10n ** BigInt(options.tokenDecimals);
+    let logs;
+    try {
+      const tape = await readTapeAdaptive(
+        rpc,
+        { address: pool.address.toLowerCase(), events: [event], fromBlock: options.fromBlock, toBlock: options.toBlock },
+        { minChunk: 1, startChunk: options.chunkSize ?? 2e3, maxChunk: 2e4 }
+      );
+      logs = tape.logs;
+    } catch (error) {
+      return { ...base, unread: error instanceof Error ? error.message : String(error) };
+    }
+    const points = [];
+    for (const log of logs) {
+      if (event === V3_SWAP) {
+        const price = priceFromSqrt(log.args.sqrtPriceX96, pool.tokenIsToken0, one);
+        if (price === null || price === 0n) continue;
+        const amount = pool.tokenIsToken0 ? log.args.amount0 : log.args.amount1;
+        points.push({ block: log.blockNumber, price, sell: amount > 0n });
+        continue;
+      }
+      const a0In = log.args.amount0In;
+      const a1In = log.args.amount1In;
+      const a0Out = log.args.amount0Out;
+      const a1Out = log.args.amount1Out;
+      const tokenIn = pool.tokenIsToken0 ? a0In : a1In;
+      const tokenOut = pool.tokenIsToken0 ? a0Out : a1Out;
+      const quoteIn = pool.tokenIsToken0 ? a1In : a0In;
+      const quoteOut = pool.tokenIsToken0 ? a1Out : a0Out;
+      const tokens = tokenIn > 0n ? tokenIn : tokenOut;
+      const quote = quoteIn > 0n ? quoteIn : quoteOut;
+      if (tokens <= 0n || quote <= 0n) continue;
+      points.push({ block: log.blockNumber, price: quote * one / tokens, sell: tokenIn > 0n });
+    }
+    return { ...base, points: thin(points, options.maxPoints ?? 120), swaps: points.length };
+  }
+  function thin(points, max) {
+    if (points.length <= max || max < 2) return points;
+    const out2 = [];
+    const step = (points.length - 1) / (max - 1);
+    for (let i = 0; i < max; i++) out2.push(points[Math.round(i * step)]);
+    return out2;
+  }
+  function seriesRange(series) {
+    if (!series.points.length) return null;
+    let low = series.points[0].price;
+    let high = low;
+    for (const p of series.points) {
+      if (p.price < low) low = p.price;
+      if (p.price > high) high = p.price;
+    }
+    return { low, high };
+  }
+  function seriesChangeBps(series) {
+    if (series.points.length < 2) return null;
+    const first = series.points[0].price;
+    const last = series.points[series.points.length - 1].price;
+    if (first <= 0n) return null;
+    return Number((last - first) * 10000n / first);
+  }
+
   // src/bouncer/watchPlan.ts
   function wallets(...addresses) {
     const zero = "0x0000000000000000000000000000000000000000";
@@ -8783,13 +8957,14 @@
     const row = (g, limit) => `<li class="${limit ? "cgap-limit" : "cgap-hole"}"><span class="chglvl${g.decisive && !limit ? " watch" : ""}">${limit ? "not offered" : esc2(TOPIC_TAG[g.topic])}</span><span>${esc2(g.label)} \u2014 ${esc2(g.reason ?? "did not answer")}</span></li>`;
     const rows = [...coverage.gaps.map((g) => row(g, false)), ...coverage.limits.map((g) => row(g, true))].join("");
     const retry = coverage.retryable ? `<button class="ghost" id="act-retry" type="button">Read the missing parts again</button>` : "";
+    const n = coverage.gaps.length + coverage.limits.length;
     return `<section class="band gap" data-coverage="${coverage.state}">
     <span class="bandword">${coverage.state === "thin" ? "Incomplete" : "Partial"}</span>
     <div class="bandtext">
       <b>${coverage.read} of ${coverage.asked} checks answered.</b> ${esc2(coverage.line)}
-      <ul class="chgrows">${rows}</ul>
+      ${n ? `<details class="bandmore"><summary>${n} thing${n === 1 ? "" : "s"} it did not tell you</summary><ul class="chgrows">${rows}</ul></details>` : ""}
+      ${retry ? `<span class="bandact">${retry}</span>` : ""}
     </div>
-    ${retry ? `<span class="bandact">${retry}</span>` : ""}
   </section>`;
   }
   var SOL_STILL_READING = "still reading who holds it and where it trades";
@@ -8798,56 +8973,18 @@
     fast: "still reading who holds the liquidity and the dev history",
     done: ""
   };
-  function headBlock(opts) {
+  var MASCOT_URL = `data:image/svg+xml,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" shape-rendering="crispEdges">${MASCOT_SVG_INNER}</svg>`)}`;
+  function doorBlock(opts) {
     const stage = opts.stage ?? "done";
     const v = verdictOf(opts.notes, stage, opts.coverage);
-    const stampClass = stampTone(opts.stampKind);
     const pending = stage === "done" ? "" : `<span class="vpend">${esc2(opts.stillReading ?? STILL_READING[stage])}</span>`;
-    const strip = opts.answers?.length ? `<div class="shape">${opts.answers.map(
-      (a) => `<a class="cell" href="#q-${a.topic}" data-open="q-${a.topic}">
-            <span class="cell-l">${esc2(SHAPE_LABEL[a.topic] ?? a.topic)}</span>
-            <span class="cell-v ${a.tone}">${esc2(a.figure ?? shortValue(a.value))}</span>
-          </a>`
-    ).join("")}</div>` : "";
-    return `<section class="head v-${v.kind}"${stage === "done" ? "" : ' data-pending="1"'}>
-    <div class="head-top">
-      <div class="head-who">
-        <div class="sym">${opts.sym}</div>
-        <div class="name">${opts.name}</div>
-      </div>
-      <span class="stamp ${stampClass}">${opts.stamp}</span>
-    </div>
-    <div class="verdict">
-      <span class="vword ${v.kind}" aria-label="Verdict">${v.word}</span>
-      <p class="vlead">${esc2(v.line)}${pending}</p>
-    </div>
-    ${strip}
-    <div class="vfoot">
-      <button class="vaddr" type="button" data-copy="${esc2(opts.address)}" title="Copy the address">${esc2(opts.address)}</button>
-      <span class="vat">${opts.at}</span>
-      <div class="vacts">${opts.actions}</div>
-    </div>
-  </section>`;
-  }
-  var SHAPE_LABEL = {
-    id: "identity",
-    keep: "control",
-    sell: "can sell",
-    exit: "cash out",
-    room: "holders"
-  };
-  function shortValue(value) {
-    const first = value.split(/[—·,(]/)[0].trim();
-    return first.length > 18 ? `${first.slice(0, 17)}\u2026` : first;
-  }
-  function questionRows(answers, evidence, notes) {
-    const rows = answers.map((a) => qrow(a, evidence[a.topic] ?? "")).join("");
-    const unread = notes.filter((n) => topicOf(n.code) === "unread");
+    const unread = opts.notes.filter((n) => topicOf(n.code) === "unread");
+    const rows = opts.answers.map((a) => qrow(a, opts.evidence[a.topic] ?? "")).join("");
     const gap = unread.length ? qrow(
       {
         topic: "unread",
         question: SHORT_QUESTION.unread,
-        value: unread.length === 1 ? "One question is still open" : `${unread.length} questions are still open`,
+        value: unread.length === 1 ? "One question I could not answer" : `${unread.length} questions I could not answer`,
         tone: "unknown",
         figure: `${unread.length}`,
         chips: [],
@@ -8855,9 +8992,147 @@
         detail: "A read that did not answer is not a clean result. Each of these is a question still open, and most are worth one retry.",
         notes: unread
       },
-      evidence.unread ?? ""
+      opts.evidence.unread ?? ""
     ) : "";
-    return `<div class="qs">${rows}${gap}</div>`;
+    return `<section class="doorway head v-${v.kind}"${stage === "done" ? "" : ' data-pending="1"'}>
+    <aside class="doorman">
+      <div class="stand">
+        <img class="mascot" src="${MASCOT_URL}" alt="" width="104" height="104">
+        <div class="verdict">
+          <span class="vword ${v.kind}" aria-label="Verdict">${v.word}</span>
+          <p class="lead">${esc2(v.line)}${pending}</p>
+        </div>
+      </div>
+      ${opts.bands ?? ""}
+      <div class="who2">
+        <div class="cap-l">At the door</div>
+        <div class="sym">${opts.sym}</div>
+        <div class="name">${opts.name}</div>
+        <button class="vaddr" type="button" data-copy="${esc2(opts.address)}" title="Copy the address">${esc2(opts.address)}</button>
+        <div><span class="stamp ${stampTone(opts.stampKind)}">${opts.stamp}</span></div>
+      </div>
+      ${opts.chart ?? ""}
+      ${opts.facts?.length ? `<div class="facts">${opts.facts.map(factCell).join("")}</div>` : ""}
+      ${opts.venues ?? ""}
+    </aside>
+    <div class="list">
+      <div class="list-head">
+        <h2>Guest list</h2>
+        <span>the five questions asked before any money moves</span>
+        <span class="vat">${opts.at}</span>
+      </div>
+      <div class="qs">${rows}${gap}</div>
+      ${findingsLog(opts.notes)}
+    </div>
+  </section>
+  <div class="vfoot"><div class="vacts">${opts.actions}</div></div>`;
+  }
+  var SERIES = /* @__PURE__ */ new Map();
+  function seriesFor(address) {
+    return SERIES.get(address.toLowerCase()) ?? null;
+  }
+  async function fillChart(slip, m) {
+    const key = slip.subject.toLowerCase();
+    if (!m.pool || SERIES.has(key)) return;
+    const back = Math.round(24 * 3600 * chain().blocksPerSecond);
+    try {
+      const series = await readPriceSeries(rpcFor(true), m.pool, {
+        fromBlock: Math.max(0, slip.at.block - back),
+        toBlock: slip.at.block,
+        tokenDecimals: slip.id.meta?.decimals ?? 18,
+        chunkSize: mode === "demo" ? 1e5 : void 0
+      });
+      SERIES.set(key, series);
+      const box = document.getElementById("chart");
+      if (box) box.outerHTML = chartPanel(series, m.quoteSymbol, m.quoteDecimals, m.spot);
+    } catch (error) {
+      SERIES.set(key, { points: [], venue: m.pool.dex, poolAddress: m.pool.address, fromBlock: 0, toBlock: 0, swaps: 0, unread: plainReason(error instanceof Error ? error.message : String(error)) });
+      const box = document.getElementById("chart");
+      if (box) box.outerHTML = chartPanel(SERIES.get(key), m.quoteSymbol, m.quoteDecimals, m.spot);
+    }
+  }
+  function splFacts(slip) {
+    const m = slip.mint;
+    const pool = slip.market?.pools.filter((x) => x.quoteReserve > 0n).sort((a, b) => b.quoteReserve > a.quoteReserve ? 1 : -1)[0] ?? null;
+    const top = slip.holders?.top10Bps ?? null;
+    return [
+      pool ? { label: "Liquidity", value: `${formatUnits(pool.quoteReserve, pool.quoteDecimals, 2)} ${pool.quoteSymbol}`, note: `deepest of ${slip.market?.pools.length ?? 1}`, source: "chain" } : { label: "Liquidity", value: null, note: "in a pool", source: "chain", why: slip.market?.unread ?? "no venue answered" },
+      m ? { label: "Supply", value: formatSupply(m.supply, m.decimals), note: `${m.decimals} decimals`, source: "chain" } : { label: "Supply", value: null, note: "tokens", source: "chain", why: "there is no mint account to read" },
+      top === null ? { label: "Top 10", value: null, note: "of supply", source: "chain", why: "the node refused the largest-accounts read" } : { label: "Top 10", value: `${(top / 100).toFixed(0)}%`, note: "of supply", source: "chain", warn: top >= 5e3 },
+      {
+        label: "Program",
+        value: m ? m.token2022 ? "Token-2022" : "SPL Token" : null,
+        note: m?.token2022 ? "fees, hooks, delegates live here" : "no extensions",
+        source: "chain",
+        why: "this address is not a mint"
+      }
+    ];
+  }
+  function venueList(pools, quote, tokenDecimals) {
+    if (pools === null || pools === void 0) return "";
+    if (!pools.length) {
+      return `<div class="venues"><div class="cap-l">Where it trades</div><div class="venue">nothing on this chain's known DEX factories</div></div>`;
+    }
+    const rows = pools.slice(0, 4).map(
+      (p) => `<div class="venue"><span>${esc2(p.dex)} \xB7 ${(p.feeBps / 100).toFixed(2)}%</span><b>${p.quoteReserve === null ? "unread" : `${formatUnits(p.quoteReserve, quote.decimals, 2)} ${esc2(quote.symbol)}`}</b></div>
+        <div class="venue"><span>tokens inside</span><b>${p.tokenReserve === null ? "unread" : formatUnits(p.tokenReserve, tokenDecimals, 0)}</b></div>`
+    ).join("");
+    return `<div class="venues"><div class="cap-l">Where it trades</div>${rows}</div>`;
+  }
+  function factCell(f) {
+    return `<div class="fact">
+    <div class="fact-l">${esc2(f.label)}</div>
+    <div class="fact-v ${f.value === null ? "none" : f.warn ? "warn" : ""}">${f.value === null ? "not read" : esc2(f.value)}</div>
+    <div class="fact-n">${esc2(f.value === null ? f.why ?? f.note : f.note)}</div>
+  </div>`;
+  }
+  function findingsLog(notes) {
+    const mine = notes.filter((n) => topicOf(n.code) !== "unread");
+    if (!mine.length) return "";
+    const RANKED = { stop: 0, watch: 1, info: 2 };
+    const row = (n) => `<div class="log-row"><span class="log-lvl ${n.level}">${LEVEL_WORD[n.level]}</span><span>${glossed(n.text)}</span></div>`;
+    const loud = mine.filter((n) => n.level !== "info").sort((a, b) => RANKED[a.level] - RANKED[b.level]);
+    const quiet = mine.filter((n) => n.level === "info");
+    return `<details class="log">
+    <summary><span class="cap-l">Everything I found</span> <span class="log-n">${mine.length} line${mine.length === 1 ? "" : "s"}</span><span class="chev" aria-hidden="true"></span></summary>
+    <div class="log-body">
+      ${loud.map(row).join("")}
+      ${quiet.length ? `<details class="log-more"><summary>${quiet.length} more worth knowing, none of them dangerous</summary>${quiet.map(row).join("")}</details>` : ""}
+    </div>
+  </details>`;
+  }
+  function chartPanel(series, quoteSymbol, quoteDecimals, spot) {
+    const head = `<div class="chart-head"><span class="cap-l">Price \xB7 from the pool's swaps</span>`;
+    if (!series) {
+      return `<div class="chartbox" id="chart">${head}</div><p class="chart-no">Reading the pool's swap log\u2026</p></div>`;
+    }
+    if (series.unread || series.points.length < 2) {
+      const why = series.unread ?? (series.swaps === 0 ? "no swap in the window this read: nobody traded it" : "one swap in the window, which is not a line");
+      return `<div class="chartbox" id="chart">${head}</div><p class="chart-no">${esc2(why)}</p></div>`;
+    }
+    const range = seriesRange(series);
+    const span = range.high > range.low ? range.high - range.low : 1n;
+    const w = 286;
+    const h = 76;
+    const points = series.points.map((p, i) => {
+      const x = i / (series.points.length - 1) * w;
+      const y = h - Number((p.price - range.low) * 1000n / span) / 1e3 * (h - 8) - 4;
+      return `${x.toFixed(1)},${y.toFixed(1)}`;
+    }).join(" ");
+    const change = seriesChangeBps(series);
+    const tone = change === null ? "flat" : change > 50 ? "up" : change < -50 ? "down" : "flat";
+    const move = change === null ? "" : `<span class="move ${tone}">${change > 0 ? "+" : ""}${(change / 100).toFixed(1)}%</span>`;
+    const stroke = tone === "down" ? "var(--stop)" : tone === "up" ? "var(--ok)" : "var(--dim)";
+    return `<div class="chartbox" id="chart">
+    ${head}${move}</div>
+    <svg class="chart" viewBox="0 0 ${w} ${h}" role="img" aria-label="Price over the window read, from the pool's own swaps">
+      <polyline points="${points}" fill="none" stroke="${stroke}" stroke-width="1.8" stroke-linejoin="round"/>
+    </svg>
+    <div class="chart-foot">
+      <span>${series.swaps} swap${series.swaps === 1 ? "" : "s"} \xB7 ${esc2(series.venue)}</span>
+      <span>${spot === null ? "" : `${formatUnits(spot, quoteDecimals, 10).replace(/0+$/, "").replace(/\.$/, "")} ${esc2(quoteSymbol)}`}</span>
+    </div>
+  </div>`;
   }
   function qrow(a, evidence) {
     const loud = a.notes.filter((n) => n.level !== "info");
@@ -9118,23 +9393,23 @@
     void blocked;
     const answers = splAnswers(slip);
     out.innerHTML = `<div class="slip">
-    ${headBlock({
+    ${doorBlock({
       sym,
       name,
       address: slip.subject,
       stamp: stampLabel(slip.stamp, null),
       stampKind: slip.stamp,
-      answers,
       at: `${esc2(slip.chain.name)} \xB7 ${esc2(solanaWhen(slip))}${slip.at.timestamp ? ` \xB7 ${isoUtc(slip.at.timestamp)}` : ""}`,
       notes: slip.notes,
       stage: stage0,
       coverage,
       stillReading: SOL_STILL_READING,
+      answers,
+      facts: splFacts(slip),
+      bands: `${coverage ? coverageBand(coverage, stage0) : ""}${changes ?? ""}`,
+      evidence,
       actions: `<button class="ghost primary" id="act-share" type="button">Copy card</button><button class="ghost" id="act-link" type="button">Copy link</button><button class="ghost" id="act-json" type="button">JSON</button>`
     })}
-    ${coverage ? coverageBand(coverage, stage0) : ""}
-    ${changes ?? ""}
-    ${questionRows(answers, evidence, slip.notes)}
     ${moreStack([
       coverage && opts.source ? section("s-why", "Why this verdict", "Which findings made the word, what was asked of the chain, and what was never checked.", whyBody(slip.notes, coverage, `${esc2(slip.chain.name)} \xB7 ${esc2(solanaWhen(slip))}${slip.at.timestamp ? ` \xB7 ${isoUtc(slip.at.timestamp)}` : ""}`, opts.source), false) : "",
       stage0 === "done" ? section("s-watch", "Watch for changes", "Whether this tab can follow the mint after you leave it.", watchBody(splWatch(slip)), false) : ""
@@ -9454,30 +9729,35 @@
       room: (o && (o.holders || o.deployer || o.activity) ? holdersBody(slip) : "") + roomBody + crewBody + (d ? devSection(d, slip.subject, false, true) : "")
     };
     const answers = doorAnswers(slip);
+    const m = marketFacts(slip);
+    const chart = chartPanel(seriesFor(slip.subject), m.quoteSymbol, m.quoteDecimals, m.spot);
     out.innerHTML = `<div class="slip">
-    ${headBlock({
+    ${doorBlock({
       sym,
       name,
       address: slip.subject,
       stamp: stampLabel(slip.stamp, slip.chain.launchpad),
       stampKind: slip.stamp,
-      answers,
       at: `${mode === "demo" ? "DEMO \xB7 " : ""}${esc2(slip.chain.name)} \xB7 block ${slip.at.block} \xB7 ${isoUtc(slip.at.timestamp)}`,
       notes: slip.notes,
       stage: stage0,
       coverage,
+      answers,
+      facts: m.facts,
+      chart,
+      venues: venueList(slip.open?.pools, slip.rules?.quote ?? slip.chain.native, slip.id.meta?.decimals ?? 18),
+      bands: `${coverage ? coverageBand(coverage, stage0) : ""}${changes ?? ""}`,
+      evidence,
       actions: `<button class="ghost primary" id="act-share" type="button">Copy card</button><button class="ghost" id="act-card" type="button">Preview</button><button class="ghost" id="act-link" type="button">Copy link</button><button class="ghost" id="act-json" type="button">JSON</button>`
     })}
-    ${coverage ? coverageBand(coverage, stage0) : ""}
-    ${changes ?? ""}
     <div class="card-wrap" id="card"></div>
-    ${questionRows(answers, evidence, slip.notes)}
     ${moreStack([
       coverage && opts.source ? section("s-why", "Why this verdict", "Which findings made the word, what was asked of the chain, and what was never checked.", whyBody(slip.notes, coverage, `${esc2(slip.chain.name)} \xB7 block ${slip.at.block} \xB7 ${isoUtc(slip.at.timestamp)}`, opts.source), false) : "",
       stage0 === "done" ? section("s-watch", "Watch for changes", "Get told when the dev moves or tokens go into a pool.", watchBody(offer), new URLSearchParams(location.hash.split("?")[1] ?? "").get("watch") === "1") : ""
     ])}
     ${buyStrip(mode === "demo" ? "" : slip.chain.key, slip.subject, Boolean(slip.id.meta) && slip.open?.transferFunction !== false, verdictOf(slip.notes, "done", coverage).kind)}
   </div>`;
+    if (stage0 === "done" && m.pool) void fillChart(slip, m);
     const cardSvg = () => {
       noteCard("door", slip.id.meta?.symbol ?? slip.subject);
       return doorCard(slip, { repoUrl: REPO, ticker: MARK, mascotSvg: MASCOT_SVG_INNER, checkUrl: shareBase(), lead: summarySentence(slip) });

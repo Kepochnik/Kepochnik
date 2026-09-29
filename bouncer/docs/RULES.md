@@ -29,6 +29,19 @@ On an address the factory does not know, `SELFDESTRUCT` and `CALLCODE` are `STOP
 
 A token missing from both factories is also asked for `launchFactory()`, the view a `PonsLauncherToken` carries. When it names a factory the chain table lists (the current V1 factory or an older deployment such as `0x0c37a24F5D23A486FA692d1500881d698B1F77a4`, which made $PONS), that factory's `getLaunchedToken` record is read and the token is on the list as a V1 launch. A factory the table does not list is a claim, noted as such (`claimed-factory`), never proof.
 
+## The price line
+
+Read from the pool's own `Swap` log, never from an index. Two shapes carry a price:
+
+| Pool | Read | Rule |
+| --- | --- | --- |
+| Uniswap V3 / V4 and ports | the `Swap` event's `sqrtPriceX96` | the price AFTER that swap, exact, with no arithmetic across logs: `(√P / 2^96)²` is token1 per token0, inverted when the subject sorts second |
+| Uniswap V2 / Solidly and ports | the event's four amounts | the realised price of that one trade — what went out over what went in. Not the marginal price, and the better number to draw |
+
+The window is the last 24 hours of blocks, walked with the adaptive chunker, and the line is thinned evenly to at most 120 points keeping the first and last. **Gaps are not filled.** An hour with no swaps is an hour with no point, never a flat line drawn between two real ones: a chart that invents the quiet hides exactly the thing worth seeing on a token nobody is trading. A refused or unsupported read draws nothing and says why. Solana has no log filter to walk, so it has no line and the panel says so.
+
+The figures beside it (`src/bouncer/marketFacts.ts`) each name their source: `chain` for what the pool answered at this block, `explorer` for the indexer's feed, `derived` for arithmetic on the two. A figure that could not be read is absent with a reason, never a zero — a market cap of 0 and a market cap nobody could compute look identical on a page and mean opposite things.
+
 ## Open door (any token)
 
 Run for every contract the V2 factory did not make: ordinary tokens and V1 tokens alike.

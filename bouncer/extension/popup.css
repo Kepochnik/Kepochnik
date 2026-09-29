@@ -39,20 +39,21 @@ header{position:static}
 .grid{grid-template-columns:1fr}
 .exit-grid,.calc-res{grid-template-columns:1fr 1fr}
 
-/* The verdict is a statement here, not a headline: at this width the word
-   and its sentence fought for one line and the sentence lost. */
-.vword{font-size:26px}
-.verdict{gap:4px 12px;padding-block:14px 16px}
-.vlead{flex:1 1 100%;font-size:13.5px}
-.head-top,.verdict,.vfoot,.q>summary,.qbody,.sec>summary,.sec>.body,.more-head{padding-inline:16px}
+/* One column: 560px is not enough for the bouncer beside the guest list, so
+   he stands above it — and stands BESIDE his own stamp, the way he does on a
+   phone, so the verdict is the first thing in the window rather than 120px
+   of mascot followed by it. */
+.doorway{grid-template-columns:1fr}
+.doorman{border-right:0;border-bottom:1px solid var(--line)}
+.stand{display:flex;align-items:center;gap:14px;text-align:left;padding:14px 16px}
+.mascot{width:52px;height:52px;flex:none}
+.vword{margin-top:0;font-size:18px;padding:5px 12px}
+.lead{margin-top:7px;font-size:12.5px}
+.facts{grid-template-columns:repeat(3,minmax(0,1fr))}
+.who2,.chartbox,.facts,.venues,.band{padding-inline:16px}
+.list-head,.q>summary,.log>summary,.log-body,.qbody,.vfoot{padding-inline:16px}
+.qbody{padding-left:16px}
 .vfoot{padding-block:10px}
-.vacts{margin-left:0;flex:1 1 100%}
-
-/* The answer under the question, as on a phone: 560px is not enough for
-   both on one line once the answer is a sentence fragment. */
-.q>summary{flex-wrap:wrap;gap:5px 12px;min-height:0}
-.qdot{order:0} .qq{order:1;flex:1 1 auto} .q>summary .chev{order:2;margin-left:auto}
-.qa{order:3;flex:1 1 100%;text-align:left;margin-left:22px}
 
 .kv{grid-template-columns:1fr;gap:2px 0}
 .kv dt{margin-top:8px}

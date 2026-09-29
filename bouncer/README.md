@@ -121,7 +121,9 @@ Nine read-only tools, every one annotated `readOnlyHint`: `bouncer_check` (the s
 
 The same read path runs in the browser, bundled into one HTML file (`npm run site` → `site/dist/index.html`).
 
-**The page is five questions.** Paste an address and you get the word — STOP, WATCH, CLEAR or INCOMPLETE — then the token's whole shape as five figures, then one row per question answering it in words anybody can act on:
+**The page is a doorway.** The bouncer stands on the left with the stamp this reading put on the token, what it costs, how deep the pool is and how old it is; the guest list is on the right.
+
+**The list is five questions.** Paste an address and you get the word — STOP, WATCH, CLEAR or INCOMPLETE — then the token's whole shape as five figures, then one row per question answering it in words anybody can act on:
 
 | Question | Figure | The answer |
 | --- | --- | --- |
@@ -240,6 +242,8 @@ src/bouncer/watch.ts        DEV MOVED and CREW EXIT events, and the poll loop
 src/bouncer/watchPlan.ts    which tape a token gets, and what that tape is blind to
 src/bouncer/pageSubject.ts  which token a web page is about, and on which chain (shared by the extension's badge and popup)
 src/bouncer/verdict.ts      the one word (STOP / WATCH / CLEAR / INCOMPLETE), shared by every surface
+src/bouncer/marketFacts.ts  price, market cap, liquidity, supply, holders, age — the figures a buyer looks for first
+src/chain/priceSeries.ts    the price line, read from the pool's own Swap log rather than an index
 src/bouncer/leaderboard.ts  the board
 src/mcp/server.ts           the read-only MCP server (stdio, no dependencies)
 src/bouncer/door.ts         one address in, one slip out; the door notes
