@@ -68,3 +68,27 @@ export function isoUtc(unix: number): string {
 function groupThousands(digits: string): string {
   return digits.replace(/\B(?=(\d{3})+(?!\d))/g, ",");
 }
+
+const SUBSCRIPT = "₀₁₂₃₄₅₆₇₈₉";
+
+/**
+ * A token price the way a trading screen writes it.
+ *
+ * A fresh launch costs 0.0000000133 of a coin, and ten zeros is a number a
+ * reader has to count before they can compare it with anything. Past four
+ * leading zeros they collapse into a subscript count of them — 0.0₇133 — the notation
+ * DexScreener and every terminal after it taught people to read. Four
+ * significant digits after the zeros; plain text, so it is safe anywhere a
+ * string goes.
+ */
+export function formatPrice(value: bigint, decimals: number): string {
+  if (value <= 0n) return "0";
+  const base = 10n ** BigInt(decimals);
+  if (value >= base) return formatUnits(value, decimals, value >= 1_000n * base ? 2 : 4);
+  const fraction = value.toString().padStart(decimals, "0");
+  const zeros = fraction.match(/^0*/)![0].length;
+  const digits = fraction.slice(zeros, zeros + 4).replace(/0+$/, "") || "0";
+  if (zeros < 4) return `0.${"0".repeat(zeros)}${digits}`;
+  const count = String(zeros).split("").map((d) => SUBSCRIPT[Number(d)]).join("");
+  return `0.0${count}${digits}`;
+}

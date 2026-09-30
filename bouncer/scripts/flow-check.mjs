@@ -604,6 +604,10 @@ await walk("the list of what you checked before never states a stale verdict as 
   await page.reload({ waitUntil: "load" });
   await page.waitForTimeout(700);
 
+  // With the board on the front page the list is folded to one line; it is
+  // a tap away, and a reader has to be able to open it.
+  if (!(await page.$(".seen .seen-head"))) throw new Error("a browser with history showed no list");
+  await page.evaluate(() => document.querySelector("details.seen")?.setAttribute("open", ""));
   const rows = await page.$$eval(".seen-row", (els) => els.map((e) => e.textContent.replace(/\s+/g, " ").trim()));
   if (!rows.length) throw new Error("a browser with history showed no list");
 
@@ -734,7 +738,7 @@ await walk("a token with no pool says so instead of reading a tape forever", asy
   if (!tape) throw new Error("a token with no tape got no panel at all, which reads as nothing happening");
   const text = await page.$eval("#tape", (el) => el.textContent.replace(/\s+/g, " ").trim());
   if (/Reading the trades/.test(text)) throw new Error("the tape is still claiming to read something nobody started");
-  const chart = await page.$eval(".chart-no", (el) => el.textContent.replace(/\s+/g, " ").trim()).catch(() => "");
+  const chart = await page.$eval(".chart-empty", (el) => el.textContent.replace(/\s+/g, " ").trim()).catch(() => "");
   if (/Reading the pool/.test(chart)) throw new Error(`the price panel waits forever on a token with no pool: "${chart}"`);
 });
 await walk("the column of launches opens a token without losing itself", async (page) => {
@@ -778,7 +782,7 @@ await walk("one window governs the line and the tape, and they cannot disagree",
 
   const opensAt = () => page.$eval("#tape .tape-note", (el) => Number(el.textContent.match(/Window opens at block (\d+)/)?.[1] ?? 0));
   const narrow = await opensAt();
-  await page.click('#tape .frame[data-frame="24h"]');
+  await page.click('.tokbar .frame[data-frame="24h"]');
   await page.waitForFunction(() => document.querySelector("#tape .flow-win")?.textContent.includes("24 hours"), null, { timeout: 30_000 });
 
   const after = await lit();
@@ -862,7 +866,7 @@ await walk("a token on its curve has a price, a market cap and a live line", asy
   const facts = await page.$$eval(".fact", (els) => els.map((e) => e.textContent.replace(/\s+/g, " ").trim()));
   for (const label of ["Price", "Market cap", "Liquidity"]) {
     const f = facts.find((x) => x.toLowerCase().startsWith(label.toLowerCase()));
-    if (!f || /not read/.test(f)) throw new Error(`a token on its curve still shows ${label} as "${f}"`);
+    if (!f || /not read|—/.test(f)) throw new Error(`a token on its curve still shows ${label} as "${f}"`);
   }
 });
 await walk("Solana says why it cannot watch instead of hiding the section", async (page) => {

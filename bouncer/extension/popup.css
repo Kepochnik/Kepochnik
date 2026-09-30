@@ -43,14 +43,21 @@ header{position:static}
    he stands above it — and stands BESIDE his own stamp, the way he does on a
    phone, so the verdict is the first thing in the window rather than 120px
    of mascot followed by it. */
-.doorway{grid-template-columns:1fr}
+.doorway{grid-template-columns:1fr;grid-template-areas:"bar" "door" "chart" "list"}
+.tokbar{padding:12px 16px;gap:8px 14px}
+.tokprice{margin-left:0;text-align:left}
+.tp-s{justify-content:flex-start}
+.tp-v{font-size:22px}
+.doorway>.chartbox{padding-inline:16px}
+.chart-plot,.chart-empty.busy{height:170px}
+.chart-plot{margin-right:64px}
 .doorman{border-right:0;border-bottom:1px solid var(--line)}
 .stand{display:flex;align-items:center;gap:14px;text-align:left;padding:14px 16px}
 .mascot{width:52px;height:52px;flex:none}
 .vword{margin-top:0;font-size:18px;padding:5px 12px}
 .lead{margin-top:7px;font-size:12.5px}
 .facts{grid-template-columns:repeat(3,minmax(0,1fr))}
-.who2,.chartbox,.facts,.venues,.band{padding-inline:16px}
+.facts,.venues,.band{padding-inline:16px}
 .list-head,.q>summary,.log>summary,.log-body,.qbody,.vfoot{padding-inline:16px}
 .qbody{padding-left:16px}
 .vfoot{padding-block:10px}

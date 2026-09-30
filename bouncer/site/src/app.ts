@@ -39,14 +39,14 @@ import { readBoard, type Board } from "../../src/bouncer/leaderboard.js";
 import { readWatchEvents, type WatchEvent } from "../../src/bouncer/watch.js";
 import { readTokenWatchEvents, type TokenWatchEvent } from "../../src/bouncer/tokenWatch.js";
 import { readTrades, type Trade, type TradeSource } from "../../src/bouncer/trades.js";
-import { feedBlocker, readFeed, type FeedRow } from "../../src/bouncer/feed.js";
+import { feedBlocker, readFeed, stampFill, type FeedRow } from "../../src/bouncer/feed.js";
 import { doorAnswers, splAnswers, SHORT_QUESTION, type Answer } from "../../src/bouncer/answers.js";
 import { marketFacts, shortAge, type Fact } from "../../src/bouncer/marketFacts.js";
 import type { MarketPool } from "../../src/chain/market.js";
 import { seriesChangeBps, seriesRange, thin, type PricePoint, type PriceSeries } from "../../src/chain/priceSeries.js";
 import { doorWatch, readLag, splWatch, type WatchOffer, type WatchPlan } from "../../src/bouncer/watchPlan.js";
 import { readTradeReceipt, type TradeReceipt } from "../../src/bouncer/txReceipt.js";
-import { formatBps, formatDuration, formatUnits, isoUtc, shortAddress } from "../../src/format.js";
+import { formatBps, formatDuration, formatPrice, formatUnits, isoUtc, shortAddress } from "../../src/format.js";
 
 type Mode = "demo" | "live";
 type View = "door" | "dev" | "wallet" | "tx" | "plan" | "board";
@@ -439,8 +439,13 @@ function renderSeen(): void {
     const c = CHAINS[key];
     return c ? `<span class="seen-mark" style="color:${esc(c.tint)}">${chainMark(key)}</span>` : "";
   };
-  host.innerHTML = `<div class="seen">
-    <div class="seen-head"><span>Checked before</span><button class="link" id="seen-clear" type="button">Forget these</button></div>
+  // One line, not eight rows, whenever there is something else to look at:
+  // with a report or the board on screen the list sat between the search box
+  // and the answer and pushed the verdict off a phone's first screen. It is
+  // a way back to earlier checks, so it is one tap away rather than in the way.
+  const busy = document.body.classList.contains("board") || Boolean(out.querySelector(".slip"));
+  host.innerHTML = `<details class="seen"${busy ? "" : " open"}>
+    <summary class="seen-head"><span>Checked before</span><span class="seen-n">${rows.length}</span><span class="chev" aria-hidden="true"></span></summary>
     <ul class="seen-list">${rows
       .map((sn) => {
         const href = `#/${mode === "demo" ? "demo" : "t"}/${sn.address}${mode === "demo" ? "" : `?chain=${esc(sn.chain)}`}`;
@@ -455,8 +460,8 @@ function renderSeen(): void {
         </li>`;
       })
       .join("")}</ul>
-    <p class="seen-foot">What each one read when you last looked, not what it reads now — a token that was CLEAR in March is not CLEAR because this list says so. Kept in this browser only.</p>
-  </div>`;
+    <p class="seen-foot">What each one read when you last looked, not what it reads now — a token that was CLEAR in March is not CLEAR because this list says so. Kept in this browser only. <button class="link" id="seen-clear" type="button">Forget these</button></p>
+  </details>`;
   document.getElementById("seen-clear")?.addEventListener("click", () => {
     storage(HISTORY_KEY, "[]");
     renderSeen();
@@ -549,6 +554,9 @@ function busy(text: string): void {
   stopTape();
   // A toggle press after this would re-read a token the page has left.
   shown = null;
+  // A check is starting, so the answer is about to be the thing on screen:
+  // the history folds to its one line rather than sitting above the answer.
+  document.querySelector("details.seen")?.removeAttribute("open");
   status.innerHTML = `<span class="dot"></span> ${esc(text)} ${mode === "demo" ? "(demo chain, every address invented)" : `(${esc(chain().name)}, ${chain().family === "solana" ? "read slot by slot" : "one block pinned"})`}`;
   out.innerHTML = "";
   if (ticker) { clearInterval(ticker); ticker = null; }
@@ -1577,6 +1585,10 @@ function doorBlock(opts: {
   facts?: Fact[];
   /** The price line, when one has been read. */
   chart?: string;
+  /** The live price in the token bar. */
+  price?: string;
+  /** The one window control, when the token has a tape for it to govern. */
+  frames?: string;
   /** Where it trades, for the foot of the rail. */
   venues?: string;
   /**
@@ -1625,26 +1637,31 @@ function doorBlock(opts: {
   // `data-pending` is a contract with speed-check and stage-check: a slip is
   // COMPLETE by the absence of this marker.
   return `<section class="doorway head v-${v.kind}"${stage === "done" ? "" : ' data-pending="1"'}>
+    <div class="tokbar">
+      <div class="who2">
+        <div class="tokline">
+          <span class="sym">${opts.sym}</span>
+          <span class="name">${opts.name}</span>
+          <span class="stamp ${stampTone(opts.stampKind)}">${opts.stamp}</span>
+        </div>
+        <button class="vaddr" type="button" data-copy="${esc(opts.address)}" title="Copy the address">${esc(opts.address)}</button>
+      </div>
+      ${opts.price ?? ""}
+      ${opts.frames ?? ""}
+    </div>
     <aside class="doorman">
       <div class="stand">
-        <img class="mascot" src="${MASCOT_URL}" alt="" width="104" height="104">
+        <img class="mascot" src="${MASCOT_URL}" alt="" width="64" height="64">
         <div class="verdict">
           <span class="vword ${v.kind}" aria-label="Verdict">${v.word}</span>
           <p class="lead">${esc(v.line)}${pending}</p>
         </div>
       </div>
       ${opts.bands ?? ""}
-      <div class="who2">
-        <div class="cap-l">At the door</div>
-        <div class="sym">${opts.sym}</div>
-        <div class="name">${opts.name}</div>
-        <button class="vaddr" type="button" data-copy="${esc(opts.address)}" title="Copy the address">${esc(opts.address)}</button>
-        <div><span class="stamp ${stampTone(opts.stampKind)}">${opts.stamp}</span></div>
-      </div>
-      ${opts.chart ?? ""}
       ${opts.facts?.length ? `<div class="facts">${opts.facts.map(factCell).join("")}</div>` : ""}
       ${opts.venues ?? ""}
     </aside>
+    ${opts.chart ?? ""}
     <div class="list">
       <div class="list-head">
         <h2>Guest list</h2>
@@ -1680,11 +1697,83 @@ function tapeSeries(): PriceSeries | null {
   return { points: thin(t.points, 120), venue: t.sub, poolAddress: "", fromBlock: t.from, toBlock: t.head ?? t.from, swaps: t.points.length, unread: null };
 }
 
-/** Repaints the price panel in place, from whatever the tape holds now. */
+/** Repaints the price panel and the price in the token bar, from whatever the tape holds now. */
 function paintChart(): void {
+  if (!shown) return;
   const box = document.getElementById("chart");
-  if (!box || !shown) return;
-  box.outerHTML = chartPanel(tapeSeries(), shown.m.quoteSymbol, shown.m.quoteDecimals, shown.m.spot, "why" in shown.picked ? shown.picked.why : true);
+  if (box) {
+    // Where the reader was pointing survives the repaint: a crosshair that
+    // vanishes every fifteen seconds is a crosshair nobody can use.
+    const before = box.querySelector<HTMLElement>(".chart-plot");
+    const held = before?.dataset.i;
+    // And so does keyboard focus: replacing the element dropped it to the
+    // page, and the next arrow key scrolled instead of moving the crosshair.
+    const focused = before !== null && before === document.activeElement;
+    box.outerHTML = chartPanel(tapeSeries(), shown.m.quoteSymbol, shown.m.quoteDecimals, shown.m.spot, "why" in shown.picked ? shown.picked.why : true);
+    const plot = document.querySelector<HTMLElement>("#chart .chart-plot");
+    if (plot && focused) plot.focus({ preventScroll: true });
+    if (plot && held !== undefined) showPoint(plot, Number(held));
+  }
+  const price = document.getElementById("tokprice");
+  if (price) price.outerHTML = tokPrice(shown.m, shown.slip.at.block);
+}
+
+/**
+ * The number a trader looks at first, in the token bar.
+ *
+ * The last trade once the tape has one — that is what the token costs now —
+ * and until then the price read at the pinned block, saying which it is. The
+ * figures in the rail stay pinned; this one moves.
+ */
+function tokPrice(m: ReturnType<typeof marketFacts>, block: number): string {
+  const t = tape;
+  const lastPoint = t && t.points.length ? t.points[t.points.length - 1] : null;
+  const value = lastPoint?.price ?? m.spot;
+  const series = tapeSeries();
+  const change = series && series.points.length > 1 ? seriesChangeBps(series) : null;
+  const tone = change === null ? "flat" : change > 50 ? "up" : change < -50 ? "down" : "flat";
+  const move = change === null ? "" : `<span class="move ${tone}">${change > 0 ? "+" : ""}${(change / 100).toFixed(1)}%</span>`;
+  const sub = lastPoint
+    ? `last trade ${agoOf(lastPoint.block, t!.head)} ago`
+    : value !== null
+      ? `read at block ${block}`
+      : "no price read";
+  return `<div class="tokprice" id="tokprice">
+    <div class="tp-v">${value === null ? "—" : esc(formatPrice(value, m.quoteDecimals))}<small>${esc(m.quoteSymbol)}</small></div>
+    <div class="tp-s">${move}<span>${esc(sub)}</span></div>
+  </div>`;
+}
+
+/** Puts the crosshair on point `i` of a plot and says what is there. */
+function showPoint(plot: HTMLElement, i: number): void {
+  const pts = (plot.dataset.pts ?? "").split(";").filter(Boolean);
+  if (!pts.length) return;
+  const at = Math.max(0, Math.min(pts.length - 1, i));
+  const [price, ago, side] = pts[at].split("|");
+  const left = pts.length === 1 ? 100 : (at / (pts.length - 1)) * 100;
+  plot.dataset.i = String(at);
+  const xh = plot.querySelector<HTMLElement>(".chart-xh");
+  const tip = plot.querySelector<HTMLElement>(".chart-tip");
+  if (!xh || !tip) return;
+  xh.hidden = false;
+  xh.style.left = `${left}%`;
+  tip.hidden = false;
+  // Values lead, labels follow; built from text nodes, never markup.
+  tip.replaceChildren();
+  const v = document.createElement("b");
+  v.textContent = price;
+  const k = document.createElement("span");
+  k.className = `t-${side}`;
+  k.textContent = `${side} · ${ago} ago`;
+  tip.append(v, k);
+  tip.style.left = `${left}%`;
+  tip.classList.toggle("flip", left > 62);
+}
+
+function hidePoint(plot: HTMLElement): void {
+  delete plot.dataset.i;
+  plot.querySelector<HTMLElement>(".chart-xh")?.setAttribute("hidden", "");
+  plot.querySelector<HTMLElement>(".chart-tip")?.setAttribute("hidden", "");
 }
 
 // -------------------------------------------------------------- timeframe
@@ -1729,8 +1818,10 @@ function setFrame(next: Frame): void {
   }
   if (!shown) return;
   const { slip, m, picked } = shown;
-  // The line is drawn from the tape, so restarting the tape redraws both.
-  if (!("why" in picked)) startTape(slip, picked, m);
+  // The line is drawn from the tape, so restarting the tape redraws both —
+  // and until the new window lands the old one stays on screen, dimmed, rather
+  // than flashing to empty and back.
+  if (!("why" in picked)) startTape(slip, picked, m, true);
 }
 
 /** How many blocks the current window is on the chain now selected. */
@@ -1786,10 +1877,11 @@ interface FeedView {
  * re-read a narrower window would make "3 launches" mean two different
  * things depending on which chip was lit.
  */
-type FeedFilter = "all" | "graduated" | "serial" | "new";
+type FeedFilter = "all" | "graduated" | "serial" | "new" | "near";
 const FEED_FILTERS: { key: FeedFilter; label: string; hint: string }[] = [
   { key: "all", label: "all", hint: "every launch in the window" },
   { key: "new", label: "fresh", hint: "launched in the last five minutes" },
+  { key: "near", label: "near grad", hint: "the curve is at least 70% of the way to graduating" },
   { key: "graduated", label: "graduated", hint: "the curve filled and the pool exists" },
   { key: "serial", label: "serial dev", hint: "the deployer launched more than one in this window" },
 ];
@@ -1800,6 +1892,7 @@ function keepRow(r: FeedRow): boolean {
     case "graduated": return r.graduated;
     case "serial": return r.deployerLaunches > 1;
     case "new": return r.ageSeconds !== null && r.ageSeconds <= 300;
+    case "near": return r.fill !== null && r.fill.bps >= 7_000;
     default: return true;
   }
 }
@@ -1829,6 +1922,10 @@ function setFeed(on: boolean, remember = true): void {
   feedBox.hidden = !on;
   deck.classList.toggle("two", on);
   document.querySelector("main")?.classList.toggle("wide", on);
+  // The page itself changes shape: a board is a tool you sit at, so the
+  // invitation headline goes and the search becomes a bar.
+  document.body.classList.toggle("board", on);
+  renderSeen();
   if (!on) {
     stopFeed();
     feedBox.innerHTML = "";
@@ -1914,6 +2011,21 @@ function startFeed(): void {
       } else {
         f.fresh = new Set();
       }
+      // A launch on screen that graduated or was swept since: the new blocks
+      // say so even though its row came from an earlier round.
+      if (!first) {
+        const done = new Set(feed.graduated);
+        const gone = new Set(feed.swept);
+        for (const row of f.rows) {
+          if (done.has(row.token)) { row.graduated = true; row.fill = null; }
+          if (gone.has(row.token)) { row.swept = true; row.fill = null; }
+        }
+      }
+      // The bars move every round: one batched call for the curves on screen,
+      // so the column shows a launch filling up rather than a snapshot of it.
+      if (!first && f.rows.length) {
+        try { await stampFill(rpc, f.rows.slice(0, 30), head.number); } catch { /* the bars keep their last reading */ }
+      }
       // The ages on the rows below are measured against the head, so they all
       // move when it does.
       for (const row of f.rows) {
@@ -1941,6 +2053,9 @@ function paintFeed(): void {
   const f = feedState;
   if (!f) return;
   const at = feedBox.querySelector<HTMLElement>(".feed-rows")?.scrollTop ?? 0;
+  // The row somebody is stepping through with j and k keeps their place:
+  // the repaint every fifteen seconds used to throw it back to the top.
+  const focusedToken = (document.activeElement as HTMLElement | null)?.closest?.<HTMLElement>("#feed .fr")?.dataset.token ?? null;
   const here = openToken();
   const stalled = Boolean(f.failing);
   const kept = f.rows.filter(keepRow);
@@ -1954,7 +2069,7 @@ function paintFeed(): void {
           // Never read is not the same as nothing launched. A column that
           // says "no launch" because the endpoint refused it is telling a
           // reader the chain is quiet when it has no idea.
-          ? "<b>Could not read the launches</b>the chain did not answer, so this says nothing about whether anything launched. The column keeps trying every fifteen seconds."
+          ? `<b>Could not read the launches</b>the chain did not answer, so this says nothing about whether anything launched. The column keeps trying every fifteen seconds.${mode === "demo" ? "" : `<a class="feed-demo" href="#/demo/${DEMO.tokens.fresh.token}">See how the board works on the invented demo chain</a>`}`
           : `<b>No launch in the window</b>nothing was launched between block ${f.from ?? "?"} and ${f.head}. The column keeps looking.`}</div>`;
 
   feedBox.innerHTML = `<div class="feed-head">
@@ -1966,23 +2081,38 @@ function paintFeed(): void {
       (x) => `<button class="fchip${x.key === feedFilter ? " on" : ""}" type="button" data-filter="${x.key}" aria-pressed="${x.key === feedFilter}" title="${esc(x.hint)}">${esc(x.label)}</button>`,
     ).join("")}</div>
     ${body}
-    <div class="feed-note">${esc(
+    <div class="feed-note"${f.failing ? ` title="${esc(f.failing)}"` : ""}>${esc(
       f.failing
-        ? f.failing
-        : `${chain().launchpad ?? "The launchpad"} on ${chain().name}. ${f.rows.length ? `${feedFilter === "all" ? `The newest ${f.rows.length}` : `${kept.length} of ${f.rows.length}`}` : "Nothing"} between block ${f.from ?? "?"} and ${f.head ?? "?"}${f.unread ? `; blocks ${f.unread.fromBlock}–${f.unread.toBlock} were not opened` : ""}.`,
+        // The whole reason is in the tooltip; a list of three endpoint URLs
+        // in the column was the loudest thing on the page and said less than
+        // the sentence above it.
+        ? `Stalled: ${f.failing.length > 90 ? `${f.failing.slice(0, 88).replace(/\s+\S*$/, "")}…` : f.failing}`
+        : `j / k to move, Enter to open. ${chain().launchpad ?? "The launchpad"} on ${chain().name}. ${f.rows.length ? `${feedFilter === "all" ? `The newest ${f.rows.length}` : `${kept.length} of ${f.rows.length}`}` : "Nothing"} between block ${f.from ?? "?"} and ${f.head ?? "?"}${f.unread ? `; blocks ${f.unread.fromBlock}–${f.unread.toBlock} were not opened` : ""}.`,
     )}</div>`;
   const rows = feedBox.querySelector<HTMLElement>(".feed-rows");
   if (rows && at > 0) rows.scrollTop = at;
+  if (focusedToken) feedBox.querySelector<HTMLElement>(`.fr[data-token="${CSS.escape(focusedToken)}"]`)?.focus({ preventScroll: true });
 }
 
 /** The right-hand pane before a launch is picked: what to do, not an empty hole. */
 function pickOne(): string {
   const blocked = feedBlocker(chain());
+  // The four words, in the tool's own terms — a first-time reader learns the
+  // stamp here, before it is on a token they care about.
+  const words: [string, string, string][] = [
+    ["stop", "STOP", "something here can cost you money outright"],
+    ["watch", "WATCH", "nothing outright dangerous, but read before you buy"],
+    ["clear", "CLEAR", "nothing in what was read stands out — not a promise about price"],
+    ["unknown", "INCOMPLETE", "part of it could not be read, so it is not a clean result"],
+  ];
   return `<div class="pickone">
+    <img class="pick-mascot" src="${MASCOT_URL}" alt="" width="72" height="72">
     <b>${blocked ? "Paste a token to check it" : "Pick a launch to check it"}</b>
     <p>${blocked
       ? "There is no launchpad column on this chain, so paste any token address above — BOUNCER reads the chain itself and answers the five questions you would ask before buying."
       : "Every launch in the column opens here with its verdict, its figures and a live tape of who is buying and who is selling. Or paste any token address above."}</p>
+    <ul class="pick-words">${words.map(([kind, word, meaning]) => `<li><span class="vmini ${kind}">${word}</span><span>${esc(meaning)}</span></li>`).join("")}</ul>
+    <p class="pick-keys"><kbd>/</kbd> search <kbd>j</kbd><kbd>k</kbd> move down the column <kbd>Enter</kbd> open</p>
   </div>`;
 }
 
@@ -1994,11 +2124,17 @@ function feedRow(r: FeedRow, here: string | null): string {
   ].filter(Boolean).join("");
   const sym = r.symbol ?? "no ticker";
   const name = r.name ?? shortAddress(r.token);
+  // The graduation bar: how much of the way the curve is, read, not guessed.
+  // A curve that did not answer gets no bar at all, never an empty one.
+  const fill = r.fill && !r.graduated && !r.swept
+    ? `<span class="fr-fill${r.fill.bps >= 7_000 ? " near" : ""}" role="img" aria-label="${(r.fill.bps / 100).toFixed(0)}% of the way to graduating"><i style="width:${Math.max(2, r.fill.bps / 100).toFixed(1)}%"></i></span><span class="fr-pct">${(r.fill.bps / 100).toFixed(0)}%</span>`
+    : "";
   return `<button class="fr${here === r.token ? " on" : ""}${feedState?.fresh.has(r.token) ? " fresh" : ""}" type="button" data-token="${esc(r.token)}">
     <span class="fr-sym">${esc(sym)}</span>
     <span class="fr-age">${esc(r.ageSeconds === null ? `block ${r.block}` : shortAge(r.ageSeconds))}</span>
     <span class="fr-name">${esc(name)}</span>
     <span class="fr-tags">${tags}</span>
+    ${fill}
   </button>`;
 }
 
@@ -2181,7 +2317,6 @@ function tapePanel(): string {
     <div class="tape-head">
       <h2>The tape</h2>
       <span class="tape-src">${esc(tape.sub)}</span>
-      ${frameTabs()}
       <span class="tape-live${stalled ? " stalled" : ""}"><span class="dot"></span>${stalled ? "stalled" : "live"}</span>
       <span class="tape-when">${tape.failing ? esc(tape.failing) : tape.head === null ? "opening" : `block ${tape.head}`}</span>
     </div>
@@ -2223,7 +2358,7 @@ function paintTape(): void {
  * seconds, the same as the watch, because both are one narrow log read and
  * a public endpoint is somebody else's machine.
  */
-function startTape(slip: DoorSlip, picked: { source: TradeSource; sub: string }, m: ReturnType<typeof marketFacts>): void {
+function startTape(slip: DoorSlip, picked: { source: TradeSource; sub: string }, m: ReturnType<typeof marketFacts>, keepFrame = false): void {
   stopTape();
   const everyMs = mode === "demo" ? 5_000 : 15_000;
   const from = Math.max(0, slip.at.block - frameBlocks());
@@ -2250,11 +2385,18 @@ function startTape(slip: DoorSlip, picked: { source: TradeSource; sub: string },
     opening: true,
     points: [],
   };
-  // The panel resets to the new window at once, rather than showing the old
-  // one's rows and figures under the new one's heading until the first round
-  // lands. Moving the toggle should never leave a true figure under a label
-  // that says it is about a different stretch of the token.
-  paintTape();
+  // A new window keeps the old render on screen, dimmed and marked busy,
+  // until its first round lands: no flash to empty, no layout jump, and
+  // nothing that reads as current. A first open paints the reading state.
+  if (keepFrame) {
+    for (const id of ["tape", "chart", "tokprice"]) {
+      const el = document.getElementById(id);
+      el?.classList.add("stale");
+      el?.setAttribute("aria-busy", "true");
+    }
+  } else {
+    paintTape();
+  }
   let cursor = from;
 
   const tick = async () => {
@@ -2377,7 +2519,7 @@ function venueList(pools: MarketPool[] | null | undefined, quote: { symbol: stri
 function factCell(f: Fact): string {
   return `<div class="fact">
     <div class="fact-l">${esc(f.label)}</div>
-    <div class="fact-v ${f.value === null ? "none" : f.warn ? "warn" : ""}">${f.value === null ? "not read" : esc(f.value)}</div>
+    <div class="fact-v ${f.value === null ? "none" : f.warn ? "warn" : ""}"${f.value === null ? ' aria-label="not read"' : ""}>${f.value === null ? "—" : esc(f.value)}</div>
     <div class="fact-n">${esc(f.value === null ? (f.why ?? f.note) : f.note)}</div>
   </div>`;
 }
@@ -2423,44 +2565,64 @@ function findingsLog(notes: DoorNote[]): string {
  * trading.
  */
 function chartPanel(series: PriceSeries | null, quoteSymbol: string, quoteDecimals: number, spot: bigint | null, pending: true | string = true): string {
-  const head = `<div class="chart-head"><span class="cap-l" title="Drawn from this token's own trades: each point is what one trade paid per token">Price</span>${frameTabs()}`;
+  void spot;
+  const head = (move = "") =>
+    `<div class="chart-head"><span class="cap-l" title="Drawn from this token's own trades: each point is what one trade paid per token">Price</span><span class="chart-win">${esc(FRAME_WORD[frame])} · ${esc(quoteSymbol)}</span>${move}</div>`;
   if (!series) {
     // "Reading…" forever is what a token with no pool used to show, because
     // the walk that would have replaced this line is never started for one.
     // A panel that waits for something nobody asked for is the page telling
     // you it is broken.
-    return `<div class="chartbox" id="chart">${head}</div><p class="chart-no">${pending === true ? "Reading the trades…" : esc(pending)}</p></div>`;
+    return `<div class="chartbox" id="chart">${head()}<div class="chart-empty${pending === true ? " busy" : ""}">${pending === true ? "Reading the trades…" : esc(pending)}</div></div>`;
   }
   if (series.unread || series.points.length < 2) {
-    const why = series.unread ?? (series.swaps === 0 ? `no trade in ${FRAME_WORD[frame]}: nobody bought or sold it` : `one trade in ${FRAME_WORD[frame]}, which is not a line`);
-    return `<div class="chartbox" id="chart">${head}</div><p class="chart-no">${esc(why)}</p></div>`;
+    const why = series.unread ?? (series.swaps === 0 ? `No trade in ${FRAME_WORD[frame]}: nobody bought or sold it.` : `One trade in ${FRAME_WORD[frame]}, which is not a line yet.`);
+    return `<div class="chartbox" id="chart">${head()}<div class="chart-empty">${esc(why)}</div></div>`;
   }
   const range = seriesRange(series)!;
   const span = range.high > range.low ? range.high - range.low : 1n;
-  const w = 286;
-  const h = 76;
-  const points = series.points
-    .map((p, i) => {
-      const x = (i / (series.points.length - 1)) * w;
-      const y = h - Number(((p.price - range.low) * 1000n) / span) / 1000 * (h - 8) - 4;
-      return `${x.toFixed(1)},${y.toFixed(1)}`;
-    })
-    .join(" ");
+  // A fixed coordinate space stretched to the box: the line is drawn with a
+  // non-scaling stroke so it stays 2px whatever the width, and everything
+  // that must keep its shape — the end dot, the labels, the crosshair — is
+  // HTML placed by percentage over it.
+  const W = 1000;
+  const H = 260;
+  const PAD = 18;
+  const n = series.points.length;
+  const yOf = (price: bigint) => PAD + (1 - Number(((price - range.low) * 10_000n) / span) / 10_000) * (H - PAD * 2);
+  const coords = series.points.map((p, i) => [(i / (n - 1)) * W, yOf(p.price)] as const);
+  const line = coords.map(([x, y]) => `${x.toFixed(1)},${y.toFixed(1)}`).join(" ");
+  const area = `0,${H} ${line} ${W},${H}`;
   const change = seriesChangeBps(series);
   const tone = change === null ? "flat" : change > 50 ? "up" : change < -50 ? "down" : "flat";
   const move = change === null ? "" : `<span class="move ${tone}">${change > 0 ? "+" : ""}${(change / 100).toFixed(1)}%</span>`;
-  const stroke = tone === "down" ? "var(--stop)" : tone === "up" ? "var(--ok)" : "var(--dim)";
+  const last = coords[n - 1];
+  // What the crosshair reads, precomputed as text: a price, how long ago, a side.
+  const pts = series.points.map((p) => `${formatPrice(p.price, quoteDecimals)}|${agoOf(p.block, tape?.head ?? null)}|${p.sell ? "sell" : "buy"}`).join(";");
+  // The change over the window is said once, in the token bar beside the
+  // price it changed; here the line itself is the change.
+  void move;
   return `<div class="chartbox" id="chart">
-    ${head}${move}</div>
-    <svg class="chart" viewBox="0 0 ${w} ${h}" role="img" aria-label="Price over the window, from its own trades">
-      <polyline points="${points}" fill="none" stroke="${stroke}" stroke-width="1.8" stroke-linejoin="round"/>
-    </svg>
+    ${head()}
+    <div class="chart-plot t-${tone}" tabindex="0" role="img" data-pts="${esc(pts)}"
+      aria-label="Price over ${esc(FRAME_WORD[frame])}, ${n} points from ${formatPrice(range.low, quoteDecimals)} to ${formatPrice(range.high, quoteDecimals)} ${esc(quoteSymbol)}. Every trade behind it is listed in the tape. Arrow keys move along the line.">
+      <svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" aria-hidden="true">
+        <defs><linearGradient id="chart-wash" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="currentColor" stop-opacity=".2"/><stop offset="1" stop-color="currentColor" stop-opacity="0"/></linearGradient></defs>
+        <line class="grid" x1="0" x2="${W}" y1="${PAD}" y2="${PAD}"/>
+        <line class="grid" x1="0" x2="${W}" y1="${H / 2}" y2="${H / 2}"/>
+        <line class="grid" x1="0" x2="${W}" y1="${H - PAD}" y2="${H - PAD}"/>
+        <polygon points="${area}" fill="url(#chart-wash)"/>
+        <polyline points="${line}" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" vector-effect="non-scaling-stroke"/>
+      </svg>
+      <span class="chart-hi">${esc(formatPrice(range.high, quoteDecimals))}</span>
+      <span class="chart-lo">${esc(formatPrice(range.low, quoteDecimals))}</span>
+      <span class="chart-dot" style="top:${((last[1] / H) * 100).toFixed(2)}%"></span>
+      <span class="chart-xh" hidden></span>
+      <div class="chart-tip" hidden></div>
+    </div>
     <div class="chart-foot">
       <span>${series.swaps} trade${series.swaps === 1 ? "" : "s"} · ${esc(series.venue)}</span>
-      <span title="What the most recent trade paid per token. The price in the figures below is the one read at the pinned block.">${(() => {
-        const last = series.points[series.points.length - 1]?.price ?? spot;
-        return last === null ? "" : `last ${formatUnits(last, quoteDecimals, 10).replace(/0+$/, "").replace(/\.$/, "")} ${esc(quoteSymbol)}`;
-      })()}</span>
+      <span>hover or use the arrow keys to read a point</span>
     </div>
   </div>`;
 }
@@ -3587,6 +3749,8 @@ function renderSlip(slip: DoorSlip, opts: { stage?: Stage; source?: Source } = {
       answers,
       facts: m.facts,
       chart,
+      price: tokPrice(m, slip.at.block),
+      frames: "why" in picked ? "" : frameTabs(),
       venues: venueList(slip.open?.pools, slip.rules?.quote ?? slip.chain.native, slip.id.meta?.decimals ?? 18),
       bands: `${coverage ? coverageBand(coverage, stage0) : ""}${changes ?? ""}`,
       evidence,
@@ -4113,8 +4277,69 @@ function boot(): void {
   // replaced wholesale every fifteen seconds, and per-row listeners would be
   // re-attached fifteen times a minute for as long as the tab is open.
   feedToggle.addEventListener("click", () => setFeed(!feedOn));
-  // One handler for every copy of the window toggle: it is drawn in two
-  // panels, both of which are replaced by their own reads.
+  // The crosshair. Delegated, because the plot is replaced every round.
+  out.addEventListener("pointermove", (event) => {
+    const plot = (event.target as HTMLElement).closest<HTMLElement>(".chart-plot");
+    if (!plot) return;
+    const box = plot.getBoundingClientRect();
+    const n = (plot.dataset.pts ?? "").split(";").filter(Boolean).length;
+    if (n < 2) return;
+    showPoint(plot, Math.round(((event.clientX - box.left) / box.width) * (n - 1)));
+  });
+  out.addEventListener("pointerout", (event) => {
+    const plot = (event.target as HTMLElement).closest<HTMLElement>(".chart-plot");
+    if (plot && !plot.contains(event.relatedTarget as Node | null)) hidePoint(plot);
+  });
+  // The same readout from the keyboard, point by point.
+  out.addEventListener("keydown", (event) => {
+    const plot = (event.target as HTMLElement).closest<HTMLElement>(".chart-plot");
+    if (!plot) return;
+    const n = (plot.dataset.pts ?? "").split(";").filter(Boolean).length;
+    const at = plot.dataset.i === undefined ? n - 1 : Number(plot.dataset.i);
+    const step = event.shiftKey ? 10 : 1;
+    if (event.key === "ArrowLeft") showPoint(plot, at - step);
+    else if (event.key === "ArrowRight") showPoint(plot, at + step);
+    else if (event.key === "Home") showPoint(plot, 0);
+    else if (event.key === "End") showPoint(plot, n - 1);
+    else if (event.key === "Escape") hidePoint(plot);
+    else return;
+    event.preventDefault();
+  });
+  out.addEventListener("focusout", (event) => {
+    const plot = (event.target as HTMLElement).closest?.<HTMLElement>(".chart-plot");
+    if (plot) hidePoint(plot);
+  });
+
+  // Keys for somebody who sits in front of the board: / to the search box,
+  // j and k down and up the column, Enter opens (the rows are buttons).
+  // Never while typing, and never with a modifier held — those belong to the
+  // browser and to whoever is reading this with a screen reader.
+  document.addEventListener("keydown", (event) => {
+    if (event.metaKey || event.ctrlKey || event.altKey) return;
+    const typing = event.target instanceof HTMLElement && (event.target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(event.target.tagName));
+    if (typing) {
+      if (event.key === "Escape" && event.target === q) q.blur();
+      return;
+    }
+    if (event.key === "/") {
+      event.preventDefault();
+      q.focus();
+      q.select();
+      return;
+    }
+    if ((event.key === "j" || event.key === "k") && feedOn) {
+      const rows = [...feedBox.querySelectorAll<HTMLElement>(".fr")];
+      if (!rows.length) return;
+      const now = rows.indexOf(document.activeElement as HTMLElement);
+      const from = now >= 0 ? now : rows.findIndex((r) => r.classList.contains("on"));
+      const next = rows[Math.max(0, Math.min(rows.length - 1, from + (event.key === "j" ? 1 : -1)))] ?? rows[0];
+      next.focus();
+      next.scrollIntoView({ block: "nearest" });
+      event.preventDefault();
+    }
+  });
+
+  // One handler for the window toggle, wherever it is drawn.
   out.addEventListener("click", (event) => {
     const button = (event.target as HTMLElement).closest<HTMLElement>("[data-frame]");
     if (button?.dataset.frame) setFrame(button.dataset.frame as Frame);

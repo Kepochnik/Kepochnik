@@ -22,7 +22,7 @@
 import { decodeOutputs, encodeCall, type Hex } from "../chain/abi.js";
 import type { ChainConfig } from "../chain/chains.js";
 import { featureBlocker } from "../chain/chains.js";
-import { ERC20_FUNCTIONS, FACTORY_EVENTS, PONS_V2_FACTORY } from "../chain/pons.js";
+import { CURVE_FUNCTIONS, ERC20_FUNCTIONS, FACTORY_EVENTS, PONS_V2_FACTORY } from "../chain/pons.js";
 import { RpcError, type RpcClient } from "../chain/rpc.js";
 import { readTapeAdaptive } from "../chain/tape.js";
 
@@ -46,6 +46,12 @@ export interface FeedRow {
   graduated: boolean;
   /** The launch was swept — the deployer took the curve's money back out. */
   swept: boolean;
+  /**
+   * How far the curve is to graduating: the real quote it holds against the
+   * threshold it needs. Null when the curve could not be read, and null for a
+   * graduated or swept launch, whose curve no longer means anything.
+   */
+  fill: { real: bigint; bps: number } | null;
 }
 
 export interface Feed {
@@ -59,6 +65,14 @@ export interface Feed {
   chunks: number;
   /** Rows whose symbol or name could not be read, by address. */
   namesUnread: string[];
+  /**
+   * Every token that graduated or was swept inside the blocks read, whether or
+   * not its launch is in `rows`. A refreshing column reads only the new blocks,
+   * so a launch already on screen learns it graduated from these, not from a
+   * row it will never be handed again.
+   */
+  graduated: string[];
+  swept: string[];
 }
 
 export interface FeedOptions {
@@ -77,6 +91,8 @@ export interface FeedOptions {
   maxSlices?: number;
   /** Skip the symbol/name read; the addresses alone are enough for a count. */
   skipNames?: boolean;
+  /** Skip the curve read that fills the graduation bar. */
+  skipFill?: boolean;
 }
 
 /** Why this chain has no feed, or null when it has one. A feed is the board's rows, so it needs the board's factory. */
@@ -139,6 +155,7 @@ export async function readFeed(rpc: RpcClient, options: FeedOptions): Promise<Fe
           deployerLaunches: 1,
           graduated: false,
           swept: false,
+          fill: null,
         });
       } else if (log.name === "PoolGraduated") {
         graduated.add(token);
@@ -160,13 +177,43 @@ export async function readFeed(rpc: RpcClient, options: FeedOptions): Promise<Fe
   }
 
   await stampTimes(rpc, rows, head.timestamp);
+  if (!options.skipFill) await stampFill(rpc, rows, head.block);
   const namesUnread = options.skipNames ? rows.map((r) => r.token) : await stampNames(rpc, rows, head.block);
 
   // Everything below what was opened is unread, whether the limit stopped the
   // walk or the slice budget did. A feed that says "the newest thirty" while
   // the page reads "every launch today" is the same lie either way.
   const unread = readFrom > options.fromBlock ? { fromBlock: options.fromBlock, toBlock: readFrom - 1 } : null;
-  return { rows, window: { fromBlock: readFrom, toBlock: options.toBlock }, unread, head, chunks, namesUnread };
+  return { rows, window: { fromBlock: readFrom, toBlock: options.toBlock }, unread, head, chunks, namesUnread, graduated: [...graduated], swept: [...swept] };
+}
+
+/**
+ * The graduation bar for every live curve in the column, in one batch.
+ *
+ * The threshold came with the launch event, so this is one call a row: the
+ * quote the curve really holds, never the pricing reserve with its virtual
+ * part. Exported so a refreshing column can move its bars without walking
+ * the factory again. A curve that will not answer keeps a null bar rather
+ * than an empty one — an unread curve is not a curve nobody bought.
+ */
+export async function stampFill(rpc: RpcClient, rows: FeedRow[], blockNumber: number): Promise<void> {
+  const live = rows.filter((r) => !r.graduated && !r.swept && r.graduationThreshold > 0n);
+  for (const r of rows) if (r.graduated || r.swept) r.fill = null;
+  if (!live.length) return;
+  const answers = await rpc.callBatchSettled(
+    live.map((r) => ({ to: r.curve, data: encodeCall(CURVE_FUNCTIONS.realQuoteReserve, []) })),
+    blockNumber,
+  );
+  live.forEach((row, i) => {
+    const answer = answers[i];
+    if (answer === undefined || answer instanceof RpcError) return;
+    try {
+      const [real] = decodeOutputs(CURVE_FUNCTIONS.realQuoteReserve, answer) as [bigint];
+      row.fill = { real, bps: Math.min(10_000, Number((real * 10_000n) / row.graduationThreshold)) };
+    } catch {
+      /* an answer that is not a number leaves the bar unread */
+    }
+  });
 }
 
 /** One batched header read per distinct block. An age is read or it is absent. */

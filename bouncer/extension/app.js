@@ -3544,6 +3544,18 @@
   function groupThousands(digits) {
     return digits.replace(/\B(?=(\d{3})+(?!\d))/g, ",");
   }
+  var SUBSCRIPT = "\u2080\u2081\u2082\u2083\u2084\u2085\u2086\u2087\u2088\u2089";
+  function formatPrice(value, decimals) {
+    if (value <= 0n) return "0";
+    const base = 10n ** BigInt(decimals);
+    if (value >= base) return formatUnits(value, decimals, value >= 1000n * base ? 2 : 4);
+    const fraction = value.toString().padStart(decimals, "0");
+    const zeros = fraction.match(/^0*/)[0].length;
+    const digits = fraction.slice(zeros, zeros + 4).replace(/0+$/, "") || "0";
+    if (zeros < 4) return `0.${"0".repeat(zeros)}${digits}`;
+    const count = String(zeros).split("").map((d) => SUBSCRIPT[Number(d)]).join("");
+    return `0.0${count}${digits}`;
+  }
 
   // src/bouncer/door.ts
   init_abi();
@@ -7839,7 +7851,8 @@
             graduationThreshold: log.args.graduationThreshold,
             deployerLaunches: 1,
             graduated: false,
-            swept: false
+            swept: false,
+            fill: null
           });
         } else if (log.name === "PoolGraduated") {
           graduated.add(token);
@@ -7857,9 +7870,28 @@
       row.deployerLaunches = byDeployer.get(row.deployer) ?? 1;
     }
     await stampTimes(rpc, rows, head.timestamp);
+    if (!options.skipFill) await stampFill(rpc, rows, head.block);
     const namesUnread = options.skipNames ? rows.map((r) => r.token) : await stampNames(rpc, rows, head.block);
     const unread = readFrom > options.fromBlock ? { fromBlock: options.fromBlock, toBlock: readFrom - 1 } : null;
-    return { rows, window: { fromBlock: readFrom, toBlock: options.toBlock }, unread, head, chunks, namesUnread };
+    return { rows, window: { fromBlock: readFrom, toBlock: options.toBlock }, unread, head, chunks, namesUnread, graduated: [...graduated], swept: [...swept] };
+  }
+  async function stampFill(rpc, rows, blockNumber) {
+    const live = rows.filter((r) => !r.graduated && !r.swept && r.graduationThreshold > 0n);
+    for (const r of rows) if (r.graduated || r.swept) r.fill = null;
+    if (!live.length) return;
+    const answers = await rpc.callBatchSettled(
+      live.map((r) => ({ to: r.curve, data: encodeCall(CURVE_FUNCTIONS.realQuoteReserve, []) })),
+      blockNumber
+    );
+    live.forEach((row, i) => {
+      const answer = answers[i];
+      if (answer === void 0 || answer instanceof RpcError) return;
+      try {
+        const [real] = decodeOutputs(CURVE_FUNCTIONS.realQuoteReserve, answer);
+        row.fill = { real, bps: Math.min(1e4, Number(real * 10000n / row.graduationThreshold)) };
+      } catch {
+      }
+    });
   }
   async function stampTimes(rpc, rows, headTimestamp) {
     const blocks = [...new Set(rows.map((r) => r.block))];
@@ -8226,7 +8258,7 @@
     const where = found ? "from the pool" : exit?.venue === "curve" ? "from the curve" : exit ? "from the V4 pool" : "";
     const facts2 = [];
     facts2.push(
-      spot !== null ? { label: "Price", value: formatUnits(spot, quote.decimals, 10).replace(/0+$/, "").replace(/\.$/, ""), note: `${quote.symbol} per token \xB7 ${where}`, source: "chain" } : { label: "Price", value: null, note: quote.symbol, source: "chain", why: slip.exit?.venue === "closed" ? "swept, and the pool does not exist yet" : o?.pools === null ? "the pool read did not finish" : "no pool could be priced" }
+      spot !== null ? { label: "Price", value: formatPrice(spot, quote.decimals), note: `${quote.symbol} per token \xB7 ${where}`, source: "chain" } : { label: "Price", value: null, note: quote.symbol, source: "chain", why: slip.exit?.venue === "closed" ? "swept, and the pool does not exist yet" : o?.pools === null ? "the pool read did not finish" : "no pool could be priced" }
     );
     const supply = meta?.totalSupply ?? null;
     facts2.push(
@@ -8661,8 +8693,9 @@
       const c = CHAINS[key];
       return c ? `<span class="seen-mark" style="color:${esc2(c.tint)}">${chainMark(key)}</span>` : "";
     };
-    host.innerHTML = `<div class="seen">
-    <div class="seen-head"><span>Checked before</span><button class="link" id="seen-clear" type="button">Forget these</button></div>
+    const busy2 = document.body.classList.contains("board") || Boolean(out.querySelector(".slip"));
+    host.innerHTML = `<details class="seen"${busy2 ? "" : " open"}>
+    <summary class="seen-head"><span>Checked before</span><span class="seen-n">${rows.length}</span><span class="chev" aria-hidden="true"></span></summary>
     <ul class="seen-list">${rows.map((sn) => {
       const href = `#/${mode === "demo" ? "demo" : "t"}/${sn.address}${mode === "demo" ? "" : `?chain=${esc2(sn.chain)}`}`;
       return `<li class="seen-row">
@@ -8675,8 +8708,8 @@
           </a>
         </li>`;
     }).join("")}</ul>
-    <p class="seen-foot">What each one read when you last looked, not what it reads now \u2014 a token that was CLEAR in March is not CLEAR because this list says so. Kept in this browser only.</p>
-  </div>`;
+    <p class="seen-foot">What each one read when you last looked, not what it reads now \u2014 a token that was CLEAR in March is not CLEAR because this list says so. Kept in this browser only. <button class="link" id="seen-clear" type="button">Forget these</button></p>
+  </details>`;
     document.getElementById("seen-clear")?.addEventListener("click", () => {
       storage(HISTORY_KEY, "[]");
       renderSeen();
@@ -8734,6 +8767,7 @@
     stopWatch();
     stopTape();
     shown = null;
+    document.querySelector("details.seen")?.removeAttribute("open");
     status.innerHTML = `<span class="dot"></span> ${esc2(text)} ${mode === "demo" ? "(demo chain, every address invented)" : `(${esc2(chain().name)}, ${chain().family === "solana" ? "read slot by slot" : "one block pinned"})`}`;
     out.innerHTML = "";
     if (ticker) {
@@ -9311,26 +9345,31 @@
       opts.evidence.unread ?? ""
     ) : "";
     return `<section class="doorway head v-${v.kind}"${stage === "done" ? "" : ' data-pending="1"'}>
+    <div class="tokbar">
+      <div class="who2">
+        <div class="tokline">
+          <span class="sym">${opts.sym}</span>
+          <span class="name">${opts.name}</span>
+          <span class="stamp ${stampTone(opts.stampKind)}">${opts.stamp}</span>
+        </div>
+        <button class="vaddr" type="button" data-copy="${esc2(opts.address)}" title="Copy the address">${esc2(opts.address)}</button>
+      </div>
+      ${opts.price ?? ""}
+      ${opts.frames ?? ""}
+    </div>
     <aside class="doorman">
       <div class="stand">
-        <img class="mascot" src="${MASCOT_URL}" alt="" width="104" height="104">
+        <img class="mascot" src="${MASCOT_URL}" alt="" width="64" height="64">
         <div class="verdict">
           <span class="vword ${v.kind}" aria-label="Verdict">${v.word}</span>
           <p class="lead">${esc2(v.line)}${pending}</p>
         </div>
       </div>
       ${opts.bands ?? ""}
-      <div class="who2">
-        <div class="cap-l">At the door</div>
-        <div class="sym">${opts.sym}</div>
-        <div class="name">${opts.name}</div>
-        <button class="vaddr" type="button" data-copy="${esc2(opts.address)}" title="Copy the address">${esc2(opts.address)}</button>
-        <div><span class="stamp ${stampTone(opts.stampKind)}">${opts.stamp}</span></div>
-      </div>
-      ${opts.chart ?? ""}
       ${opts.facts?.length ? `<div class="facts">${opts.facts.map(factCell).join("")}</div>` : ""}
       ${opts.venues ?? ""}
     </aside>
+    ${opts.chart ?? ""}
     <div class="list">
       <div class="list-head">
         <h2>Guest list</h2>
@@ -9354,9 +9393,61 @@
     return { points: thin(t.points, 120), venue: t.sub, poolAddress: "", fromBlock: t.from, toBlock: t.head ?? t.from, swaps: t.points.length, unread: null };
   }
   function paintChart() {
+    if (!shown) return;
     const box = document.getElementById("chart");
-    if (!box || !shown) return;
-    box.outerHTML = chartPanel(tapeSeries(), shown.m.quoteSymbol, shown.m.quoteDecimals, shown.m.spot, "why" in shown.picked ? shown.picked.why : true);
+    if (box) {
+      const before = box.querySelector(".chart-plot");
+      const held = before?.dataset.i;
+      const focused = before !== null && before === document.activeElement;
+      box.outerHTML = chartPanel(tapeSeries(), shown.m.quoteSymbol, shown.m.quoteDecimals, shown.m.spot, "why" in shown.picked ? shown.picked.why : true);
+      const plot = document.querySelector("#chart .chart-plot");
+      if (plot && focused) plot.focus({ preventScroll: true });
+      if (plot && held !== void 0) showPoint(plot, Number(held));
+    }
+    const price = document.getElementById("tokprice");
+    if (price) price.outerHTML = tokPrice(shown.m, shown.slip.at.block);
+  }
+  function tokPrice(m, block) {
+    const t = tape;
+    const lastPoint = t && t.points.length ? t.points[t.points.length - 1] : null;
+    const value = lastPoint?.price ?? m.spot;
+    const series = tapeSeries();
+    const change = series && series.points.length > 1 ? seriesChangeBps(series) : null;
+    const tone = change === null ? "flat" : change > 50 ? "up" : change < -50 ? "down" : "flat";
+    const move = change === null ? "" : `<span class="move ${tone}">${change > 0 ? "+" : ""}${(change / 100).toFixed(1)}%</span>`;
+    const sub = lastPoint ? `last trade ${agoOf(lastPoint.block, t.head)} ago` : value !== null ? `read at block ${block}` : "no price read";
+    return `<div class="tokprice" id="tokprice">
+    <div class="tp-v">${value === null ? "\u2014" : esc2(formatPrice(value, m.quoteDecimals))}<small>${esc2(m.quoteSymbol)}</small></div>
+    <div class="tp-s">${move}<span>${esc2(sub)}</span></div>
+  </div>`;
+  }
+  function showPoint(plot, i) {
+    const pts = (plot.dataset.pts ?? "").split(";").filter(Boolean);
+    if (!pts.length) return;
+    const at = Math.max(0, Math.min(pts.length - 1, i));
+    const [price, ago2, side] = pts[at].split("|");
+    const left = pts.length === 1 ? 100 : at / (pts.length - 1) * 100;
+    plot.dataset.i = String(at);
+    const xh = plot.querySelector(".chart-xh");
+    const tip = plot.querySelector(".chart-tip");
+    if (!xh || !tip) return;
+    xh.hidden = false;
+    xh.style.left = `${left}%`;
+    tip.hidden = false;
+    tip.replaceChildren();
+    const v = document.createElement("b");
+    v.textContent = price;
+    const k = document.createElement("span");
+    k.className = `t-${side}`;
+    k.textContent = `${side} \xB7 ${ago2} ago`;
+    tip.append(v, k);
+    tip.style.left = `${left}%`;
+    tip.classList.toggle("flip", left > 62);
+  }
+  function hidePoint(plot) {
+    delete plot.dataset.i;
+    plot.querySelector(".chart-xh")?.setAttribute("hidden", "");
+    plot.querySelector(".chart-tip")?.setAttribute("hidden", "");
   }
   var FRAMES = ["5m", "1h", "6h", "24h"];
   var FRAME_SECONDS = { "5m": 300, "1h": 3600, "6h": 21600, "24h": 86400 };
@@ -9374,7 +9465,7 @@
     }
     if (!shown) return;
     const { slip, m, picked } = shown;
-    if (!("why" in picked)) startTape(slip, picked, m);
+    if (!("why" in picked)) startTape(slip, picked, m, true);
   }
   function frameBlocks() {
     return Math.max(1, Math.round(FRAME_SECONDS[frame] * chain().blocksPerSecond));
@@ -9387,6 +9478,7 @@
   var FEED_FILTERS = [
     { key: "all", label: "all", hint: "every launch in the window" },
     { key: "new", label: "fresh", hint: "launched in the last five minutes" },
+    { key: "near", label: "near grad", hint: "the curve is at least 70% of the way to graduating" },
     { key: "graduated", label: "graduated", hint: "the curve filled and the pool exists" },
     { key: "serial", label: "serial dev", hint: "the deployer launched more than one in this window" }
   ];
@@ -9399,6 +9491,8 @@
         return r.deployerLaunches > 1;
       case "new":
         return r.ageSeconds !== null && r.ageSeconds <= 300;
+      case "near":
+        return r.fill !== null && r.fill.bps >= 7e3;
       default:
         return true;
     }
@@ -9430,6 +9524,8 @@
     feedBox.hidden = !on;
     deck.classList.toggle("two", on);
     document.querySelector("main")?.classList.toggle("wide", on);
+    document.body.classList.toggle("board", on);
+    renderSeen();
     if (!on) {
       stopFeed();
       feedBox.innerHTML = "";
@@ -9508,6 +9604,26 @@
         } else {
           f.fresh = /* @__PURE__ */ new Set();
         }
+        if (!first) {
+          const done2 = new Set(feed.graduated);
+          const gone = new Set(feed.swept);
+          for (const row of f.rows) {
+            if (done2.has(row.token)) {
+              row.graduated = true;
+              row.fill = null;
+            }
+            if (gone.has(row.token)) {
+              row.swept = true;
+              row.fill = null;
+            }
+          }
+        }
+        if (!first && f.rows.length) {
+          try {
+            await stampFill(rpc, f.rows.slice(0, 30), head.number);
+          } catch {
+          }
+        }
         for (const row of f.rows) {
           if (row.timestamp !== null) row.ageSeconds = Math.max(0, head.timestamp - row.timestamp);
         }
@@ -9532,10 +9648,11 @@
     const f = feedState;
     if (!f) return;
     const at = feedBox.querySelector(".feed-rows")?.scrollTop ?? 0;
+    const focusedToken = document.activeElement?.closest?.("#feed .fr")?.dataset.token ?? null;
     const here = openToken();
     const stalled = Boolean(f.failing);
     const kept = f.rows.filter(keepRow);
-    const body = kept.length ? `<div class="feed-rows">${kept.map((r) => feedRow(r, here)).join("")}</div>` : f.rows.length ? `<div class="feed-empty"><b>Nothing matches "${esc2(FEED_FILTERS.find((x) => x.key === feedFilter).label)}"</b>${f.rows.length} launch${f.rows.length === 1 ? "" : "es"} in the window, none of them ${esc2(FEED_FILTERS.find((x) => x.key === feedFilter).hint.replace(/^the |^every /, ""))}.</div>` : `<div class="feed-empty">${f.opening ? "<b>Reading the factory\u2026</b>walking back from the head for the launches that just happened" : f.head === null ? "<b>Could not read the launches</b>the chain did not answer, so this says nothing about whether anything launched. The column keeps trying every fifteen seconds." : `<b>No launch in the window</b>nothing was launched between block ${f.from ?? "?"} and ${f.head}. The column keeps looking.`}</div>`;
+    const body = kept.length ? `<div class="feed-rows">${kept.map((r) => feedRow(r, here)).join("")}</div>` : f.rows.length ? `<div class="feed-empty"><b>Nothing matches "${esc2(FEED_FILTERS.find((x) => x.key === feedFilter).label)}"</b>${f.rows.length} launch${f.rows.length === 1 ? "" : "es"} in the window, none of them ${esc2(FEED_FILTERS.find((x) => x.key === feedFilter).hint.replace(/^the |^every /, ""))}.</div>` : `<div class="feed-empty">${f.opening ? "<b>Reading the factory\u2026</b>walking back from the head for the launches that just happened" : f.head === null ? `<b>Could not read the launches</b>the chain did not answer, so this says nothing about whether anything launched. The column keeps trying every fifteen seconds.${mode === "demo" ? "" : `<a class="feed-demo" href="#/demo/${DEMO.tokens.fresh.token}">See how the board works on the invented demo chain</a>`}` : `<b>No launch in the window</b>nothing was launched between block ${f.from ?? "?"} and ${f.head}. The column keeps looking.`}</div>`;
     feedBox.innerHTML = `<div class="feed-head">
       <h2>New launches</h2>
       <span class="tape-live${stalled ? " stalled" : ""}"><span class="dot"></span>${stalled ? "stalled" : "live"}</span>
@@ -9545,17 +9662,27 @@
       (x) => `<button class="fchip${x.key === feedFilter ? " on" : ""}" type="button" data-filter="${x.key}" aria-pressed="${x.key === feedFilter}" title="${esc2(x.hint)}">${esc2(x.label)}</button>`
     ).join("")}</div>
     ${body}
-    <div class="feed-note">${esc2(
-      f.failing ? f.failing : `${chain().launchpad ?? "The launchpad"} on ${chain().name}. ${f.rows.length ? `${feedFilter === "all" ? `The newest ${f.rows.length}` : `${kept.length} of ${f.rows.length}`}` : "Nothing"} between block ${f.from ?? "?"} and ${f.head ?? "?"}${f.unread ? `; blocks ${f.unread.fromBlock}\u2013${f.unread.toBlock} were not opened` : ""}.`
+    <div class="feed-note"${f.failing ? ` title="${esc2(f.failing)}"` : ""}>${esc2(
+      f.failing ? `Stalled: ${f.failing.length > 90 ? `${f.failing.slice(0, 88).replace(/\s+\S*$/, "")}\u2026` : f.failing}` : `j / k to move, Enter to open. ${chain().launchpad ?? "The launchpad"} on ${chain().name}. ${f.rows.length ? `${feedFilter === "all" ? `The newest ${f.rows.length}` : `${kept.length} of ${f.rows.length}`}` : "Nothing"} between block ${f.from ?? "?"} and ${f.head ?? "?"}${f.unread ? `; blocks ${f.unread.fromBlock}\u2013${f.unread.toBlock} were not opened` : ""}.`
     )}</div>`;
     const rows = feedBox.querySelector(".feed-rows");
     if (rows && at > 0) rows.scrollTop = at;
+    if (focusedToken) feedBox.querySelector(`.fr[data-token="${CSS.escape(focusedToken)}"]`)?.focus({ preventScroll: true });
   }
   function pickOne() {
     const blocked = feedBlocker(chain());
+    const words = [
+      ["stop", "STOP", "something here can cost you money outright"],
+      ["watch", "WATCH", "nothing outright dangerous, but read before you buy"],
+      ["clear", "CLEAR", "nothing in what was read stands out \u2014 not a promise about price"],
+      ["unknown", "INCOMPLETE", "part of it could not be read, so it is not a clean result"]
+    ];
     return `<div class="pickone">
+    <img class="pick-mascot" src="${MASCOT_URL}" alt="" width="72" height="72">
     <b>${blocked ? "Paste a token to check it" : "Pick a launch to check it"}</b>
     <p>${blocked ? "There is no launchpad column on this chain, so paste any token address above \u2014 BOUNCER reads the chain itself and answers the five questions you would ask before buying." : "Every launch in the column opens here with its verdict, its figures and a live tape of who is buying and who is selling. Or paste any token address above."}</p>
+    <ul class="pick-words">${words.map(([kind, word, meaning]) => `<li><span class="vmini ${kind}">${word}</span><span>${esc2(meaning)}</span></li>`).join("")}</ul>
+    <p class="pick-keys"><kbd>/</kbd> search <kbd>j</kbd><kbd>k</kbd> move down the column <kbd>Enter</kbd> open</p>
   </div>`;
   }
   function feedRow(r, here) {
@@ -9566,11 +9693,13 @@
     ].filter(Boolean).join("");
     const sym = r.symbol ?? "no ticker";
     const name = r.name ?? shortAddress(r.token);
+    const fill = r.fill && !r.graduated && !r.swept ? `<span class="fr-fill${r.fill.bps >= 7e3 ? " near" : ""}" role="img" aria-label="${(r.fill.bps / 100).toFixed(0)}% of the way to graduating"><i style="width:${Math.max(2, r.fill.bps / 100).toFixed(1)}%"></i></span><span class="fr-pct">${(r.fill.bps / 100).toFixed(0)}%</span>` : "";
     return `<button class="fr${here === r.token ? " on" : ""}${feedState?.fresh.has(r.token) ? " fresh" : ""}" type="button" data-token="${esc2(r.token)}">
     <span class="fr-sym">${esc2(sym)}</span>
     <span class="fr-age">${esc2(r.ageSeconds === null ? `block ${r.block}` : shortAge(r.ageSeconds))}</span>
     <span class="fr-name">${esc2(name)}</span>
     <span class="fr-tags">${tags}</span>
+    ${fill}
   </button>`;
   }
   var tape = null;
@@ -9664,7 +9793,6 @@
     <div class="tape-head">
       <h2>The tape</h2>
       <span class="tape-src">${esc2(tape.sub)}</span>
-      ${frameTabs()}
       <span class="tape-live${stalled ? " stalled" : ""}"><span class="dot"></span>${stalled ? "stalled" : "live"}</span>
       <span class="tape-when">${tape.failing ? esc2(tape.failing) : tape.head === null ? "opening" : `block ${tape.head}`}</span>
     </div>
@@ -9690,7 +9818,7 @@
     if (after2 && at > 0) after2.scrollTop = at;
     paintChart();
   }
-  function startTape(slip, picked, m) {
+  function startTape(slip, picked, m, keepFrame = false) {
     stopTape();
     const everyMs = mode === "demo" ? 5e3 : 15e3;
     const from = Math.max(0, slip.at.block - frameBlocks());
@@ -9717,7 +9845,15 @@
       opening: true,
       points: []
     };
-    paintTape();
+    if (keepFrame) {
+      for (const id of ["tape", "chart", "tokprice"]) {
+        const el = document.getElementById(id);
+        el?.classList.add("stale");
+        el?.setAttribute("aria-busy", "true");
+      }
+    } else {
+      paintTape();
+    }
     let cursor = from;
     const tick = async () => {
       const t = tape;
@@ -9812,7 +9948,7 @@
   function factCell(f) {
     return `<div class="fact">
     <div class="fact-l">${esc2(f.label)}</div>
-    <div class="fact-v ${f.value === null ? "none" : f.warn ? "warn" : ""}">${f.value === null ? "not read" : esc2(f.value)}</div>
+    <div class="fact-v ${f.value === null ? "none" : f.warn ? "warn" : ""}"${f.value === null ? ' aria-label="not read"' : ""}>${f.value === null ? "\u2014" : esc2(f.value)}</div>
     <div class="fact-n">${esc2(f.value === null ? f.why ?? f.note : f.note)}</div>
   </div>`;
   }
@@ -9832,38 +9968,52 @@
   </details>`;
   }
   function chartPanel(series, quoteSymbol, quoteDecimals, spot, pending = true) {
-    const head = `<div class="chart-head"><span class="cap-l" title="Drawn from this token's own trades: each point is what one trade paid per token">Price</span>${frameTabs()}`;
+    void spot;
+    const head = (move2 = "") => `<div class="chart-head"><span class="cap-l" title="Drawn from this token's own trades: each point is what one trade paid per token">Price</span><span class="chart-win">${esc2(FRAME_WORD[frame])} \xB7 ${esc2(quoteSymbol)}</span>${move2}</div>`;
     if (!series) {
-      return `<div class="chartbox" id="chart">${head}</div><p class="chart-no">${pending === true ? "Reading the trades\u2026" : esc2(pending)}</p></div>`;
+      return `<div class="chartbox" id="chart">${head()}<div class="chart-empty${pending === true ? " busy" : ""}">${pending === true ? "Reading the trades\u2026" : esc2(pending)}</div></div>`;
     }
     if (series.unread || series.points.length < 2) {
-      const why = series.unread ?? (series.swaps === 0 ? `no trade in ${FRAME_WORD[frame]}: nobody bought or sold it` : `one trade in ${FRAME_WORD[frame]}, which is not a line`);
-      return `<div class="chartbox" id="chart">${head}</div><p class="chart-no">${esc2(why)}</p></div>`;
+      const why = series.unread ?? (series.swaps === 0 ? `No trade in ${FRAME_WORD[frame]}: nobody bought or sold it.` : `One trade in ${FRAME_WORD[frame]}, which is not a line yet.`);
+      return `<div class="chartbox" id="chart">${head()}<div class="chart-empty">${esc2(why)}</div></div>`;
     }
     const range = seriesRange(series);
     const span = range.high > range.low ? range.high - range.low : 1n;
-    const w = 286;
-    const h = 76;
-    const points = series.points.map((p, i) => {
-      const x = i / (series.points.length - 1) * w;
-      const y = h - Number((p.price - range.low) * 1000n / span) / 1e3 * (h - 8) - 4;
-      return `${x.toFixed(1)},${y.toFixed(1)}`;
-    }).join(" ");
+    const W = 1e3;
+    const H = 260;
+    const PAD = 18;
+    const n = series.points.length;
+    const yOf = (price) => PAD + (1 - Number((price - range.low) * 10000n / span) / 1e4) * (H - PAD * 2);
+    const coords = series.points.map((p, i) => [i / (n - 1) * W, yOf(p.price)]);
+    const line = coords.map(([x, y]) => `${x.toFixed(1)},${y.toFixed(1)}`).join(" ");
+    const area = `0,${H} ${line} ${W},${H}`;
     const change = seriesChangeBps(series);
     const tone = change === null ? "flat" : change > 50 ? "up" : change < -50 ? "down" : "flat";
     const move = change === null ? "" : `<span class="move ${tone}">${change > 0 ? "+" : ""}${(change / 100).toFixed(1)}%</span>`;
-    const stroke = tone === "down" ? "var(--stop)" : tone === "up" ? "var(--ok)" : "var(--dim)";
+    const last = coords[n - 1];
+    const pts = series.points.map((p) => `${formatPrice(p.price, quoteDecimals)}|${agoOf(p.block, tape?.head ?? null)}|${p.sell ? "sell" : "buy"}`).join(";");
+    void move;
     return `<div class="chartbox" id="chart">
-    ${head}${move}</div>
-    <svg class="chart" viewBox="0 0 ${w} ${h}" role="img" aria-label="Price over the window, from its own trades">
-      <polyline points="${points}" fill="none" stroke="${stroke}" stroke-width="1.8" stroke-linejoin="round"/>
-    </svg>
+    ${head()}
+    <div class="chart-plot t-${tone}" tabindex="0" role="img" data-pts="${esc2(pts)}"
+      aria-label="Price over ${esc2(FRAME_WORD[frame])}, ${n} points from ${formatPrice(range.low, quoteDecimals)} to ${formatPrice(range.high, quoteDecimals)} ${esc2(quoteSymbol)}. Every trade behind it is listed in the tape. Arrow keys move along the line.">
+      <svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" aria-hidden="true">
+        <defs><linearGradient id="chart-wash" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="currentColor" stop-opacity=".2"/><stop offset="1" stop-color="currentColor" stop-opacity="0"/></linearGradient></defs>
+        <line class="grid" x1="0" x2="${W}" y1="${PAD}" y2="${PAD}"/>
+        <line class="grid" x1="0" x2="${W}" y1="${H / 2}" y2="${H / 2}"/>
+        <line class="grid" x1="0" x2="${W}" y1="${H - PAD}" y2="${H - PAD}"/>
+        <polygon points="${area}" fill="url(#chart-wash)"/>
+        <polyline points="${line}" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" vector-effect="non-scaling-stroke"/>
+      </svg>
+      <span class="chart-hi">${esc2(formatPrice(range.high, quoteDecimals))}</span>
+      <span class="chart-lo">${esc2(formatPrice(range.low, quoteDecimals))}</span>
+      <span class="chart-dot" style="top:${(last[1] / H * 100).toFixed(2)}%"></span>
+      <span class="chart-xh" hidden></span>
+      <div class="chart-tip" hidden></div>
+    </div>
     <div class="chart-foot">
       <span>${series.swaps} trade${series.swaps === 1 ? "" : "s"} \xB7 ${esc2(series.venue)}</span>
-      <span title="What the most recent trade paid per token. The price in the figures below is the one read at the pinned block.">${(() => {
-      const last = series.points[series.points.length - 1]?.price ?? spot;
-      return last === null ? "" : `last ${formatUnits(last, quoteDecimals, 10).replace(/0+$/, "").replace(/\.$/, "")} ${esc2(quoteSymbol)}`;
-    })()}</span>
+      <span>hover or use the arrow keys to read a point</span>
     </div>
   </div>`;
   }
@@ -10480,6 +10630,8 @@
       answers,
       facts: m.facts,
       chart,
+      price: tokPrice(m, slip.at.block),
+      frames: "why" in picked ? "" : frameTabs(),
       venues: venueList(slip.open?.pools, slip.rules?.quote ?? slip.chain.native, slip.id.meta?.decimals ?? 18),
       bands: `${coverage ? coverageBand(coverage, stage0) : ""}${changes ?? ""}`,
       evidence,
@@ -10874,6 +11026,60 @@
       submit();
     });
     feedToggle.addEventListener("click", () => setFeed(!feedOn));
+    out.addEventListener("pointermove", (event) => {
+      const plot = event.target.closest(".chart-plot");
+      if (!plot) return;
+      const box = plot.getBoundingClientRect();
+      const n = (plot.dataset.pts ?? "").split(";").filter(Boolean).length;
+      if (n < 2) return;
+      showPoint(plot, Math.round((event.clientX - box.left) / box.width * (n - 1)));
+    });
+    out.addEventListener("pointerout", (event) => {
+      const plot = event.target.closest(".chart-plot");
+      if (plot && !plot.contains(event.relatedTarget)) hidePoint(plot);
+    });
+    out.addEventListener("keydown", (event) => {
+      const plot = event.target.closest(".chart-plot");
+      if (!plot) return;
+      const n = (plot.dataset.pts ?? "").split(";").filter(Boolean).length;
+      const at = plot.dataset.i === void 0 ? n - 1 : Number(plot.dataset.i);
+      const step = event.shiftKey ? 10 : 1;
+      if (event.key === "ArrowLeft") showPoint(plot, at - step);
+      else if (event.key === "ArrowRight") showPoint(plot, at + step);
+      else if (event.key === "Home") showPoint(plot, 0);
+      else if (event.key === "End") showPoint(plot, n - 1);
+      else if (event.key === "Escape") hidePoint(plot);
+      else return;
+      event.preventDefault();
+    });
+    out.addEventListener("focusout", (event) => {
+      const plot = event.target.closest?.(".chart-plot");
+      if (plot) hidePoint(plot);
+    });
+    document.addEventListener("keydown", (event) => {
+      if (event.metaKey || event.ctrlKey || event.altKey) return;
+      const typing = event.target instanceof HTMLElement && (event.target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(event.target.tagName));
+      if (typing) {
+        if (event.key === "Escape" && event.target === q) q.blur();
+        return;
+      }
+      if (event.key === "/") {
+        event.preventDefault();
+        q.focus();
+        q.select();
+        return;
+      }
+      if ((event.key === "j" || event.key === "k") && feedOn) {
+        const rows = [...feedBox.querySelectorAll(".fr")];
+        if (!rows.length) return;
+        const now = rows.indexOf(document.activeElement);
+        const from = now >= 0 ? now : rows.findIndex((r) => r.classList.contains("on"));
+        const next = rows[Math.max(0, Math.min(rows.length - 1, from + (event.key === "j" ? 1 : -1)))] ?? rows[0];
+        next.focus();
+        next.scrollIntoView({ block: "nearest" });
+        event.preventDefault();
+      }
+    });
     out.addEventListener("click", (event) => {
       const button = event.target.closest("[data-frame]");
       if (button?.dataset.frame) setFrame(button.dataset.frame);

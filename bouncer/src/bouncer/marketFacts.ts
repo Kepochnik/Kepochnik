@@ -21,7 +21,7 @@
  */
 import { depth, spotPrice, type MarketPool } from "../chain/market.js";
 import type { DoorSlip } from "./door.js";
-import { formatUnits } from "../format.js";
+import { formatPrice, formatUnits } from "../format.js";
 
 export type FactSource = "chain" | "explorer" | "derived";
 
@@ -118,7 +118,7 @@ export function marketFacts(slip: DoorSlip): MarketFacts {
 
   facts.push(
     spot !== null
-      ? { label: "Price", value: formatUnits(spot, quote.decimals, 10).replace(/0+$/, "").replace(/\.$/, ""), note: `${quote.symbol} per token · ${where}`, source: "chain" }
+      ? { label: "Price", value: formatPrice(spot, quote.decimals), note: `${quote.symbol} per token · ${where}`, source: "chain" }
       : { label: "Price", value: null, note: quote.symbol, source: "chain", why: slip.exit?.venue === "closed" ? "swept, and the pool does not exist yet" : o?.pools === null ? "the pool read did not finish" : "no pool could be priced" },
   );
 

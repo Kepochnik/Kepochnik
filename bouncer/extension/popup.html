@@ -84,6 +84,7 @@
 }
 
 *{box-sizing:border-box}
+@media (prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important}}
 html{-webkit-text-size-adjust:100%}
 body{
   margin:0;
@@ -197,6 +198,12 @@ button.ext[aria-pressed="true"]{color:var(--brand-2);border-color:var(--brand);b
 
 /* Once an answer is on the page the invitation is furniture: it shrinks to
    a line so a second check starts where the answer is. */
+body.board .hbar{max-width:1380px}
+body.board .hero{display:none}
+body.board .door{padding-top:18px}
+body.board .door input,body.board .btn{min-height:42px}
+body.board .slip{margin-top:16px}
+body.board .deck{margin-top:14px}
 .answered .hero{padding:22px 0 14px}
 .answered .hero h1{font-size:22px}
 .answered .hero p{display:none}
@@ -218,7 +225,8 @@ button.ext[aria-pressed="true"]{color:var(--brand-2);border-color:var(--brand);b
    and a class on screen with no rule is indistinguishable from one that lost
    its rule, so it says here that it is a hook and not a style. */
 .head{}
-.doorway{display:grid;grid-template-columns:332px minmax(0,1fr);background:var(--surface);
+.doorway{display:grid;grid-template-columns:340px minmax(0,1fr);grid-template-rows:auto auto 1fr;
+  grid-template-areas:"bar bar" "door chart" "door list";background:var(--surface);
   border:1px solid var(--line);border-radius:var(--r-lg) var(--r-lg) 0 0;overflow:hidden;
   box-shadow:0 1px 2px rgba(0,0,0,.5),0 24px 48px -28px rgba(0,0,0,.8),var(--lip)}
 /* One tone per verdict, set on the doorway and read by the stamp, the wash
@@ -231,44 +239,88 @@ button.ext[aria-pressed="true"]{color:var(--brand-2);border-color:var(--brand);b
 .doorway.v-watch{--tone:var(--warn);--tone-wash:rgba(240,180,41,.1)}
 .doorway.v-clear{--tone:var(--ok);--tone-wash:rgba(61,214,140,.1)}
 
+/* The token bar: what it is, what it costs now, and the one window control.
+   The first line anybody reads, so it carries the verdict's tone as a wash. */
+.tokbar{grid-area:bar;display:flex;align-items:center;flex-wrap:wrap;gap:14px 28px;padding:18px 24px;
+  border-bottom:1px solid var(--line);background:linear-gradient(180deg,var(--tone-wash),transparent 160%)}
+.tokline{display:flex;align-items:baseline;flex-wrap:wrap;gap:4px 12px}
+.tokprice{margin-left:auto;text-align:right;min-width:0}
+/* The hero figure: sans, proportional digits, exactly one per view. */
+.tp-v{font:650 30px/1.1 var(--sans);letter-spacing:-.025em;color:var(--text);white-space:nowrap}
+.tp-v small{margin-left:7px;font:500 13px var(--sans);letter-spacing:0;color:var(--dim)}
+.tp-s{display:flex;justify-content:flex-end;align-items:baseline;gap:10px;margin-top:5px;font-size:12px;color:var(--dimmer)}
+.tp-s .move{font:600 12.5px var(--mono)}
+.tokbar .frames{align-self:center}
+
 /* the bouncer's side */
-.doorman{border-right:1px solid var(--line);background:var(--surface-2);display:flex;flex-direction:column;min-width:0;
+.doorman{grid-area:door;border-right:1px solid var(--line);background:var(--surface-2);display:flex;flex-direction:column;min-width:0;
   box-shadow:inset -1px 0 0 rgba(255,255,255,.02)}
-.stand{padding:24px 22px 20px;text-align:center;border-bottom:1px solid var(--line);position:relative}
+.stand{display:flex;align-items:center;gap:16px;padding:20px 22px;text-align:left;border-bottom:1px solid var(--line);position:relative}
 .stand::before{content:"";position:absolute;inset:0;pointer-events:none;
   background:radial-gradient(360px 200px at 50% -40px, var(--tone-wash), transparent 72%)}
-.mascot{width:104px;height:104px;image-rendering:pixelated;position:relative}
+.mascot{width:64px;height:64px;flex:none;image-rendering:pixelated;position:relative}
 /* The stamp: a verdict looks like a decision when it is stamped on something.
    The tilt is small on purpose — a novelty angle would undercut the one word
    on the page that has to be taken seriously. */
 .verdict{position:relative}
-.vword{display:inline-block;margin-top:16px;padding:9px 18px;border:2.5px solid var(--tone);border-radius:9px;
-  color:var(--tone);font:800 21px var(--sans);letter-spacing:.07em;transform:rotate(-2.2deg);
+.vword{display:inline-block;padding:7px 15px;border:2.5px solid var(--tone);border-radius:9px;
+  color:var(--tone);font:800 20px var(--sans);letter-spacing:.07em;transform:rotate(-2.2deg);
   box-shadow:0 0 0 4px var(--tone-wash)}
-.lead{position:relative;margin-top:15px;color:var(--muted);font-size:13px;line-height:1.55;text-align:left}
+.lead{position:relative;margin-top:11px;color:var(--muted);font-size:13px;line-height:1.55;text-align:left}
 .lead .vpend{display:block;margin-top:6px;color:var(--dim);font-size:12px}
 
-.who2{padding:15px 22px;border-bottom:1px solid var(--line)}
+.who2{min-width:0;flex:1 1 300px}
 .cap-l{font:600 10px var(--sans);letter-spacing:.1em;color:var(--dimmer);text-transform:uppercase}
-.sym{font-size:21px;font-weight:700;letter-spacing:-.03em;margin-top:6px;line-height:1.15}
-.name{color:var(--dim);font-size:12.5px}
-.vaddr{display:block;width:100%;text-align:left;margin-top:8px;padding:0;background:none;border:0;
-  font-family:var(--mono);font-size:11px;color:var(--dimmer);word-break:break-all;cursor:pointer}
+.sym{font-size:26px;font-weight:700;letter-spacing:-.03em;line-height:1.15}
+.name{color:var(--dim);font-size:14px}
+.vaddr{display:block;max-width:100%;text-align:left;margin-top:7px;padding:0;background:none;border:0;
+  font-family:var(--mono);font-size:11.5px;color:var(--dimmer);word-break:break-all;cursor:copy}
 .vaddr:hover{color:var(--muted)}
-.stamp{display:inline-flex;align-items:center;margin-top:10px;min-height:23px;padding:0 10px;border-radius:999px;
+.stamp{display:inline-flex;align-items:center;align-self:center;min-height:23px;padding:0 10px;border-radius:999px;
   font:600 10px var(--sans);letter-spacing:.08em;text-transform:uppercase;border:1px solid var(--line-2);color:var(--dim)}
 .stamp.flat{/* deliberately the default: not a launch is a fact, not a warning */}
 .stamp.yes{background:var(--ok-bg);color:var(--ok);border-color:var(--ok-edge)}
 .stamp.no{background:var(--stop-bg);color:var(--stop);border-color:var(--stop-edge)}
 
-/* the price, from the pool's own swaps */
-.chartbox{padding:15px 22px;border-bottom:1px solid var(--line)}
-.chart-head{display:flex;align-items:baseline;gap:10px}
-.chart-head .move{margin-left:auto;font-family:var(--mono);font-size:12px}
+/* The price line: the widest thing on the token, because on a trading
+   screen it is the thing the eye goes to. 2px line, a 20% wash under it,
+   hairline grid, the latest point pulsing, a crosshair that finds the X. */
+.doorway>.chartbox{grid-area:chart;min-width:0;padding:18px 24px 16px;border-bottom:1px solid var(--line)}
+.chart-head{display:flex;align-items:center;gap:10px}
+.chart-win{color:var(--dimmer);font-size:12px}
+.chart-head .move{margin-left:auto;font-family:var(--mono);font-size:12.5px;font-weight:600}
 .move.up{color:var(--ok)} .move.down{color:var(--stop)} .move.flat{color:var(--dim)}
-.chart{width:100%;height:76px;display:block;margin-top:10px}
-.chart-foot{display:flex;justify-content:space-between;gap:10px;margin-top:6px;font-family:var(--mono);font-size:10.5px;color:var(--dimmer)}
-.chart-no{margin-top:10px;color:var(--dim);font-size:12px;line-height:1.5}
+/* The price scale sits outside the plot, on the right, so the latest point
+   and its labels never land on each other. */
+.chart-plot{position:relative;height:250px;margin:14px 72px 0 0;color:var(--dim);cursor:crosshair;border-radius:6px;touch-action:pan-y}
+.chart-plot.t-up{color:var(--ok)} .chart-plot.t-down{color:var(--stop)}
+.chart-plot svg{position:absolute;inset:0;width:100%;height:100%;overflow:visible}
+.chart-plot .grid{stroke:rgba(255,255,255,.06);stroke-width:1;vector-effect:non-scaling-stroke}
+.chart-hi,.chart-lo{position:absolute;left:calc(100% + 12px);font:500 10.5px var(--mono);color:var(--dimmer);
+  white-space:nowrap;pointer-events:none;transform:translateY(-50%)}
+.chart-hi{top:6.92%} .chart-lo{top:93.08%}
+.chart-dot{position:absolute;right:-5px;width:10px;height:10px;margin-top:-5px;border-radius:50%;background:currentColor;
+  box-shadow:0 0 0 2px var(--surface);pointer-events:none}
+.chart-dot::after{content:"";position:absolute;inset:-6px;border-radius:50%;background:currentColor;opacity:.25;animation:beat 2s ease-out infinite}
+@keyframes beat{0%{transform:scale(.4);opacity:.45}100%{transform:scale(1.6);opacity:0}}
+.chart-xh{position:absolute;top:0;bottom:0;width:1px;margin-left:-.5px;background:rgba(255,255,255,.28);pointer-events:none}
+.chart-tip{position:absolute;top:6px;display:grid;gap:2px;padding:7px 10px;transform:translateX(12px);
+  background:var(--surface-3);border:1px solid var(--line-2);border-radius:8px;box-shadow:var(--shadow);
+  pointer-events:none;white-space:nowrap;font-size:11.5px;color:var(--dim)}
+.chart-tip.flip{transform:translateX(calc(-100% - 12px))}
+.chart-tip b{font:600 13.5px var(--mono);color:var(--text)}
+.chart-tip .t-buy{color:var(--ok)} .chart-tip .t-sell{color:var(--stop)}
+.chart-xh[hidden],.chart-tip[hidden]{display:none}
+.chart-foot{display:flex;justify-content:space-between;gap:10px;margin-top:10px;font-size:11px;color:var(--dimmer)}
+/* Empty is shorter than reading: a line that is on its way holds the space
+   it will fill, a line that does not exist does not take 250px to say so. */
+.chart-empty{display:grid;place-items:center;height:140px;margin-top:14px;padding:20px;border:1px dashed var(--line-2);
+  border-radius:10px;color:var(--dim);font-size:13px;line-height:1.55;text-align:center}
+.chart-empty.busy{height:250px;background:linear-gradient(100deg,transparent 30%,rgba(255,255,255,.035) 50%,transparent 70%) 0 0/250% 100%;
+  animation:shimmer 1.6s linear infinite}
+@keyframes shimmer{to{background-position:-250% 0}}
+/* A window being re-read keeps its old picture, dimmed: no flash, no jump. */
+.stale{opacity:.42;transition:opacity .2s ease;pointer-events:none}
 
 /* the figures */
 .facts{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px 10px;padding:15px 22px}
@@ -285,7 +337,7 @@ button.ext[aria-pressed="true"]{color:var(--brand-2);border-color:var(--brand);b
 .venue+.venue{border-top:1px solid var(--line)}
 
 /* ---------------------------------------------------------------- the list */
-.list{display:flex;flex-direction:column;min-width:0}
+.list{grid-area:list;display:flex;flex-direction:column;min-width:0}
 .list-head{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;padding:14px 22px 12px;border-bottom:1px solid var(--line)}
 .list-head h2{font:600 10px var(--sans);letter-spacing:.1em;color:var(--dim);text-transform:uppercase;white-space:nowrap}
 .list-head span{color:var(--dimmer);font-size:11.5px}
@@ -483,6 +535,10 @@ table.buys tr:first-child td{border-top:0}
 .fr-age{font:500 11px var(--mono);color:var(--dimmer);white-space:nowrap;justify-self:end}
 .fr-name{font-size:11.5px;color:var(--dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .fr-tags{display:flex;gap:4px;justify-self:end}
+.fr-fill{grid-column:1;align-self:center;height:4px;margin-top:5px;border-radius:999px;background:var(--surface-3);overflow:hidden}
+.fr-fill i{display:block;height:100%;border-radius:999px;background:linear-gradient(90deg,#a8832f,var(--brand));transition:width .6s ease}
+.fr-fill.near i{background:linear-gradient(90deg,#1f9e62,var(--ok))}
+.fr-pct{grid-column:2;justify-self:end;margin-top:5px;font:500 10.5px var(--mono);color:var(--dimmer)}
 .ftag{font:600 9px var(--sans);letter-spacing:.06em;text-transform:uppercase;padding:2px 5px;border-radius:4px;
   border:1px solid var(--line-2);color:var(--dim);white-space:nowrap}
 .ftag.grad{color:var(--ok);border-color:var(--ok-edge);background:var(--ok-bg)}
@@ -491,12 +547,25 @@ table.buys tr:first-child td{border-top:0}
 .feed-when{font:500 11px var(--mono);color:var(--dimmer);white-space:nowrap}
 .feed-empty{padding:22px 14px;color:var(--dim);font-size:12.5px;line-height:1.55}
 .feed-empty b{display:block;color:var(--muted);font-weight:550;margin-bottom:4px}
+.feed-demo{display:inline-flex;align-items:center;min-height:24px;margin-top:10px;font-size:12.5px}
 .feed-note{padding:9px 14px;border-top:1px solid var(--line);background:var(--surface-2);
   color:var(--dimmer);font-size:11px;line-height:1.5}
 /* The right pane before anything is picked. */
-.pickone{border:1px dashed var(--line-2);border-radius:var(--r-lg);padding:44px 26px;text-align:center;color:var(--dim)}
-.pickone b{display:block;color:var(--text);font:550 17px var(--sans);margin-bottom:6px}
-.pickone p{margin:0 auto;max-width:40ch;font-size:13.5px;line-height:1.6}
+.pickone{position:relative;overflow:hidden;padding:40px 28px 34px;text-align:center;color:var(--dim);
+  background:var(--surface);border:1px solid var(--line);border-radius:var(--r-lg);box-shadow:var(--shadow),var(--lip)}
+.pickone::before{content:"";position:absolute;inset:0;pointer-events:none;
+  background:radial-gradient(520px 220px at 50% -60px,rgba(232,184,75,.09),transparent 70%)}
+.pick-mascot{position:relative;width:72px;height:72px;image-rendering:pixelated}
+.pickone b{position:relative;display:block;margin-top:14px;color:var(--text);font:650 20px var(--sans);letter-spacing:-.02em}
+.pickone p{position:relative;margin:8px auto 0;max-width:46ch;font-size:13.5px;line-height:1.6}
+.pick-words{position:relative;display:grid;gap:8px;max-width:440px;margin:24px auto 0;padding:0;list-style:none;text-align:left}
+.pick-words li{display:grid;grid-template-columns:96px 1fr;gap:12px;align-items:center;font-size:12.5px;color:var(--muted)}
+.vmini{justify-self:start;padding:3px 8px;border:1.5px solid currentColor;border-radius:6px;font:800 11px var(--sans);letter-spacing:.07em}
+.vmini.stop{color:var(--stop)} .vmini.watch{color:var(--warn)} .vmini.clear{color:var(--ok)} .vmini.unknown{color:var(--dim)}
+.pickone .pick-keys{margin-top:24px;font-size:12px;color:var(--dimmer)}
+kbd{display:inline-flex;align-items:center;justify-content:center;min-width:20px;height:20px;padding:0 5px;margin:0 2px;
+  border:1px solid var(--line-2);border-bottom-width:2px;border-radius:5px;background:var(--surface-2);
+  font:500 11px var(--mono);color:var(--muted)}
 /* Under the two-pane width the rail stops being a rail: it goes to the top of
    the page with a bounded height, because a 320px column beside a slip that
    needs 600 is two things both too narrow to read. */
@@ -574,6 +643,11 @@ table.trades tr.fresh{animation:land .8s ease-out}
 @keyframes land{from{background:rgba(232,184,75,.11)}to{background:transparent}}
 .t-side{font:600 10px var(--sans);letter-spacing:.07em;text-transform:uppercase}
 .t-buy .t-side{color:var(--ok)} .t-sell .t-side{color:var(--stop)}
+/* The side as a 2px edge on the row too, so a run of sells reads as a red
+   stripe down the tape before a single word of it is read. */
+table.trades tr.t-buy td:first-child{box-shadow:inset 2px 0 0 var(--ok-edge)}
+table.trades tr.t-sell td:first-child{box-shadow:inset 2px 0 0 var(--stop)}
+table.trades tbody tr:hover td{background:rgba(255,255,255,.025)}
 .t-num{font-family:var(--mono);color:var(--text)}
 .t-w{font-family:var(--mono);font-size:11.5px;color:var(--dim)}
 .t-w.flagged{color:var(--warn)}
@@ -657,8 +731,15 @@ table.trades tr.fresh{animation:land .8s ease-out}
 
 /* the history list */
 .seen{margin-top:20px}
-.seen-head{display:flex;align-items:center;gap:10px;font:600 10.5px var(--sans);letter-spacing:.1em;text-transform:uppercase;color:var(--dimmer)}
-.seen-head .link{margin-left:auto;font-size:11px;letter-spacing:0;text-transform:none;font-weight:400}
+.seen-head{display:flex;align-items:center;gap:10px;min-height:32px;cursor:pointer;list-style:none;
+  font:600 10.5px var(--sans);letter-spacing:.1em;text-transform:uppercase;color:var(--dimmer)}
+.seen-head::-webkit-details-marker{display:none}
+.seen-head:hover{color:var(--muted)}
+.seen-n{display:inline-flex;align-items:center;justify-content:center;min-width:18px;height:18px;padding:0 5px;border-radius:999px;
+  background:var(--surface-3);color:var(--dim);font-size:10.5px;letter-spacing:0}
+.seen[open] .seen-head .chev{transform:rotate(45deg)}
+.seen-head .chev{margin-left:2px}
+body.board .seen{margin-top:12px}
 .seen-list{list-style:none;margin:10px 0 0;padding:0;display:grid;gap:6px}
 .seen-row a{display:grid;grid-template-columns:16px auto 1fr auto;gap:11px;align-items:center;padding:10px 13px;
   background:var(--surface);border:1px solid var(--line);border-radius:var(--r);color:var(--muted);font-size:13px}
@@ -766,19 +847,33 @@ table.buys tr.exempt td:first-child{box-shadow:inset 2px 0 0 var(--line-3)}
   .hero{padding:36px 0 22px}
   .hero h1{font-size:30px}
   .hero p{font-size:15px}
-  .door form{flex-wrap:wrap}
-  .door input{flex:1 1 100%}
-  .btn{flex:1 1 100%}
+  /* The box and its button share a line: stacked, they spent a second 44px
+     row above the answer on the one screen where every row counts. */
+  .door form{flex-wrap:nowrap}
+  .door input{flex:1 1 auto}
+  .btn{flex:none;padding:0 16px}
+  body.board .door input,body.board .btn{min-height:44px}
   .head-top,.verdict,.vfoot,.q>summary,.qbody,.sec>summary,.sec>.body,.more-head{padding-left:16px;padding-right:16px}
   /* One column, and the bouncer stands BESIDE his stamp rather than above
      it: stacked, the mascot pushed the verdict 738px down a 844px screen. */
-  .doorway{grid-template-columns:1fr}
+  .doorway{grid-template-columns:1fr;grid-template-areas:"bar" "door" "chart" "list"}
+  /* The token bar folds to two rows — who, then price beside the window —
+     so the verdict under it starts on the first screen. */
+  .tokbar{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:end;padding:12px 16px;gap:6px 12px}
+  .who2{grid-column:1/-1}
+  .tokprice{margin-left:0;text-align:left}
+  .tp-s{justify-content:flex-start;margin-top:3px}
+  .tp-v{font-size:24px}
+  .tokbar .frames{align-self:end}
+  .chart-plot,.chart-empty.busy{height:190px}
+  .chart-plot{margin-right:64px}
+  .doorway>.chartbox{padding-left:16px;padding-right:16px}
   .doorman{border-right:0;border-bottom:1px solid var(--line)}
   .stand{display:flex;align-items:center;gap:16px;text-align:left;padding:16px}
   .mascot{width:56px;height:56px;flex:none}
   .vword{margin-top:0;font-size:19px;padding:6px 13px}
   .lead{margin-top:8px;font-size:12.5px}
-  .who2,.chartbox,.facts,.venues{padding-left:16px;padding-right:16px}
+  .facts,.venues{padding-left:16px;padding-right:16px}
   .tape-head,.flow,.tape-note,.tape-empty{padding-left:16px;padding-right:16px}
   table.trades th,table.trades td{padding-left:16px;padding-right:16px}
   /* Six columns do not fit a phone. The two that go are the ones the other
@@ -789,7 +884,6 @@ table.buys tr.exempt td:first-child{box-shadow:inset 2px 0 0 var(--line-3)}
   .qbody{padding-left:16px;padding-right:16px}
   .vfoot{padding-left:16px;padding-right:16px}
   .sym{font-size:22px}
-  .vword{font-size:28px}
   /* The answer moves under the question: at this width they were fighting
      for the same line and the answer, which is the point, was losing.
      Explicit order, because wrapping alone pushed the chevron onto a third
@@ -810,7 +904,7 @@ table.buys tr.exempt td:first-child{box-shadow:inset 2px 0 0 var(--line-3)}
      The desktop sizes stay as they are — a finger is not the pointer there. */
   .ghost,.btn,.chip,.picker-btn,.ext,.vaddr,.door input,.calc input,.row input,.settings input{min-height:44px}
   .chip{padding:0 14px}
-  .vaddr{display:inline-flex;align-items:center}
+  .vaddr{display:block;width:100%;margin-top:0;line-height:44px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .link{min-height:44px;display:inline-flex;align-items:center}
   .morelinks a{min-height:24px;display:inline-flex;align-items:center}
   footer a{display:inline-flex;min-height:24px;align-items:center}
@@ -860,14 +954,21 @@ header{position:static}
    he stands above it — and stands BESIDE his own stamp, the way he does on a
    phone, so the verdict is the first thing in the window rather than 120px
    of mascot followed by it. */
-.doorway{grid-template-columns:1fr}
+.doorway{grid-template-columns:1fr;grid-template-areas:"bar" "door" "chart" "list"}
+.tokbar{padding:12px 16px;gap:8px 14px}
+.tokprice{margin-left:0;text-align:left}
+.tp-s{justify-content:flex-start}
+.tp-v{font-size:22px}
+.doorway>.chartbox{padding-inline:16px}
+.chart-plot,.chart-empty.busy{height:170px}
+.chart-plot{margin-right:64px}
 .doorman{border-right:0;border-bottom:1px solid var(--line)}
 .stand{display:flex;align-items:center;gap:14px;text-align:left;padding:14px 16px}
 .mascot{width:52px;height:52px;flex:none}
 .vword{margin-top:0;font-size:18px;padding:5px 12px}
 .lead{margin-top:7px;font-size:12.5px}
 .facts{grid-template-columns:repeat(3,minmax(0,1fr))}
-.who2,.chartbox,.facts,.venues,.band{padding-inline:16px}
+.facts,.venues,.band{padding-inline:16px}
 .list-head,.q>summary,.log>summary,.log-body,.qbody,.vfoot{padding-inline:16px}
 .qbody{padding-left:16px}
 .vfoot{padding-block:10px}

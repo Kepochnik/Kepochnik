@@ -6,9 +6,9 @@
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { eventTopic } from "../src/chain/abi.js";
+import { encodeCall, eventTopic } from "../src/chain/abi.js";
 import { CHAINS } from "../src/chain/chains.js";
-import { FACTORY_EVENTS, PONS_V2_FACTORY } from "../src/chain/pons.js";
+import { CURVE_FUNCTIONS, FACTORY_EVENTS, PONS_V2_FACTORY } from "../src/chain/pons.js";
 import { RpcError, type RpcClient } from "../src/chain/rpc.js";
 import { addressTopic } from "../src/chain/tape.js";
 import { feedBlocker, readFeed } from "../src/bouncer/feed.js";
@@ -155,4 +155,33 @@ test("a chain with no launchpad has no feed, and says why", async () => {
   assert.ok(noPad && /launchpad/i.test(noPad), noPad ?? "Base reported a feed it cannot serve");
   const offChain = feedBlocker(CHAINS.solana);
   assert.ok(offChain && /Solana/i.test(offChain));
+});
+
+test("a live curve carries its graduation bar; a graduated one does not, and an unread one is not empty", async () => {
+  const REAL = encodeCall(CURVE_FUNCTIONS.realQuoteReserve, []);
+  const curveOf = (n: number) => addr(0xc000 + n);
+  const rpc = stub([launched(9_900, addr(1), addr(0xd1), curveOf(1)), launched(9_910, addr(2), addr(0xd2), curveOf(2)), launched(9_920, addr(3), addr(0xd3), curveOf(3)), graduated(9_950, addr(2))], {
+    callBatchSettled: async (calls: { to: string; data: string }[]) =>
+      calls.map((c) => {
+        if (c.data !== REAL) return `0x${word(32n)}${word(3n)}${Buffer.from("TKN").toString("hex").padEnd(64, "0")}`;
+        // A quarter of the 1 ETH threshold on the first curve; the third refuses.
+        if (c.to === curveOf(1)) return `0x${word(25n * 10n ** 16n)}`;
+        return new RpcError("reverted", 3, "eth_call");
+      }),
+  } as Partial<RpcClient>);
+  const feed = await readFeed(rpc, base);
+  const by = (n: number) => feed.rows.find((r) => r.token === addr(n))!;
+  assert.deepEqual(by(1).fill, { real: 25n * 10n ** 16n, bps: 2_500 });
+  assert.equal(by(2).fill, null, "a graduated launch still showed a curve bar");
+  assert.equal(by(3).fill, null, "a curve that did not answer was drawn as an empty bar");
+});
+
+test("a graduation in the new blocks is reported even when its launch is older than them", async () => {
+  // The column's refresh reads only what is new, so the launch row is not in
+  // this read at all — and the graduation still has to reach it.
+  const rpc = stub([launched(100, addr(1), addr(0xd1)), graduated(9_990, addr(1)), swept(9_991, addr(2))]);
+  const feed = await readFeed(rpc, { ...base, fromBlock: 9_000 });
+  assert.equal(feed.rows.length, 0);
+  assert.deepEqual(feed.graduated, [addr(1)]);
+  assert.deepEqual(feed.swept, [addr(2)]);
 });
