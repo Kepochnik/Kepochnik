@@ -1,0 +1,18 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>BOUNCER privacy policy</title><style>body{margin:0;background:#0e0d10;color:#ece7dc;font:16px/1.6 system-ui,sans-serif;padding:40px 20px}main{max-width:720px;margin:0 auto}h1{font:900 40px/1 Impact,'Arial Black',sans-serif;letter-spacing:.04em}a{color:#e2c04a}.muted{color:#8f8a96}</style></head><body><main><h1>BOUNCER privacy policy</h1>
+
+<p class="muted">Last updated: 2026-09-16</p>
+
+<p>BOUNCER (the browser extension, the website and the command-line tool) is a read-only tool that shows public blockchain information about a token address.</p>
+
+<p><strong>What we collect:</strong> nothing. BOUNCER has no server of its own, no analytics, no accounts, no cookies of its own and no telemetry.</p>
+
+<p><strong>What leaves your browser:</strong> when you check an address, the extension sends read-only requests (JSON-RPC and explorer API calls) containing that address to the blockchain endpoint you selected (by default the public RPC and Blockscout explorer of the chosen chain, or a proxy URL you configured). Those services see the request like any other blockchain read. BOUNCER never sends anything anywhere else.</p>
+
+<p><strong>What stays in your browser:</strong> your settings (chain, RPC URL, proxy URL, demo/live mode) in the extension's own storage. Remove the extension and they are gone.</p>
+
+<p><strong>Page access:</strong> the content script runs on a few token-listing sites only to read the page URL and pin a badge. It does not read page content, forms, wallets or storage, and it never modifies requests.</p>
+
+<p><strong>Keys and transactions:</strong> BOUNCER holds no keys, never asks to connect a wallet and cannot sign or send transactions; its RPC client refuses every write method.</p>
+
+<p><strong>Contact:</strong> open an issue at <a href="https://github.com/Kepochnik/bouncer/issues">https://github.com/Kepochnik/bouncer/issues</a></p>
+<p><a href="./">← back to BOUNCER</a></p></main></body></html>
