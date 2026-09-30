@@ -63,6 +63,13 @@ export const V2_SWAP: EventAbi = {
  * balance change, not the pool's: negative is what the trader paid in. V3
  * is the other way round. Reading one with the other's sign convention turns
  * every buy into a sell.
+ *
+ * Checked against v4-core, because the interface says the opposite: the
+ * natspec on IPoolManager.Swap calls amount0 "the delta of the currency0
+ * balance of the pool", but PoolManager emits `delta.amount0()` from
+ * Pool.swap — the same delta it then books to msg.sender — and for an exact-
+ * input swap Pool.swap builds that leg as `amountSpecified - remaining`,
+ * which is negative. Do not "fix" this against the comment.
  */
 export const V4_SWAP: EventAbi = {
   name: "Swap",
