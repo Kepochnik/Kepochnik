@@ -48,7 +48,7 @@ import type { MarketPool } from "../../src/chain/market.js";
 import { seriesChangeBps, seriesRange, thin, type PricePoint, type PriceSeries } from "../../src/chain/priceSeries.js";
 import { doorWatch, readLag, splWatch, type WatchOffer, type WatchPlan } from "../../src/bouncer/watchPlan.js";
 import { readTradeReceipt, type TradeReceipt } from "../../src/bouncer/txReceipt.js";
-import { formatBps, formatCoin, formatDuration, formatMoney, formatPrice, formatUnits, formatUsd, formatUsdPrice, humanUtc, plural, shortAddress } from "../../src/format.js";
+import { formatBps, formatCoin, formatDuration, formatMoney, formatPrice, formatPriceMoney, formatUnits, formatUsd, formatUsdPrice, humanUtc, plural, shortAddress } from "../../src/format.js";
 
 type Mode = "demo" | "live";
 type View = "door" | "dev" | "wallet" | "tx" | "plan" | "board";
@@ -535,7 +535,38 @@ function renderChips(): void {
  */
 new MutationObserver(() => {
   document.body.classList.toggle("answered", (document.getElementById("out")?.childElementCount ?? 0) > 0);
+  fitRail();
+  markScrollers();
 }).observe(document.getElementById("out") as Node, { childList: true });
+
+/**
+ * The rail sticks only when it fits the window. A rail taller than the
+ * screen used to scroll inside itself, so under a STOP its lower half — the
+ * real token's link, the coverage band, the figures — could only be reached
+ * by finding and scrolling a second scrollbar.
+ */
+const railWatch = new ResizeObserver(() => fitRail());
+function fitRail(): void {
+  const rail = document.querySelector<HTMLElement>(".doorman");
+  if (!rail) return;
+  railWatch.observe(rail);
+  rail.classList.toggle("fits", rail.scrollHeight <= window.innerHeight - 76);
+}
+window.addEventListener("resize", () => { fitRail(); markScrollers(); });
+
+/** A table wider than its box fades at the edge, so a hidden column is visibly there. */
+function markScrollers(): void {
+  for (const box of document.querySelectorAll<HTMLElement>(".tbl")) {
+    const scrolls = box.scrollWidth > box.clientWidth + 2;
+    box.classList.toggle("scrolls", scrolls);
+    box.classList.toggle("end", scrolls && box.scrollLeft + box.clientWidth >= box.scrollWidth - 2);
+  }
+}
+document.addEventListener("scroll", (event) => {
+  const box = event.target instanceof HTMLElement && event.target.classList.contains("tbl") ? event.target : null;
+  if (box) box.classList.toggle("end", box.scrollLeft + box.clientWidth >= box.scrollWidth - 2);
+}, true);
+document.addEventListener("toggle", () => { markScrollers(); fitRail(); }, true);
 
 /**
  * Copy-on-click for any element carrying data-copy. Delegated at the document
@@ -551,6 +582,34 @@ document.addEventListener("click", async (event) => {
     showToast("Copied");
   } catch {
     showToast(text);
+  }
+});
+
+/**
+ * Share from the token bar, where every token page puts it. The phone's own
+ * share sheet when there is one, the link on the clipboard when not. The
+ * link carries the window being looked at.
+ */
+document.addEventListener("click", async (event) => {
+  if (!(event.target as HTMLElement | null)?.closest("[data-share]")) return;
+  const [path, query = ""] = location.hash.split("?");
+  const params = new URLSearchParams(query);
+  params.set("w", frame);
+  const url = `${location.origin}${location.pathname}${path}?${params.toString()}`;
+  const title = document.title;
+  try {
+    if (navigator.share) {
+      await navigator.share({ title, url });
+      return;
+    }
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "AbortError") return;
+  }
+  try {
+    await navigator.clipboard.writeText(url);
+    showToast("Link copied");
+  } catch {
+    showToast(url);
   }
 });
 
@@ -582,6 +641,7 @@ function showToast(text: string): void {
 
 function busy(text: string): void {
   go.disabled = true;
+  setPageTitle(BASE_TITLE);
   stopWatch();
   stopTape();
   // A toggle press after this would re-read a token the page has left.
@@ -1214,9 +1274,17 @@ const WATCH_LABEL: Record<string, string> = {
 };
 
 const BASE_TITLE = document.title;
+/** The tab's title for the page on screen; a watch's count goes in front of it. */
+let pageTitle = BASE_TITLE;
+
+/** A tab per token you can tell apart: ticker and verdict, like any token page. */
+function setPageTitle(title: string): void {
+  pageTitle = title;
+  document.title = title;
+}
 
 function stopWatch(): void {
-  document.title = BASE_TITLE;
+  document.title = pageTitle;
   if (watcher) { clearInterval(watcher); watcher = null; }
   if (watchClock) { clearInterval(watchClock); watchClock = null; }
 }
@@ -1321,7 +1389,7 @@ function startWatch(slip: DoorSlip, plan: WatchPlan, panel: HTMLElement, button:
         }
         // The tab says it too: a watch runs while you are in another tab,
         // and the title is the one part of this page you can see from there.
-        if (events.length) document.title = `(${seen}) ${slip.id.meta?.symbol ?? shortAddress(slip.subject)} · BOUNCER`;
+        if (events.length) document.title = `(${seen}) ${pageTitle}`;
         if (!events.length && rounds % 4 === 0) add(`<span class="b">${at}</span><span class="k" style="color:var(--dim)">quiet</span><span>no moves up to block ${at}</span>`, true);
       }
       failing = null;
@@ -1709,7 +1777,7 @@ function keyFindings(notes: DoorNote[], word: string): string {
   return `<div class="keyf">
     <p class="whylead"><b>${esc(word)}</b> comes from ${loud.length === 1 ? "this finding" : `these ${loud.length} findings`}; everything else on the page is context.</p>
     <ol class="whylist">${loud
-      .map((n) => `<li><button class="keyf-row" type="button" data-q="${topicOf(n.code)}"><span class="whylvl ${n.level}">${LEVEL_WORD[n.level]}</span><span class="keyf-t">${esc(n.text)}</span></button></li>`)
+      .map((n) => `<li><button class="keyf-row" type="button" data-q="${topicOf(n.code)}" data-code="${esc(n.code)}"><span class="whylvl ${n.level}">${LEVEL_WORD[n.level]}</span><span class="keyf-t">${esc(n.text)}</span></button></li>`)
       .join("")}</ol>
   </div>`;
 }
@@ -1836,6 +1904,7 @@ function doorBlock(opts: {
           <div class="tokacts">
             <button class="vaddr tokact" type="button" data-copy="${esc(opts.address)}" title="Copy ${esc(opts.address)}" aria-label="Copy the contract address ${esc(opts.address)}"><span class="mono">${esc(shortAddress(opts.address))}</span><span class="tokact-i" aria-hidden="true">⧉</span></button>
             ${opts.explorer ? `<a class="tokact" href="${esc(opts.explorer)}" target="_blank" rel="noopener">Explorer<span aria-hidden="true"> ↗</span></a>` : ""}
+            ${stage === "done" ? `<button class="tokact" type="button" data-share>Share<span aria-hidden="true"> ↗</span></button>` : ""}
           </div>
         </div>
       </div>
@@ -1925,7 +1994,7 @@ function tokPrice(m: ReturnType<typeof marketFacts>, block: number): string {
   const series = tapeSeries();
   const change = series && series.points.length > 1 ? seriesChangeBps(series) : null;
   const tone = change === null ? "flat" : change > 50 ? "up" : change < -50 ? "down" : "flat";
-  const move = change === null ? "" : `<span class="move ${tone}">${change > 0 ? "+" : ""}${(change / 100).toFixed(1)}%</span>`;
+  const move = change === null || !series ? "" : `<span class="move ${tone}">${change > 0 ? "+" : ""}${(change / 100).toFixed(1)}%</span><span class="move-basis">${esc(moveBasis(series))}</span>`;
   const sub = lastPoint
     ? `last trade ${agoOf(lastPoint.block, t!.head)} ago`
     : value !== null
@@ -2040,13 +2109,24 @@ function refreshMoney(): void {
   if (tape) paintTape();
 }
 
+/**
+ * What a price move is measured from, said beside it. The figure compares the
+ * first trade in the window with the last; on a young token that is the move
+ * since launch whatever tab is selected, and "+1224%" beside a 24h tab would
+ * read as a 24h change the page never measured.
+ */
+function moveBasis(series: PriceSeries): string {
+  const first = series.points[0];
+  return first ? `since ${agoOf(first.block, tape?.head ?? null)} ago` : "";
+}
+
 /** Puts the crosshair on point `i` of a plot and says what is there. */
 function showPoint(plot: HTMLElement, i: number): void {
   const pts = (plot.dataset.pts ?? "").split(";").filter(Boolean);
   if (!pts.length) return;
   const at = Math.max(0, Math.min(pts.length - 1, i));
-  const [price, ago, side] = pts[at].split("|");
-  const left = pts.length === 1 ? 100 : (at / (pts.length - 1)) * 100;
+  const [price, ago, side, x] = pts[at].split("|");
+  const left = x !== undefined ? Number(x) : pts.length === 1 ? 100 : (at / (pts.length - 1)) * 100;
   plot.dataset.i = String(at);
   const xh = plot.querySelector<HTMLElement>(".chart-xh");
   const tip = plot.querySelector<HTMLElement>(".chart-tip");
@@ -2064,6 +2144,21 @@ function showPoint(plot: HTMLElement, i: number): void {
   tip.append(v, k);
   tip.style.left = `${left}%`;
   tip.classList.toggle("flip", left > 62);
+}
+
+/** The point nearest a horizontal position, by where each point is drawn. */
+function pointAt(plot: HTMLElement, clientX: number): void {
+  const pts = (plot.dataset.pts ?? "").split(";").filter(Boolean);
+  if (pts.length < 2) return;
+  const box = plot.getBoundingClientRect();
+  const want = ((clientX - box.left) / box.width) * 100;
+  let best = 0;
+  let gap = Infinity;
+  pts.forEach((p, i) => {
+    const x = Number(p.split("|")[3] ?? (i / (pts.length - 1)) * 100);
+    if (Math.abs(x - want) < gap) { gap = Math.abs(x - want); best = i; }
+  });
+  showPoint(plot, best);
 }
 
 function hidePoint(plot: HTMLElement): void {
@@ -2569,7 +2664,7 @@ function tapeBody(): string {
 
   const body = t.trades.length
     ? `<div class="tape-rows"><table class="trades">
-        <thead><tr><th>ago</th><th>side</th>${usdPer !== null ? "<th>value</th>" : ""}<th>${esc(sym)}</th><th class="c-tok">tokens</th><th>of supply</th><th>${t.source.kind === "curve" ? "trader" : t.source.pool.kind === "v4" ? "via" : "to"}</th><th class="c-blk">block</th></tr></thead>
+        <thead><tr><th>ago</th><th>side</th>${usdPer !== null ? "<th>value</th>" : ""}<th${usdPer !== null ? ' class="c-coin"' : ""}>${esc(sym)}</th><th class="c-tok">tokens</th><th>of supply</th><th>${t.source.kind === "curve" ? "trader" : t.source.pool.kind === "v4" ? "via" : "to"}</th><th class="c-blk">block</th></tr></thead>
         <tbody>${t.trades.map((x) => tradeRow(x, t)).join("")}</tbody>
       </table></div>`
     : `<div class="tape-empty">${t.opening
@@ -2597,8 +2692,8 @@ function tradeRow(x: Trade, t: TapeView): string {
   return `<tr class="t-${x.side}${t.fresh.has(key) ? " fresh" : ""}">
     <td class="t-ago">${esc(agoOf(x.block, t.head))}</td>
     <td><span class="t-side">${x.side}</span></td>
-    ${usd !== null ? `<td class="t-num">${esc(formatUsd(usd))}</td>` : ""}
-    <td class="t-num">${esc(formatCoin(x.quote, t.quote.decimals))}</td>
+    ${usd !== null ? `<td class="t-num" title="${esc(formatCoin(x.quote, t.quote.decimals))} ${esc(t.quote.symbol)}">${esc(formatUsd(usd))}</td>` : ""}
+    <td class="t-num${usd !== null ? " c-coin" : ""}">${esc(formatCoin(x.quote, t.quote.decimals))}</td>
     <td class="t-num c-tok">${esc(formatCoin(x.tokens, t.tokenDecimals))}</td>
     <td class="t-share${big ? " big" : ""}">${esc(share)}</td>
     <td>${walletCell(x, t)}</td>
@@ -2690,6 +2785,7 @@ function tapePanel(): string {
       <span class="tape-src">${esc(tape.sub)}</span>
       ${livePill(stalled)}
       <span class="tape-when">${tape.failing ? esc(tape.failing) : tape.head === null ? "opening" : `block ${tape.head}`}</span>
+      ${frameTabs()}
     </div>
     ${tapeBody()}
   </section>`;
@@ -2980,15 +3076,24 @@ function chartPanel(series: PriceSeries | null, quoteSymbol: string, quoteDecima
   // line pinned to the floor under two identical axis ticks.
   const flat = range.high === range.low;
   const yOf = (price: bigint) => (flat ? H / 2 : PAD + (1 - Number(((price - range.low) * 10_000n) / span) / 10_000) * (H - PAD * 2));
-  const coords = series.points.map((p, i) => [(i / (n - 1)) * W, yOf(p.price)] as const);
-  const line = coords.map(([x, y]) => `${x.toFixed(1)},${y.toFixed(1)}`).join(" ");
-  const area = `0,${H} ${line} ${W},${H}`;
+  // Spaced by time, not by trade count: trades seconds apart used to take as
+  // much width as trades an hour apart, so a burst in the last minute filled
+  // a panel whose tab said 1h. Blocks are the chain's clock.
+  const x0 = series.points[0].block;
+  const x1 = Math.max(series.points[n - 1].block, tape?.head ?? 0);
+  const xOf = (block: number, i: number) => (x1 > x0 ? ((block - x0) / (x1 - x0)) * W : (i / (n - 1)) * W);
+  const coords = series.points.map((p, i) => [xOf(p.block, i), yOf(p.price)] as const);
+  // Flat from the last trade to now: that is the price until somebody trades,
+  // and it keeps the end dot at the right edge, where "now" is.
+  const drawn = coords[n - 1][0] < W ? [...coords, [W, coords[n - 1][1]] as const] : coords;
+  const line = drawn.map(([x, y]) => `${x.toFixed(1)},${y.toFixed(1)}`).join(" ");
+  const area = `${coords[0][0].toFixed(1)},${H} ${line} ${W},${H}`;
   const change = seriesChangeBps(series);
   const tone = change === null ? "flat" : change > 50 ? "up" : change < -50 ? "down" : "flat";
-  const move = change === null ? "" : `<span class="move ${tone}">${change > 0 ? "+" : ""}${(change / 100).toFixed(1)}%</span>`;
+  const move = change === null ? "" : `<span class="move ${tone}">${change > 0 ? "+" : ""}${(change / 100).toFixed(1)}%</span><span class="move-basis">${esc(moveBasis(series))}</span>`;
   const last = coords[n - 1];
   // What the crosshair reads, precomputed as text: a price, how long ago, a side.
-  const pts = series.points.map((p) => `${px(p.price)}|${agoOf(p.block, tape?.head ?? null)}|${p.sell ? "sell" : "buy"}`).join(";");
+  const pts = series.points.map((p, i) => `${px(p.price)}|${agoOf(p.block, tape?.head ?? null)}|${p.sell ? "sell" : "buy"}|${((coords[i][0] / W) * 100).toFixed(2)}`).join(";");
   // The change over the window is said once, in the token bar beside the
   // price it changed; here the line itself is the change.
   void move;
@@ -3012,9 +3117,10 @@ function chartPanel(series: PriceSeries | null, quoteSymbol: string, quoteDecima
       <span class="chart-xh" hidden></span>
       <div class="chart-tip" hidden></div>
     </div>
+    <div class="chart-axis" aria-hidden="true"><span>${esc(agoOf(x0, tape?.head ?? null))} ago</span><span>now</span></div>
     <div class="chart-foot">
-      <span>${series.swaps} trade${series.swaps === 1 ? "" : "s"} · ${esc(series.venue)}</span>
-      <span>hover or use the arrow keys to read a point</span>
+      <span>${plural(series.swaps, "trade")} · ${esc(series.venue)}</span>
+      <span class="hint-hover">hover or use the arrow keys to read a point</span><span class="hint-touch">tap or drag along the line to read a point</span>
     </div>
   </div>`;
 }
@@ -4186,6 +4292,7 @@ function renderSlip(slip: DoorSlip, opts: { stage?: Stage; source?: Source } = {
     ${stage0 === "done" ? ("why" in picked ? tapeNone(picked.why) : `<section class="tape" id="tape"></section>`) : ""}
   </div>`;
 
+  if (stage0 === "done") setPageTitle(`${meta?.symbol ?? shortAddress(slip.subject)} · ${verdictOf(slip.notes, "done", coverage).word} · BOUNCER`);
   // The tape opens itself. It is the answer to "why does this page not move",
   // and a live panel behind a button is a panel nobody presses.
   shown = { slip, m, picked };
@@ -4257,14 +4364,18 @@ function renderSlip(slip: DoorSlip, opts: { stage?: Stage; source?: Source } = {
       const value = row.querySelector<HTMLElement>(".qv");
       const fig = row.querySelector<HTMLElement>(".qfig");
       const bar = document.getElementById("cd-bar");
+      // The same finding under the stamp, or the page says two numbers.
+      const key = document.querySelector<HTMLElement>('.keyf-row[data-code="cover-open"] .keyf-t');
       if (bar) bar.style.width = `${Math.round((left / cc.terms.seconds) * 100)}%`;
       if (left > 0) {
         if (value) value.textContent = `Yes, on a buy — the door tax is on for ${left} more second${left === 1 ? "" : "s"}`;
         if (fig) fig.textContent = `${left}s`;
+        if (key) key.textContent = (key.textContent ?? "").replace(/for \d+ s\b/, `for ${left} s`);
         return;
       }
       if (value) value.textContent = "The door tax ended while you were looking — check again to see who paid it";
       if (fig) fig.textContent = "ended";
+      if (key) key.textContent = "The door tax ended while you were looking — check again to see who paid it.";
       if (ticker) clearInterval(ticker);
       ticker = null;
     }, 1000);
@@ -4484,8 +4595,8 @@ function receiptSection(r: TradeReceipt, qd: Quote): string {
       <dt>protocol fee</dt><dd>${amt(r.fee)} · ${share(r.fee)}</dd>
       <dt>creator tax</dt><dd>${amt(r.creatorTaxPart)} · ${share(r.creatorTaxPart)}</dd>
       <dt>door tax</dt><dd>${amt(r.coverChargePart)} · ${share(r.coverChargePart)}<small class="gloss-line">the part of the tax above the creator's own rate</small></dd>
-      <dt>effective price</dt><dd><span class="mono">${esc(formatPrice(r.effectivePrice, qd.decimals))}</span> ${esc(qd.symbol)} per token, fees included</dd>
-      <dt>curve price after</dt><dd>${r.marginalPriceAfter === null ? "not served by this RPC for that block" : `<span class="mono">${esc(formatPrice(r.marginalPriceAfter, qd.decimals))}</span> ${esc(qd.symbol)} per token`}</dd>
+      <dt>effective price</dt><dd>${esc(formatPriceMoney(r.effectivePrice, qd.decimals, qd.symbol, quoteUsdNow(qd.native)))} per token, fees included</dd>
+      <dt>curve price after</dt><dd>${r.marginalPriceAfter === null ? "not served by this RPC for that block" : `${esc(formatPriceMoney(r.marginalPriceAfter, qd.decimals, qd.symbol, quoteUsdNow(qd.native)))} per token`}</dd>
     </dl></section>`;
 }
 
@@ -4498,7 +4609,7 @@ function renderPlan(plan: LaunchPlan): void {
   const qd = plan.quote;
   const c = chain();
   const u = (v: bigint) => esc(formatMoney(v, qd.decimals, qd.symbol, quoteUsdNow(qd.native)));
-  const price = (v: bigint) => `<span class="mono">${esc(formatPrice(v, qd.decimals))}</span> ${esc(qd.symbol)}`;
+  const price = (v: bigint) => esc(formatPriceMoney(v, qd.decimals, qd.symbol, quoteUsdNow(qd.native)));
   const tokens = (v: bigint) => `<span class="mono">${esc(formatCoin(v, 18))}</span>`;
   out.innerHTML = `<div class="slip">
     <div class="stamp-row"><div class="who"><div class="cap-l">Launch planner</div><div class="sym">Plan a launch</div><div class="name">${esc(c.name)} · ${esc(c.launchpad ?? "no launchpad")}${plan.configEnabled ? "" : " · this config is disabled"} · quote ${esc(qd.symbol)} · block ${plan.block.toLocaleString("en-US")}</div>
@@ -4606,6 +4717,7 @@ function start(begin: () => Promise<void>): void {
  * nothing was open.
  */
 function home(): void {
+  setPageTitle(BASE_TITLE);
   stopTape();
   stopWatch();
   if (ticker) { clearInterval(ticker); ticker = null; }
@@ -4634,6 +4746,9 @@ function route(): void {
     if (chainParam && CHAINS[chainParam]) selectChain(chainParam);
   }
   ensureQuoteUsd();
+  // A shared link carries the window it was looked at in.
+  const w = params.get("w");
+  if (w && (FRAMES as string[]).includes(w)) frame = w as Frame;
   switch (parts[0]) {
     case "t":
     case "demo":
@@ -4793,12 +4908,17 @@ function boot(): void {
   out.addEventListener("pointermove", (event) => {
     const plot = (event.target as HTMLElement).closest<HTMLElement>(".chart-plot");
     if (!plot) return;
-    const box = plot.getBoundingClientRect();
-    const n = (plot.dataset.pts ?? "").split(";").filter(Boolean).length;
-    if (n < 2) return;
-    showPoint(plot, Math.round(((event.clientX - box.left) / box.width) * (n - 1)));
+    pointAt(plot, event.clientX);
+  });
+  // A tap is how a phone reads a point: there is no hover on glass.
+  out.addEventListener("pointerdown", (event) => {
+    const plot = (event.target as HTMLElement).closest<HTMLElement>(".chart-plot");
+    if (plot) pointAt(plot, event.clientX);
   });
   out.addEventListener("pointerout", (event) => {
+    // A finger lifting is not the reader looking away: the point stays until
+    // the next tap, or it would vanish under the finger that asked for it.
+    if (event.pointerType === "touch") return;
     const plot = (event.target as HTMLElement).closest<HTMLElement>(".chart-plot");
     if (plot && !plot.contains(event.relatedTarget as Node | null)) hidePoint(plot);
   });

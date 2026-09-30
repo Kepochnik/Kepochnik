@@ -229,3 +229,10 @@ export function humanUtc(unix: number): string {
 export function plural(n: number, one: string, many = `${one}s`): string {
   return `${n.toLocaleString("en-US")} ${n === 1 ? one : many}`;
 }
+
+/** "$0.0₅54 (0.0₈21 ETH)" — a per-token price with its dollar figure first, or the coin alone without a read price. */
+export function formatPriceMoney(value: bigint, decimals: number, symbol: string, usdPerCoin: number | null): string {
+  const coin = `${formatPrice(value, decimals)} ${symbol}`;
+  if (usdPerCoin === null || !Number.isFinite(usdPerCoin) || usdPerCoin <= 0) return coin;
+  return `${formatUsdPrice((Number(value) / 10 ** decimals) * usdPerCoin)} (${coin})`;
+}

@@ -98,3 +98,9 @@ test("compact money keeps whole-number zeros and carries across units", async ()
   assert.equal(formatUsdPrice(0.0001), "$0.0001");
   assert.equal(formatUsdPrice(0.00000540), "$0.0₅54");
 });
+
+test("a per-token price with its dollar figure", async () => {
+  const { formatPriceMoney } = await import("../src/format.js");
+  assert.equal(formatPriceMoney(2_174n * 10n ** 4n, 18, "ETH", null), "0.0₁₀2174 ETH");
+  assert.equal(formatPriceMoney(10n ** 15n, 18, "ETH", 2000), "$2 (0.001 ETH)");
+});

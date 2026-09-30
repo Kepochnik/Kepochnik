@@ -109,6 +109,7 @@ code,.mono{font-family:var(--mono);font-size:.92em;letter-spacing:0;font-variant
 .sr{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0}
 
 /* ---------------------------------------------------------------- header */
+html{scroll-padding-top:72px}
 header{position:sticky;top:0;z-index:40;background:rgba(10,11,13,.82);backdrop-filter:blur(12px);border-bottom:1px solid var(--line)}
 .hbar{max-width:var(--max);margin:0 auto;display:flex;align-items:center;gap:10px;padding:10px 20px;min-height:56px}
 .mark{width:26px;height:26px;border-radius:var(--r-sm);flex:none}
@@ -277,11 +278,14 @@ body.board .deck{margin-top:14px}
 .tp-v small{margin-left:7px;font:500 13px var(--sans);letter-spacing:0;color:var(--dim)}
 .tp-s{display:flex;justify-content:flex-end;align-items:baseline;gap:10px;margin-top:5px;font-size:12px;color:var(--dimmer)}
 .tp-s .move{font:600 12.5px var(--mono)}
+.tp-s{flex-wrap:wrap;row-gap:3px}
+.tp-s>span{white-space:nowrap}
+.tp-s .move-basis{margin-left:-4px}
 .tp-coin{font:500 12px var(--mono);color:var(--dim)}
 .tokbar .frames{align-self:center}
 
 /* the bouncer's side */
-.doorman{grid-area:door;align-self:start;position:sticky;top:64px;max-height:calc(100vh - 76px);overflow-y:auto;overscroll-behavior:contain;scrollbar-width:thin;border-right:1px solid var(--line);background:var(--surface-2);display:flex;flex-direction:column;min-width:0;
+.doorman{grid-area:door;align-self:start;border-right:1px solid var(--line);background:var(--surface-2);display:flex;flex-direction:column;min-width:0;
   box-shadow:inset -1px 0 0 rgba(255,255,255,.02)}
 .stand{display:flex;align-items:flex-start;gap:16px;padding:20px 22px;text-align:left;border-bottom:1px solid var(--line);position:relative}
 .stand::before{content:"";position:absolute;inset:0;pointer-events:none;
@@ -339,6 +343,10 @@ body.board .deck{margin-top:14px}
 .chart-tip .t-buy{color:var(--ok)} .chart-tip .t-sell{color:var(--stop)}
 .chart-xh[hidden],.chart-tip[hidden]{display:none}
 .chart-foot{display:flex;justify-content:space-between;gap:10px;margin-top:10px;font-size:11px;color:var(--dimmer)}
+.chart-axis{display:flex;justify-content:space-between;margin-top:6px;font:500 10.5px var(--mono);color:var(--dimmer)}
+.hint-touch{display:none}
+@media (hover:none){.hint-hover{display:none}.hint-touch{display:inline}}
+.move-basis{margin-left:6px;font:500 11px var(--sans);color:var(--dimmer)}
 /* Empty is shorter than reading: a line that is on its way holds the space
    it will fill, a line that does not exist does not take 250px to say so. */
 .chart-empty{display:grid;place-items:center;min-height:140px;margin-top:14px;padding:20px;border:1px dashed var(--line-2);
@@ -382,11 +390,14 @@ body.board .deck{margin-top:14px}
 .q>summary:hover{background:var(--surface-2)}
 .q[open]>summary{background:var(--surface-2)}
 /* The mark is the bouncer's answer: through, careful, refused, did not see. */
+.doorman.fits{position:sticky;top:64px}
 .qmark{flex:none;width:25px;height:25px;border-radius:50%;border:1.5px solid var(--dim);color:var(--dim);
   display:flex;align-items:center;justify-content:center;font:700 13px var(--sans);margin-top:1px}
 .qmark.ok{border-color:var(--ok);color:var(--ok)}
 .qmark.warn{border-color:var(--warn);color:var(--warn)}
 .qmark.stop{border-color:var(--stop);color:var(--stop)}
+.qdot{flex:none;width:8px;height:8px;margin-top:6px;border-radius:50%;background:var(--ok)}
+.qdot.warn{background:var(--warn)} .qdot.stop{background:var(--stop)} .qdot.unknown{background:var(--dim)}
 .qhead{flex-grow:1;min-width:0;display:grid;gap:4px}
 .qq{color:var(--dimmer);font:600 10px var(--sans);letter-spacing:.1em;text-transform:uppercase}
 .qv{font-size:15px;line-height:1.45;color:var(--text)}
@@ -542,6 +553,9 @@ table.buys tr:first-child td{border-top:0}
 .keyf .whylist{list-style:none;margin:8px 0 0;padding:0;display:grid;gap:4px}
 .keyf-row{display:grid;grid-template-columns:auto 1fr;gap:10px;align-items:baseline;width:100%;padding:7px 9px;margin:0 -9px;
   background:none;border:0;border-radius:8px;color:var(--muted);font:400 12.5px/1.5 var(--sans);text-align:left;cursor:pointer}
+.tbl.scrolls{-webkit-mask-image:linear-gradient(90deg,#000 85%,transparent);mask-image:linear-gradient(90deg,#000 85%,transparent)}
+.tbl.scrolls.end{-webkit-mask-image:none;mask-image:none}
+.keyf-t,.lead,.whylist li,.qdetail,.qv,.error p{overflow-wrap:anywhere}
 .keyf-row:hover{background:var(--surface-3);color:var(--text)}
 .keyf-row .whylvl{margin-right:0;min-width:52px}
 .keyf-t{min-width:0}
@@ -566,7 +580,7 @@ table.buys tr:first-child td{border-top:0}
 .feed-head h2{margin:0;font:600 10px var(--sans);letter-spacing:.1em;text-transform:uppercase;color:var(--dim)}
 .feed-head .tape-live{margin-left:auto}
 .feed-filters{display:flex;gap:4px;flex-wrap:nowrap;overflow-x:auto;scrollbar-width:none;padding:8px 12px;border-bottom:1px solid var(--line)}
-.fchip{min-height:24px;padding:0 8px;background:var(--surface-3);border:1px solid var(--line);border-radius:999px;
+.fchip{flex:none;white-space:nowrap;min-height:24px;padding:0 8px;background:var(--surface-3);border:1px solid var(--line);border-radius:999px;
   cursor:pointer;color:var(--dim);font:500 11px var(--sans);transition:color .12s ease,background .12s ease,border-color .12s ease}
 .fchip:hover{color:var(--text);border-color:var(--line-2)}
 .fchip.on{color:var(--brand-ink);background:var(--brand);border-color:transparent;font-weight:600}
@@ -640,7 +654,7 @@ kbd{display:inline-flex;align-items:center;justify-content:center;min-width:20px
    what two separate toggles would eventually let them do. */
 .frames{display:inline-flex;gap:1px;padding:2px;background:var(--surface-3);border-radius:var(--r-sm);
   border:1px solid var(--line)}
-.frame{min-height:22px;padding:0 8px;background:none;border:0;border-radius:4px;cursor:pointer;
+.frame{display:inline-flex;align-items:center;justify-content:center;min-height:22px;padding:0 8px;background:none;border:0;border-radius:4px;cursor:pointer;
   color:var(--dimmer);font:600 10.5px var(--mono);letter-spacing:.02em;
   transition:color .12s ease,background .12s ease}
 .frame:hover{color:var(--muted);background:rgba(255,255,255,.04)}
@@ -650,7 +664,7 @@ kbd{display:inline-flex;align-items:center;justify-content:center;min-width:20px
    it between them, which put the toggle somewhere in the middle depending on
    how wide the percentage happened to be. */
 .chart-head{align-items:center}
-.chart-head .frames{margin-left:auto}
+.chart-head .frames,.tape-head .frames{margin-left:auto}
 .chart-head .frames~.move{margin-left:8px}
 
 /* ---------------------------------------------------------------- tape */
@@ -824,7 +838,7 @@ a.t-w:hover,table.trades .c-blk a:hover{color:var(--text);text-decoration:underl
 .buy-ref{flex:none;padding:1px 7px;border:1px solid var(--line-2);border-radius:999px;color:var(--dim);
   font:600 9.5px var(--sans);letter-spacing:.08em;text-transform:uppercase}
 .buy-gap{position:relative;margin-top:8px;color:var(--warn);font-size:12px}
-@media (max-width:640px){.buy-disc{display:block;font-size:12px}.buy-ref{display:inline-block;margin:0 6px 4px 0;font-size:11px}}
+@media (max-width:640px){.buy{display:flex;flex-direction:column}.buy-head{order:-2}.buy-lead{order:-1}.buy-disc{order:-1;margin:12px 0}.buy-disc{display:block;font-size:12px}.buy-ref{display:inline-block;margin:0 6px 4px 0;font-size:11px}}
 /* Under STOP: every card grey, the action a plain outline, no glow. */
 .buy-stop::before{background:radial-gradient(640px 180px at 12% -60px,rgba(255,98,87,.08),transparent 70%)}
 .buy-stop .buy-link{--v:var(--line-3);--v2:var(--line-3)}
@@ -974,6 +988,8 @@ table.buys tr.exempt td:first-child{box-shadow:inset 2px 0 0 var(--line-3)}
   #ext-link{display:none}
   /* Every control on a phone gets a thumb's worth of height. */
   .frame,.fchip{min-height:44px;padding:0 12px}
+  .bandmore>summary{display:inline-flex;align-items:center;min-height:44px}
+  .picker-menu li{min-height:44px}
   .hbar{padding:10px 16px}
   .hero{padding:36px 0 22px}
   .hero h1{font-size:30px}
@@ -988,12 +1004,13 @@ table.buys tr.exempt td:first-child{box-shadow:inset 2px 0 0 var(--line-3)}
   /* One column, and the bouncer stands BESIDE his stamp rather than above
      it: stacked, the mascot pushed the verdict 738px down a 844px screen. */
   .doorway{grid-template-columns:1fr;grid-template-areas:"bar" "door" "chart" "list";background:var(--surface)!important}
-  .doorman{position:static;max-height:none;overflow:visible;align-self:stretch}
+  .doorman,.doorman.fits{position:static;max-height:none;overflow:visible;align-self:stretch}
   .exit-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
   /* The token bar folds to two rows — who, then price beside the window —
      so the verdict under it starts on the first screen. */
   .tokbar{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:end;padding:12px 16px;gap:6px 12px}
-  .who2{grid-column:1/-1}
+  .tokid{grid-column:1/-1}
+  .tokline .name{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
   .tokprice{margin-left:0;text-align:left}
   .tp-s{justify-content:flex-start;margin-top:3px}
   .tp-v{font-size:24px}
@@ -1011,7 +1028,9 @@ table.buys tr.exempt td:first-child{box-shadow:inset 2px 0 0 var(--line-3)}
   .lead{margin-top:8px;font-size:12.5px}
   .facts,.venues{padding-left:16px;padding-right:16px}
   .tape-head,.flow,.tape-note,.tape-empty{padding-left:16px;padding-right:16px}
-  table.trades th,table.trades td{padding-left:16px;padding-right:16px}
+  table.trades th,table.trades td{padding-left:10px;padding-right:10px}
+  table.trades .c-coin{display:none}
+  .tape-rows{max-height:340px;overscroll-behavior:auto}
   /* Six columns do not fit a phone. The two that go are the ones the other
      four already imply: the token count (the share of supply says it better)
      and the exact block (the age says it well enough on a screen this size). */
@@ -1025,8 +1044,9 @@ table.buys tr.exempt td:first-child{box-shadow:inset 2px 0 0 var(--line-3)}
      Explicit order, because wrapping alone pushed the chevron onto a third
      line of its own — a row three lines tall with one word on each. */
   .q>summary{flex-wrap:wrap;gap:6px 12px;padding-top:13px;padding-bottom:13px}
-  .qdot{order:0} .qq{order:1;flex:1 1 auto} .q>summary .chev{order:2;margin-left:auto}
-  .qa{order:3;flex:1 1 100%;text-align:left;margin-left:22px}
+  .q>summary .qhead{flex:1 1 calc(100% - 40px)}
+  .q>summary .qfig{margin-left:18px}
+  .q>summary .chev{margin-left:auto}
   .qv{font-size:15px}
   .picker-btn,.ext{white-space:nowrap}
   .wordmark{font-size:14px;letter-spacing:.1em}
@@ -1046,6 +1066,8 @@ table.buys tr.exempt td:first-child{box-shadow:inset 2px 0 0 var(--line-3)}
   .morelinks a{min-height:24px;display:inline-flex;align-items:center}
   footer a{display:inline-flex;min-height:24px;align-items:center}
 }
+/* Under 380px the header was 20px wider than the screen: the mark alone carries the name there. */
+@media (max-width:380px){.wordmark{display:none}}
 /* Popup-only overrides.
 
    The popup is the same app in a 560-pixel box that Chrome sizes to this
@@ -1092,7 +1114,7 @@ header{position:static}
    phone, so the verdict is the first thing in the window rather than 120px
    of mascot followed by it. */
 .doorway{grid-template-columns:1fr;grid-template-areas:"bar" "door" "chart" "list";background:var(--surface)!important}
-.doorman{position:static;max-height:none;overflow:visible;align-self:stretch}
+.doorman,.doorman.fits{position:static;max-height:none;overflow:visible;align-self:stretch}
 .tokbar{padding:12px 16px;gap:8px 14px}
 .tokprice{margin-left:0;text-align:left}
 .tp-s{justify-content:flex-start}

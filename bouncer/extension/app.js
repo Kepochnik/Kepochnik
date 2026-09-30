@@ -3661,6 +3661,11 @@
   function plural(n, one, many = `${one}s`) {
     return `${n.toLocaleString("en-US")} ${n === 1 ? one : many}`;
   }
+  function formatPriceMoney(value, decimals, symbol, usdPerCoin) {
+    const coin = `${formatPrice(value, decimals)} ${symbol}`;
+    if (usdPerCoin === null || !Number.isFinite(usdPerCoin) || usdPerCoin <= 0) return coin;
+    return `${formatUsdPrice(Number(value) / 10 ** decimals * usdPerCoin)} (${coin})`;
+  }
 
   // src/bouncer/door.ts
   init_abi();
@@ -8960,7 +8965,35 @@
   }
   new MutationObserver(() => {
     document.body.classList.toggle("answered", (document.getElementById("out")?.childElementCount ?? 0) > 0);
+    fitRail();
+    markScrollers();
   }).observe(document.getElementById("out"), { childList: true });
+  var railWatch = new ResizeObserver(() => fitRail());
+  function fitRail() {
+    const rail = document.querySelector(".doorman");
+    if (!rail) return;
+    railWatch.observe(rail);
+    rail.classList.toggle("fits", rail.scrollHeight <= window.innerHeight - 76);
+  }
+  window.addEventListener("resize", () => {
+    fitRail();
+    markScrollers();
+  });
+  function markScrollers() {
+    for (const box of document.querySelectorAll(".tbl")) {
+      const scrolls = box.scrollWidth > box.clientWidth + 2;
+      box.classList.toggle("scrolls", scrolls);
+      box.classList.toggle("end", scrolls && box.scrollLeft + box.clientWidth >= box.scrollWidth - 2);
+    }
+  }
+  document.addEventListener("scroll", (event) => {
+    const box = event.target instanceof HTMLElement && event.target.classList.contains("tbl") ? event.target : null;
+    if (box) box.classList.toggle("end", box.scrollLeft + box.clientWidth >= box.scrollWidth - 2);
+  }, true);
+  document.addEventListener("toggle", () => {
+    markScrollers();
+    fitRail();
+  }, true);
   document.addEventListener("click", async (event) => {
     const target = event.target?.closest("[data-copy]");
     if (!target) return;
@@ -8970,6 +9003,28 @@
       showToast("Copied");
     } catch {
       showToast(text);
+    }
+  });
+  document.addEventListener("click", async (event) => {
+    if (!event.target?.closest("[data-share]")) return;
+    const [path, query = ""] = location.hash.split("?");
+    const params = new URLSearchParams(query);
+    params.set("w", frame);
+    const url = `${location.origin}${location.pathname}${path}?${params.toString()}`;
+    const title = document.title;
+    try {
+      if (navigator.share) {
+        await navigator.share({ title, url });
+        return;
+      }
+    } catch (error) {
+      if (error instanceof DOMException && error.name === "AbortError") return;
+    }
+    try {
+      await navigator.clipboard.writeText(url);
+      showToast("Link copied");
+    } catch {
+      showToast(url);
     }
   });
   document.addEventListener("click", (event) => {
@@ -8994,6 +9049,7 @@
   }
   function busy(text) {
     go.disabled = true;
+    setPageTitle(BASE_TITLE);
     stopWatch();
     stopTape();
     shown = null;
@@ -9387,8 +9443,13 @@
     burned: "Burned"
   };
   var BASE_TITLE = document.title;
+  var pageTitle = BASE_TITLE;
+  function setPageTitle(title) {
+    pageTitle = title;
+    document.title = title;
+  }
   function stopWatch() {
-    document.title = BASE_TITLE;
+    document.title = pageTitle;
     if (watcher) {
       clearInterval(watcher);
       watcher = null;
@@ -9463,7 +9524,7 @@
             } catch {
             }
           }
-          if (events.length) document.title = `(${seen}) ${slip.id.meta?.symbol ?? shortAddress(slip.subject)} \xB7 BOUNCER`;
+          if (events.length) document.title = `(${seen}) ${pageTitle}`;
           if (!events.length && rounds % 4 === 0) add(`<span class="b">${at}</span><span class="k" style="color:var(--dim)">quiet</span><span>no moves up to block ${at}</span>`, true);
         }
         failing = null;
@@ -9624,7 +9685,7 @@
     if (!loud.length) return "";
     return `<div class="keyf">
     <p class="whylead"><b>${esc2(word)}</b> comes from ${loud.length === 1 ? "this finding" : `these ${loud.length} findings`}; everything else on the page is context.</p>
-    <ol class="whylist">${loud.map((n) => `<li><button class="keyf-row" type="button" data-q="${topicOf(n.code)}"><span class="whylvl ${n.level}">${LEVEL_WORD[n.level]}</span><span class="keyf-t">${esc2(n.text)}</span></button></li>`).join("")}</ol>
+    <ol class="whylist">${loud.map((n) => `<li><button class="keyf-row" type="button" data-q="${topicOf(n.code)}" data-code="${esc2(n.code)}"><span class="whylvl ${n.level}">${LEVEL_WORD[n.level]}</span><span class="keyf-t">${esc2(n.text)}</span></button></li>`).join("")}</ol>
   </div>`;
   }
   function stageTag(slip) {
@@ -9681,6 +9742,7 @@
           <div class="tokacts">
             <button class="vaddr tokact" type="button" data-copy="${esc2(opts.address)}" title="Copy ${esc2(opts.address)}" aria-label="Copy the contract address ${esc2(opts.address)}"><span class="mono">${esc2(shortAddress(opts.address))}</span><span class="tokact-i" aria-hidden="true">\u29C9</span></button>
             ${opts.explorer ? `<a class="tokact" href="${esc2(opts.explorer)}" target="_blank" rel="noopener">Explorer<span aria-hidden="true"> \u2197</span></a>` : ""}
+            ${stage === "done" ? `<button class="tokact" type="button" data-share>Share<span aria-hidden="true"> \u2197</span></button>` : ""}
           </div>
         </div>
       </div>
@@ -9744,7 +9806,7 @@
     const series = tapeSeries();
     const change = series && series.points.length > 1 ? seriesChangeBps(series) : null;
     const tone = change === null ? "flat" : change > 50 ? "up" : change < -50 ? "down" : "flat";
-    const move = change === null ? "" : `<span class="move ${tone}">${change > 0 ? "+" : ""}${(change / 100).toFixed(1)}%</span>`;
+    const move = change === null || !series ? "" : `<span class="move ${tone}">${change > 0 ? "+" : ""}${(change / 100).toFixed(1)}%</span><span class="move-basis">${esc2(moveBasis(series))}</span>`;
     const sub = lastPoint ? `last trade ${agoOf(lastPoint.block, t.head)} ago` : value !== null ? `read at block ${block}` : "no price read";
     const usd2 = value !== null && m.quoteUsd !== null ? Number(value) / 10 ** m.quoteDecimals * m.quoteUsd : null;
     const coin = value === null ? "\u2014" : `${formatPrice(value, m.quoteDecimals)} ${m.quoteSymbol}`;
@@ -9811,12 +9873,16 @@
     if (exit && exitValue) exitValue.textContent = exit.value;
     if (tape) paintTape();
   }
+  function moveBasis(series) {
+    const first = series.points[0];
+    return first ? `since ${agoOf(first.block, tape?.head ?? null)} ago` : "";
+  }
   function showPoint(plot, i) {
     const pts = (plot.dataset.pts ?? "").split(";").filter(Boolean);
     if (!pts.length) return;
     const at = Math.max(0, Math.min(pts.length - 1, i));
-    const [price, ago2, side] = pts[at].split("|");
-    const left = pts.length === 1 ? 100 : at / (pts.length - 1) * 100;
+    const [price, ago2, side, x] = pts[at].split("|");
+    const left = x !== void 0 ? Number(x) : pts.length === 1 ? 100 : at / (pts.length - 1) * 100;
     plot.dataset.i = String(at);
     const xh = plot.querySelector(".chart-xh");
     const tip = plot.querySelector(".chart-tip");
@@ -9833,6 +9899,22 @@
     tip.append(v, k);
     tip.style.left = `${left}%`;
     tip.classList.toggle("flip", left > 62);
+  }
+  function pointAt(plot, clientX) {
+    const pts = (plot.dataset.pts ?? "").split(";").filter(Boolean);
+    if (pts.length < 2) return;
+    const box = plot.getBoundingClientRect();
+    const want = (clientX - box.left) / box.width * 100;
+    let best = 0;
+    let gap = Infinity;
+    pts.forEach((p, i) => {
+      const x = Number(p.split("|")[3] ?? i / (pts.length - 1) * 100);
+      if (Math.abs(x - want) < gap) {
+        gap = Math.abs(x - want);
+        best = i;
+      }
+    });
+    showPoint(plot, best);
   }
   function hidePoint(plot) {
     delete plot.dataset.i;
@@ -10156,7 +10238,7 @@
     <div class="flow-bar"><i class="in" style="width:${total > 0n ? inPct : 0}%"></i><i class="out" style="width:${total > 0n ? 100 - inPct : 0}%"></i></div>
   </div>`;
     const body = t.trades.length ? `<div class="tape-rows"><table class="trades">
-        <thead><tr><th>ago</th><th>side</th>${usdPer !== null ? "<th>value</th>" : ""}<th>${esc2(sym)}</th><th class="c-tok">tokens</th><th>of supply</th><th>${t.source.kind === "curve" ? "trader" : t.source.pool.kind === "v4" ? "via" : "to"}</th><th class="c-blk">block</th></tr></thead>
+        <thead><tr><th>ago</th><th>side</th>${usdPer !== null ? "<th>value</th>" : ""}<th${usdPer !== null ? ' class="c-coin"' : ""}>${esc2(sym)}</th><th class="c-tok">tokens</th><th>of supply</th><th>${t.source.kind === "curve" ? "trader" : t.source.pool.kind === "v4" ? "via" : "to"}</th><th class="c-blk">block</th></tr></thead>
         <tbody>${t.trades.map((x) => tradeRow(x, t)).join("")}</tbody>
       </table></div>` : `<div class="tape-empty">${t.opening ? "<b>Reading the trades\u2026</b>the first round is walking the log" : t.head === null ? "<b>Could not read the trades</b>the chain did not answer, so this is not a quiet token \u2014 it is an unread one. The tape keeps trying." : `<b>Nothing traded in ${esc2(FRAME_WORD[frame])}</b>no buy and no sell between block ${t.from} and ${t.head}${widerFrames()}`}</div>`;
     return `${flow}${body}
@@ -10173,8 +10255,8 @@
     return `<tr class="t-${x.side}${t.fresh.has(key) ? " fresh" : ""}">
     <td class="t-ago">${esc2(agoOf(x.block, t.head))}</td>
     <td><span class="t-side">${x.side}</span></td>
-    ${usd2 !== null ? `<td class="t-num">${esc2(formatUsd(usd2))}</td>` : ""}
-    <td class="t-num">${esc2(formatCoin(x.quote, t.quote.decimals))}</td>
+    ${usd2 !== null ? `<td class="t-num" title="${esc2(formatCoin(x.quote, t.quote.decimals))} ${esc2(t.quote.symbol)}">${esc2(formatUsd(usd2))}</td>` : ""}
+    <td class="t-num${usd2 !== null ? " c-coin" : ""}">${esc2(formatCoin(x.quote, t.quote.decimals))}</td>
     <td class="t-num c-tok">${esc2(formatCoin(x.tokens, t.tokenDecimals))}</td>
     <td class="t-share${big ? " big" : ""}">${esc2(share)}</td>
     <td>${walletCell(x, t)}</td>
@@ -10225,6 +10307,7 @@
       <span class="tape-src">${esc2(tape.sub)}</span>
       ${livePill(stalled)}
       <span class="tape-when">${tape.failing ? esc2(tape.failing) : tape.head === null ? "opening" : `block ${tape.head}`}</span>
+      ${frameTabs()}
     </div>
     ${tapeBody()}
   </section>`;
@@ -10417,14 +10500,18 @@
     const n = series.points.length;
     const flat = range.high === range.low;
     const yOf = (price) => flat ? H / 2 : PAD + (1 - Number((price - range.low) * 10000n / span) / 1e4) * (H - PAD * 2);
-    const coords = series.points.map((p, i) => [i / (n - 1) * W, yOf(p.price)]);
-    const line = coords.map(([x, y]) => `${x.toFixed(1)},${y.toFixed(1)}`).join(" ");
-    const area = `0,${H} ${line} ${W},${H}`;
+    const x0 = series.points[0].block;
+    const x1 = Math.max(series.points[n - 1].block, tape?.head ?? 0);
+    const xOf = (block, i) => x1 > x0 ? (block - x0) / (x1 - x0) * W : i / (n - 1) * W;
+    const coords = series.points.map((p, i) => [xOf(p.block, i), yOf(p.price)]);
+    const drawn = coords[n - 1][0] < W ? [...coords, [W, coords[n - 1][1]]] : coords;
+    const line = drawn.map(([x, y]) => `${x.toFixed(1)},${y.toFixed(1)}`).join(" ");
+    const area = `${coords[0][0].toFixed(1)},${H} ${line} ${W},${H}`;
     const change = seriesChangeBps(series);
     const tone = change === null ? "flat" : change > 50 ? "up" : change < -50 ? "down" : "flat";
-    const move = change === null ? "" : `<span class="move ${tone}">${change > 0 ? "+" : ""}${(change / 100).toFixed(1)}%</span>`;
+    const move = change === null ? "" : `<span class="move ${tone}">${change > 0 ? "+" : ""}${(change / 100).toFixed(1)}%</span><span class="move-basis">${esc2(moveBasis(series))}</span>`;
     const last = coords[n - 1];
-    const pts = series.points.map((p) => `${px(p.price)}|${agoOf(p.block, tape?.head ?? null)}|${p.sell ? "sell" : "buy"}`).join(";");
+    const pts = series.points.map((p, i) => `${px(p.price)}|${agoOf(p.block, tape?.head ?? null)}|${p.sell ? "sell" : "buy"}|${(coords[i][0] / W * 100).toFixed(2)}`).join(";");
     void move;
     return `<div class="chartbox" id="chart">
     ${head()}
@@ -10444,9 +10531,10 @@
       <span class="chart-xh" hidden></span>
       <div class="chart-tip" hidden></div>
     </div>
+    <div class="chart-axis" aria-hidden="true"><span>${esc2(agoOf(x0, tape?.head ?? null))} ago</span><span>now</span></div>
     <div class="chart-foot">
-      <span>${series.swaps} trade${series.swaps === 1 ? "" : "s"} \xB7 ${esc2(series.venue)}</span>
-      <span>hover or use the arrow keys to read a point</span>
+      <span>${plural(series.swaps, "trade")} \xB7 ${esc2(series.venue)}</span>
+      <span class="hint-hover">hover or use the arrow keys to read a point</span><span class="hint-touch">tap or drag along the line to read a point</span>
     </div>
   </div>`;
   }
@@ -11096,6 +11184,7 @@
     ${stage0 === "done" ? buyStrip(mode === "demo" ? "" : slip.chain.key, slip.subject, Boolean(slip.id.meta) && slip.open?.transferFunction !== false, verdictOf(slip.notes, "done", coverage).kind) : ""}
     ${stage0 === "done" ? "why" in picked ? tapeNone(picked.why) : `<section class="tape" id="tape"></section>` : ""}
   </div>`;
+    if (stage0 === "done") setPageTitle(`${meta?.symbol ?? shortAddress(slip.subject)} \xB7 ${verdictOf(slip.notes, "done", coverage).word} \xB7 BOUNCER`);
     shown = { slip, m, picked };
     if (stage0 === "done" && !("why" in picked)) startTape(slip, picked, m);
     const cardSvg = () => {
@@ -11178,14 +11267,17 @@
         const value = row.querySelector(".qv");
         const fig = row.querySelector(".qfig");
         const bar2 = document.getElementById("cd-bar");
+        const key = document.querySelector('.keyf-row[data-code="cover-open"] .keyf-t');
         if (bar2) bar2.style.width = `${Math.round(left / cc.terms.seconds * 100)}%`;
         if (left > 0) {
           if (value) value.textContent = `Yes, on a buy \u2014 the door tax is on for ${left} more second${left === 1 ? "" : "s"}`;
           if (fig) fig.textContent = `${left}s`;
+          if (key) key.textContent = (key.textContent ?? "").replace(/for \d+ s\b/, `for ${left} s`);
           return;
         }
         if (value) value.textContent = "The door tax ended while you were looking \u2014 check again to see who paid it";
         if (fig) fig.textContent = "ended";
+        if (key) key.textContent = "The door tax ended while you were looking \u2014 check again to see who paid it.";
         if (ticker) clearInterval(ticker);
         ticker = null;
       }, 1e3);
@@ -11325,8 +11417,8 @@
       <dt>protocol fee</dt><dd>${amt(r.fee)} \xB7 ${share(r.fee)}</dd>
       <dt>creator tax</dt><dd>${amt(r.creatorTaxPart)} \xB7 ${share(r.creatorTaxPart)}</dd>
       <dt>door tax</dt><dd>${amt(r.coverChargePart)} \xB7 ${share(r.coverChargePart)}<small class="gloss-line">the part of the tax above the creator's own rate</small></dd>
-      <dt>effective price</dt><dd><span class="mono">${esc2(formatPrice(r.effectivePrice, qd.decimals))}</span> ${esc2(qd.symbol)} per token, fees included</dd>
-      <dt>curve price after</dt><dd>${r.marginalPriceAfter === null ? "not served by this RPC for that block" : `<span class="mono">${esc2(formatPrice(r.marginalPriceAfter, qd.decimals))}</span> ${esc2(qd.symbol)} per token`}</dd>
+      <dt>effective price</dt><dd>${esc2(formatPriceMoney(r.effectivePrice, qd.decimals, qd.symbol, quoteUsdNow(qd.native)))} per token, fees included</dd>
+      <dt>curve price after</dt><dd>${r.marginalPriceAfter === null ? "not served by this RPC for that block" : `${esc2(formatPriceMoney(r.marginalPriceAfter, qd.decimals, qd.symbol, quoteUsdNow(qd.native)))} per token`}</dd>
     </dl></section>`;
   }
   function shortHash(hash) {
@@ -11336,7 +11428,7 @@
     const qd = plan.quote;
     const c = chain();
     const u = (v) => esc2(formatMoney(v, qd.decimals, qd.symbol, quoteUsdNow(qd.native)));
-    const price = (v) => `<span class="mono">${esc2(formatPrice(v, qd.decimals))}</span> ${esc2(qd.symbol)}`;
+    const price = (v) => esc2(formatPriceMoney(v, qd.decimals, qd.symbol, quoteUsdNow(qd.native)));
     const tokens = (v) => `<span class="mono">${esc2(formatCoin(v, 18))}</span>`;
     out.innerHTML = `<div class="slip">
     <div class="stamp-row"><div class="who"><div class="cap-l">Launch planner</div><div class="sym">Plan a launch</div><div class="name">${esc2(c.name)} \xB7 ${esc2(c.launchpad ?? "no launchpad")}${plan.configEnabled ? "" : " \xB7 this config is disabled"} \xB7 quote ${esc2(qd.symbol)} \xB7 block ${plan.block.toLocaleString("en-US")}</div>
@@ -11398,6 +11490,7 @@
     });
   }
   function home() {
+    setPageTitle(BASE_TITLE);
     stopTape();
     stopWatch();
     if (ticker) {
@@ -11425,6 +11518,8 @@
       if (chainParam && CHAINS[chainParam]) selectChain(chainParam);
     }
     ensureQuoteUsd();
+    const w = params.get("w");
+    if (w && FRAMES.includes(w)) frame = w;
     switch (parts[0]) {
       case "t":
       case "demo":
@@ -11542,12 +11637,14 @@
     out.addEventListener("pointermove", (event) => {
       const plot = event.target.closest(".chart-plot");
       if (!plot) return;
-      const box = plot.getBoundingClientRect();
-      const n = (plot.dataset.pts ?? "").split(";").filter(Boolean).length;
-      if (n < 2) return;
-      showPoint(plot, Math.round((event.clientX - box.left) / box.width * (n - 1)));
+      pointAt(plot, event.clientX);
+    });
+    out.addEventListener("pointerdown", (event) => {
+      const plot = event.target.closest(".chart-plot");
+      if (plot) pointAt(plot, event.clientX);
     });
     out.addEventListener("pointerout", (event) => {
+      if (event.pointerType === "touch") return;
       const plot = event.target.closest(".chart-plot");
       if (plot && !plot.contains(event.relatedTarget)) hidePoint(plot);
     });
