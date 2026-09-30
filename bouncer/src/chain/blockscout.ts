@@ -311,6 +311,22 @@ export class BlockscoutClient {
     return { holders, transfers, type: info.type ?? null, priceUsd: numberOrNull(info.exchange_rate ?? undefined), volume24hUsd: numberOrNull(info.volume_24h ?? undefined), marketCapUsd: numberOrNull(info.circulating_market_cap ?? undefined) };
   }
 
+  /**
+   * The explorer's dollar price for the chain's own coin, from /api/v2/stats.
+   *
+   * The one number on the page that is not read from the chain: the chain has
+   * no idea what an ether costs in dollars. It is used for exactly one thing —
+   * the dollar figure printed beside an amount of the coin — and the coin
+   * amount is always printed next to it, so the read number is never replaced
+   * by the converted one. Null when the explorer has no price, and then no
+   * dollar figure is printed at all.
+   */
+  async coinPriceUsd(): Promise<number | null> {
+    const stats = await this.get<{ coin_price?: string | number | null }>("/api/v2/stats");
+    const price = numberOrNull(stats.coin_price ?? undefined);
+    return price !== null && price > 0 ? price : null;
+  }
+
   /** What the explorer knows about an address: contract or not, verified, who created it. */
   async addressInfo(address: string): Promise<AddressInfo> {
     const body = await this.get<{ is_contract?: boolean; is_verified?: boolean; is_scam?: boolean; name?: string | null; creator_address_hash?: string | null; creation_transaction_hash?: string | null; creation_tx_hash?: string | null }>(`/api/v2/addresses/${address}`);

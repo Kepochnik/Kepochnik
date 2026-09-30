@@ -92,3 +92,78 @@ export function formatPrice(value: bigint, decimals: number): string {
   const count = String(zeros).split("").map((d) => SUBSCRIPT[Number(d)]).join("");
   return `0.0${count}${digits}`;
 }
+
+/** Three significant figures, trailing zeros dropped: 3.2, 12.4, 123. */
+function sig3(n: number): string {
+  const digits = n >= 100 ? 0 : n >= 10 ? 1 : 2;
+  return n.toFixed(digits).replace(/\.?0+$/, "");
+}
+
+/**
+ * A dollar total the way a trading screen writes it: $3.2M, $12.4K, $950,
+ * $9.52. Compact on purpose — a market cap is compared, not audited, and the
+ * exact figure in the quote coin sits beside it in parentheses.
+ */
+export function formatUsd(value: number): string {
+  if (!Number.isFinite(value)) return "";
+  const sign = value < 0 ? "-" : "";
+  const n = Math.abs(value);
+  if (n >= 1e9) return `${sign}$${sig3(n / 1e9)}B`;
+  if (n >= 1e6) return `${sign}$${sig3(n / 1e6)}M`;
+  if (n >= 1e3) return `${sign}$${sig3(n / 1e3)}K`;
+  if (n >= 1) return `${sign}$${n >= 100 ? n.toFixed(0) : n.toFixed(2)}`;
+  if (n === 0) return "$0";
+  return `${sign}$${n.toFixed(2) === "0.00" ? "<0.01" : n.toFixed(2)}`;
+}
+
+/**
+ * A per-token dollar price, with the same zero-collapsing as formatPrice:
+ * $0.0₅2134 is five zeros after the point. Four significant digits.
+ */
+export function formatUsdPrice(value: number): string {
+  if (!Number.isFinite(value) || value <= 0) return "$0";
+  if (value >= 1) return value >= 1_000 ? formatUsd(value) : `$${value.toFixed(value >= 100 ? 2 : 4).replace(/\.?0+$/, "")}`;
+  const zeros = Math.floor(-Math.log10(value));
+  // Four significant digits after the zeros, trailing zeros dropped.
+  const digits = String(Math.round(value * 10 ** (zeros + 4))).slice(0, 4).replace(/0+$/, "") || "0";
+  if (zeros < 4) return `$0.${"0".repeat(zeros)}${digits}`;
+  const count = String(zeros).split("").map((d) => SUBSCRIPT[Number(d)]).join("");
+  return `$0.0${count}${digits}`;
+}
+
+/**
+ * An amount of the quote coin, short: 20, 3.1, 0.8, 0.0042, 1.2K. For the
+ * parentheses after a dollar figure and for the tape's columns — never the
+ * eighteen-decimal tail of a raw balance.
+ */
+export function formatCoin(value: bigint, decimals: number): string {
+  const n = Number(value) / 10 ** decimals;
+  if (!Number.isFinite(n)) return formatUnits(value, decimals, 2);
+  const abs = Math.abs(n);
+  if (abs >= 1e6) return `${sig3(n / 1e6)}M`;
+  if (abs >= 1e4) return `${sig3(n / 1e3)}K`;
+  if (abs >= 100) return Math.round(n).toLocaleString("en-US");
+  if (abs >= 1) return n.toFixed(2).replace(/\.?0+$/, "");
+  if (abs === 0) return "0";
+  // Below one coin: four significant digits, so 0.0042 does not become 0.
+  const zeros = Math.floor(-Math.log10(abs));
+  return n.toFixed(Math.min(decimals, zeros + 3)).replace(/0+$/, "").replace(/\.$/, "");
+}
+
+/** Dollar value of an amount of the quote coin, or null without a price. */
+export function usdOf(amount: bigint, decimals: number, usdPerCoin: number | null): number | null {
+  if (usdPerCoin === null || !Number.isFinite(usdPerCoin) || usdPerCoin <= 0) return null;
+  return (Number(amount) / 10 ** decimals) * usdPerCoin;
+}
+
+/**
+ * "$3.2M (20 ETH)" — the dollar figure first, because that is the unit people
+ * compare in, and the coin amount it came from in parentheses, because that
+ * is the unit the chain actually holds. Coin only when there is no dollar
+ * price: a dollar figure is printed from a read price or not at all.
+ */
+export function formatMoney(amount: bigint, decimals: number, symbol: string, usdPerCoin: number | null): string {
+  const usd = usdOf(amount, decimals, usdPerCoin);
+  const coin = `${formatCoin(amount, decimals)} ${symbol}`;
+  return usd === null ? coin : `${formatUsd(usd)} (${coin})`;
+}

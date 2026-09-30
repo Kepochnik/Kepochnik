@@ -540,6 +540,8 @@ export function demoBlockscoutFetch(): typeof fetch {
         : [];
       return json({ items, next_page_params: null });
     }
+    // Invented, like everything else on the demo chain.
+    if (url.pathname === "/api/v2/stats") return json({ coin_price: "2480.37" });
     if (url.pathname === "/api/v2/search") {
       const q = (url.searchParams.get("q") ?? "").toUpperCase();
       const items = tokens.filter((t) => t.symbol.toUpperCase() === q).map((t) => ({ type: "token", address: t.token, name: t.name, symbol: t.symbol }));
