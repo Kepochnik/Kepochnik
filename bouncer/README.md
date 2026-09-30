@@ -121,7 +121,11 @@ Nine read-only tools, every one annotated `readOnlyHint`: `bouncer_check` (the s
 
 The same read path runs in the browser, bundled into one HTML file (`npm run site` → `site/dist/index.html`).
 
-**The page is a doorway.** The bouncer stands on the left with the stamp this reading put on the token, what it costs, how deep the pool is and how old it is; the guest list is on the right.
+**The front page is a board.** A column of the launches that just happened runs down the left and refreshes itself every fifteen seconds — newest first, with filters for fresh, graduated and serial deployers. Click one and its check opens beside the column, which stays put while you click through token after token. The column walks back from the head of the chain and stops at thirty rows, so it keeps up; the blocks it did not reach are named under it, because "the newest thirty" and "every launch today" are different claims. On a chain with no launchpad it says so instead of showing an empty list, and the Launches button turns it off (remembered).
+
+**Under the check, the tape.** Every buy and every sell on the token, arriving at the top, with a bought-against-sold bar over it. On a token still on its curve the rows come from `CurveBuy` and `CurveSell`, which name the trader; on a graduated launch from its Uniswap V4 pool's `Swap` under the pool's id; on anything else from its pool's own `Swap` log. The address column is headed **trader**, **via** or **to** accordingly, because only a curve names the person — a pool names where the tokens went, and a V4 swap names only the router that called it. The price line on the left is drawn from the same trades, so it grows with the tape and cannot disagree with it, and one window toggle — 5m, 1h, 6h, 24h — governs both. A read that did not come back says "could not read", never "nothing traded".
+
+**The check is a doorway.** The bouncer stands on the left with the stamp this reading put on the token, what it costs, how deep the pool is and how old it is; the guest list is on the right.
 
 **The list is five questions.** Paste an address and you get the word — STOP, WATCH, CLEAR or INCOMPLETE — then the token's whole shape as five figures, then one row per question answering it in words anybody can act on:
 
@@ -137,9 +141,9 @@ The figure is for the scan; the sentence is the answer. The first version of thi
 
 Tap a row and its evidence opens under it — the findings, the tables, the simulations, the pool reserves. Nothing is said in two places, and nothing that can cost you money is more than one tap away. A sixth row appears when something did not answer, greyed and always last, because a gap folded in among findings reads as a clean result. The answers are computed in `src/bouncer/answers.ts`, in the core, so the terminal and an agent can state the same ones.
 
-Watch the cover charge count down, leave the tab watching for the dev to move. Demo mode needs no network; live mode reads the chain you pick from your browser through an RPC you choose. Tabs for the door, a deployer, a wallet, a receipt, the planner and the board. Every view has a link: `#/t/0x…` (add `?watch=1` to start watching), `#/dev/0x…`, `#/wallet/0xT/0xW`, `#/tx/0x…`, `#/plan?tax=300`, `#/board?hours=1`, with `?chain=arc-testnet` for Arc.
+Watch the cover charge count down, leave the tab watching for the dev to move — the tape runs by itself, and the watch adds notifications for the dev, the crew and the tax recipient. Demo mode needs no network; live mode reads the chain you pick from your browser through an RPC you choose. Tabs for the door, a deployer, a wallet, a receipt, the planner and the board. Every view has a link: `#/t/0x…` (add `?watch=1` to start watching), `#/dev/0x…`, `#/wallet/0xT/0xW`, `#/tx/0x…`, `#/plan?tax=300`, `#/board?hours=1`, with `?chain=arc-testnet` for Arc.
 
-<p align="center"><img src="assets/readme/site.png" width="100%" alt="the BOUNCER site: search at the door, the FRESH slip with stamp, door notes, ID check, cover charge countdown, house rules and dev report card" /></p>
+<p align="center"><img src="assets/readme/site.png" width="100%" alt="the BOUNCER board: the column of new launches on the left, the LATE launch open beside it with its CLEAR stamp, a price line drawn from its own trades, price, market cap and liquidity read off the curve, the five questions, and the live tape of buys and sells underneath" /></p>
 
 Deploys to GitHub Pages from `main` with `.github/workflows/pages.yml`.
 
@@ -243,7 +247,9 @@ src/bouncer/watchPlan.ts    which tape a token gets, and what that tape is blind
 src/bouncer/pageSubject.ts  which token a web page is about, and on which chain (shared by the extension's badge and popup)
 src/bouncer/verdict.ts      the one word (STOP / WATCH / CLEAR / INCOMPLETE), shared by every surface
 src/bouncer/marketFacts.ts  price, market cap, liquidity, supply, holders, age — the figures a buyer looks for first
-src/chain/priceSeries.ts    the price line, read from the pool's own Swap log rather than an index
+src/chain/priceSeries.ts    the price line, read from the pool's own Swap log rather than an index (V2, V3 and V4, each with its own sign rule)
+src/bouncer/trades.ts       the tape: every buy and sell, off the curve or the pool, newest first
+src/bouncer/feed.ts         the column of new launches, walked backwards from the head
 site/fonts.css              both typefaces, base64, so the one-file site has type with no network
 src/bouncer/leaderboard.ts  the board
 src/mcp/server.ts           the read-only MCP server (stdio, no dependencies)
@@ -264,7 +270,7 @@ docs/                       RULES, LIMITATIONS, LAUNCH-KIT
 ## Tests
 
 ```bash
-npm run check     # read-only check + build + 90 tests + site bundle, no network
+npm run check     # read-only check + 339 tests + site bundle, then the site measured and walked in a real browser — no network
 ```
 
 ## License

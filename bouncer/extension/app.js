@@ -8478,9 +8478,9 @@
   function setMode(next, silent = false) {
     mode = next;
     chainSelect.disabled = false;
-    sourcePill.textContent = SANDBOXED ? "No network" : "Live";
-    sourcePill.classList.toggle("live", !SANDBOXED);
-    sourceText.innerHTML = SANDBOXED ? `This preview on claude.ai cannot reach the internet, so nothing here can be read. Use the <a href="${HOSTED}">hosted site</a>, the Chrome extension or the CLI.` : chainOrNull() ? `Reading ${esc2(chainOrNull().name)} from your browser${chainOrNull().family === "solana" ? ", slot by slot" : " at one block"}. Nothing is cached.` : "Paste an address and BOUNCER finds the chain it lives on. Read from your browser at one block, nothing cached.";
+    sourcePill.textContent = mode === "demo" ? "Demo" : SANDBOXED ? "No network" : "Live";
+    sourcePill.classList.toggle("live", mode !== "demo" && !SANDBOXED);
+    sourceText.innerHTML = mode === "demo" ? "An invented example chain: every address, trade and number on this page is made up, so nothing here is about a real token." : SANDBOXED ? `This preview on claude.ai cannot reach the internet, so nothing here can be read. Use the <a href="${HOSTED}">hosted site</a>, the Chrome extension or the CLI.` : chainOrNull() ? `Reading ${esc2(chainOrNull().name)} from your browser${chainOrNull().family === "solana" ? ", slot by slot" : " at one block"}. Nothing is cached.` : "Paste an address and BOUNCER finds the chain it lives on. Read from your browser at one block, nothing cached.";
     renderChips();
     if (!silent) storage("bouncer.mode", next);
     refreshFeed();

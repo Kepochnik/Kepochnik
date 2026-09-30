@@ -145,9 +145,15 @@ function setMode(next: Mode, silent = false): void {
   // chosen yet it says that instead of naming one. In the claude.ai
   // preview the sandbox blocks every request, so it says so rather than
   // letting somebody paste an address into a box that cannot answer.
-  sourcePill.textContent = SANDBOXED ? "No network" : "Live";
-  sourcePill.classList.toggle("live", !SANDBOXED);
-  sourceText.innerHTML = SANDBOXED
+  // A demo route is labelled as one. It used to say LIVE and "Reading
+  // Robinhood Chain from your browser" above a slip of invented addresses —
+  // the one strip on the page whose whole job is saying where the numbers
+  // came from, getting it wrong.
+  sourcePill.textContent = mode === "demo" ? "Demo" : SANDBOXED ? "No network" : "Live";
+  sourcePill.classList.toggle("live", mode !== "demo" && !SANDBOXED);
+  sourceText.innerHTML = mode === "demo"
+    ? "An invented example chain: every address, trade and number on this page is made up, so nothing here is about a real token."
+    : SANDBOXED
     ? `This preview on claude.ai cannot reach the internet, so nothing here can be read. Use the <a href="${HOSTED}">hosted site</a>, the Chrome extension or the CLI.`
     : chainOrNull()
       ? `Reading ${esc(chainOrNull()!.name)} from your browser${chainOrNull()!.family === "solana" ? ", slot by slot" : " at one block"}. Nothing is cached.`
