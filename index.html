@@ -85,6 +85,7 @@
 }
 
 *{box-sizing:border-box}
+@media (prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important}}
 html{-webkit-text-size-adjust:100%}
 body{
   margin:0;
@@ -198,6 +199,12 @@ button.ext[aria-pressed="true"]{color:var(--brand-2);border-color:var(--brand);b
 
 /* Once an answer is on the page the invitation is furniture: it shrinks to
    a line so a second check starts where the answer is. */
+body.board .hbar{max-width:1380px}
+body.board .hero{display:none}
+body.board .door{padding-top:18px}
+body.board .door input,body.board .btn{min-height:42px}
+body.board .slip{margin-top:16px}
+body.board .deck{margin-top:14px}
 .answered .hero{padding:22px 0 14px}
 .answered .hero h1{font-size:22px}
 .answered .hero p{display:none}
@@ -219,7 +226,8 @@ button.ext[aria-pressed="true"]{color:var(--brand-2);border-color:var(--brand);b
    and a class on screen with no rule is indistinguishable from one that lost
    its rule, so it says here that it is a hook and not a style. */
 .head{}
-.doorway{display:grid;grid-template-columns:332px minmax(0,1fr);background:var(--surface);
+.doorway{display:grid;grid-template-columns:340px minmax(0,1fr);grid-template-rows:auto auto 1fr;
+  grid-template-areas:"bar bar" "door chart" "door list";background:var(--surface);
   border:1px solid var(--line);border-radius:var(--r-lg) var(--r-lg) 0 0;overflow:hidden;
   box-shadow:0 1px 2px rgba(0,0,0,.5),0 24px 48px -28px rgba(0,0,0,.8),var(--lip)}
 /* One tone per verdict, set on the doorway and read by the stamp, the wash
@@ -232,44 +240,88 @@ button.ext[aria-pressed="true"]{color:var(--brand-2);border-color:var(--brand);b
 .doorway.v-watch{--tone:var(--warn);--tone-wash:rgba(240,180,41,.1)}
 .doorway.v-clear{--tone:var(--ok);--tone-wash:rgba(61,214,140,.1)}
 
+/* The token bar: what it is, what it costs now, and the one window control.
+   The first line anybody reads, so it carries the verdict's tone as a wash. */
+.tokbar{grid-area:bar;display:flex;align-items:center;flex-wrap:wrap;gap:14px 28px;padding:18px 24px;
+  border-bottom:1px solid var(--line);background:linear-gradient(180deg,var(--tone-wash),transparent 160%)}
+.tokline{display:flex;align-items:baseline;flex-wrap:wrap;gap:4px 12px}
+.tokprice{margin-left:auto;text-align:right;min-width:0}
+/* The hero figure: sans, proportional digits, exactly one per view. */
+.tp-v{font:650 30px/1.1 var(--sans);letter-spacing:-.025em;color:var(--text);white-space:nowrap}
+.tp-v small{margin-left:7px;font:500 13px var(--sans);letter-spacing:0;color:var(--dim)}
+.tp-s{display:flex;justify-content:flex-end;align-items:baseline;gap:10px;margin-top:5px;font-size:12px;color:var(--dimmer)}
+.tp-s .move{font:600 12.5px var(--mono)}
+.tokbar .frames{align-self:center}
+
 /* the bouncer's side */
-.doorman{border-right:1px solid var(--line);background:var(--surface-2);display:flex;flex-direction:column;min-width:0;
+.doorman{grid-area:door;border-right:1px solid var(--line);background:var(--surface-2);display:flex;flex-direction:column;min-width:0;
   box-shadow:inset -1px 0 0 rgba(255,255,255,.02)}
-.stand{padding:24px 22px 20px;text-align:center;border-bottom:1px solid var(--line);position:relative}
+.stand{display:flex;align-items:center;gap:16px;padding:20px 22px;text-align:left;border-bottom:1px solid var(--line);position:relative}
 .stand::before{content:"";position:absolute;inset:0;pointer-events:none;
   background:radial-gradient(360px 200px at 50% -40px, var(--tone-wash), transparent 72%)}
-.mascot{width:104px;height:104px;image-rendering:pixelated;position:relative}
+.mascot{width:64px;height:64px;flex:none;image-rendering:pixelated;position:relative}
 /* The stamp: a verdict looks like a decision when it is stamped on something.
    The tilt is small on purpose — a novelty angle would undercut the one word
    on the page that has to be taken seriously. */
 .verdict{position:relative}
-.vword{display:inline-block;margin-top:16px;padding:9px 18px;border:2.5px solid var(--tone);border-radius:9px;
-  color:var(--tone);font:800 21px var(--sans);letter-spacing:.07em;transform:rotate(-2.2deg);
+.vword{display:inline-block;padding:7px 15px;border:2.5px solid var(--tone);border-radius:9px;
+  color:var(--tone);font:800 20px var(--sans);letter-spacing:.07em;transform:rotate(-2.2deg);
   box-shadow:0 0 0 4px var(--tone-wash)}
-.lead{position:relative;margin-top:15px;color:var(--muted);font-size:13px;line-height:1.55;text-align:left}
+.lead{position:relative;margin-top:11px;color:var(--muted);font-size:13px;line-height:1.55;text-align:left}
 .lead .vpend{display:block;margin-top:6px;color:var(--dim);font-size:12px}
 
-.who2{padding:15px 22px;border-bottom:1px solid var(--line)}
+.who2{min-width:0;flex:1 1 300px}
 .cap-l{font:600 10px var(--sans);letter-spacing:.1em;color:var(--dimmer);text-transform:uppercase}
-.sym{font-size:21px;font-weight:700;letter-spacing:-.03em;margin-top:6px;line-height:1.15}
-.name{color:var(--dim);font-size:12.5px}
-.vaddr{display:block;width:100%;text-align:left;margin-top:8px;padding:0;background:none;border:0;
-  font-family:var(--mono);font-size:11px;color:var(--dimmer);word-break:break-all;cursor:pointer}
+.sym{font-size:26px;font-weight:700;letter-spacing:-.03em;line-height:1.15}
+.name{color:var(--dim);font-size:14px}
+.vaddr{display:block;max-width:100%;text-align:left;margin-top:7px;padding:0;background:none;border:0;
+  font-family:var(--mono);font-size:11.5px;color:var(--dimmer);word-break:break-all;cursor:copy}
 .vaddr:hover{color:var(--muted)}
-.stamp{display:inline-flex;align-items:center;margin-top:10px;min-height:23px;padding:0 10px;border-radius:999px;
+.stamp{display:inline-flex;align-items:center;align-self:center;min-height:23px;padding:0 10px;border-radius:999px;
   font:600 10px var(--sans);letter-spacing:.08em;text-transform:uppercase;border:1px solid var(--line-2);color:var(--dim)}
 .stamp.flat{/* deliberately the default: not a launch is a fact, not a warning */}
 .stamp.yes{background:var(--ok-bg);color:var(--ok);border-color:var(--ok-edge)}
 .stamp.no{background:var(--stop-bg);color:var(--stop);border-color:var(--stop-edge)}
 
-/* the price, from the pool's own swaps */
-.chartbox{padding:15px 22px;border-bottom:1px solid var(--line)}
-.chart-head{display:flex;align-items:baseline;gap:10px}
-.chart-head .move{margin-left:auto;font-family:var(--mono);font-size:12px}
+/* The price line: the widest thing on the token, because on a trading
+   screen it is the thing the eye goes to. 2px line, a 20% wash under it,
+   hairline grid, the latest point pulsing, a crosshair that finds the X. */
+.doorway>.chartbox{grid-area:chart;min-width:0;padding:18px 24px 16px;border-bottom:1px solid var(--line)}
+.chart-head{display:flex;align-items:center;gap:10px}
+.chart-win{color:var(--dimmer);font-size:12px}
+.chart-head .move{margin-left:auto;font-family:var(--mono);font-size:12.5px;font-weight:600}
 .move.up{color:var(--ok)} .move.down{color:var(--stop)} .move.flat{color:var(--dim)}
-.chart{width:100%;height:76px;display:block;margin-top:10px}
-.chart-foot{display:flex;justify-content:space-between;gap:10px;margin-top:6px;font-family:var(--mono);font-size:10.5px;color:var(--dimmer)}
-.chart-no{margin-top:10px;color:var(--dim);font-size:12px;line-height:1.5}
+/* The price scale sits outside the plot, on the right, so the latest point
+   and its labels never land on each other. */
+.chart-plot{position:relative;height:250px;margin:14px 72px 0 0;color:var(--dim);cursor:crosshair;border-radius:6px;touch-action:pan-y}
+.chart-plot.t-up{color:var(--ok)} .chart-plot.t-down{color:var(--stop)}
+.chart-plot svg{position:absolute;inset:0;width:100%;height:100%;overflow:visible}
+.chart-plot .grid{stroke:rgba(255,255,255,.06);stroke-width:1;vector-effect:non-scaling-stroke}
+.chart-hi,.chart-lo{position:absolute;left:calc(100% + 12px);font:500 10.5px var(--mono);color:var(--dimmer);
+  white-space:nowrap;pointer-events:none;transform:translateY(-50%)}
+.chart-hi{top:6.92%} .chart-lo{top:93.08%}
+.chart-dot{position:absolute;right:-5px;width:10px;height:10px;margin-top:-5px;border-radius:50%;background:currentColor;
+  box-shadow:0 0 0 2px var(--surface);pointer-events:none}
+.chart-dot::after{content:"";position:absolute;inset:-6px;border-radius:50%;background:currentColor;opacity:.25;animation:beat 2s ease-out infinite}
+@keyframes beat{0%{transform:scale(.4);opacity:.45}100%{transform:scale(1.6);opacity:0}}
+.chart-xh{position:absolute;top:0;bottom:0;width:1px;margin-left:-.5px;background:rgba(255,255,255,.28);pointer-events:none}
+.chart-tip{position:absolute;top:6px;display:grid;gap:2px;padding:7px 10px;transform:translateX(12px);
+  background:var(--surface-3);border:1px solid var(--line-2);border-radius:8px;box-shadow:var(--shadow);
+  pointer-events:none;white-space:nowrap;font-size:11.5px;color:var(--dim)}
+.chart-tip.flip{transform:translateX(calc(-100% - 12px))}
+.chart-tip b{font:600 13.5px var(--mono);color:var(--text)}
+.chart-tip .t-buy{color:var(--ok)} .chart-tip .t-sell{color:var(--stop)}
+.chart-xh[hidden],.chart-tip[hidden]{display:none}
+.chart-foot{display:flex;justify-content:space-between;gap:10px;margin-top:10px;font-size:11px;color:var(--dimmer)}
+/* Empty is shorter than reading: a line that is on its way holds the space
+   it will fill, a line that does not exist does not take 250px to say so. */
+.chart-empty{display:grid;place-items:center;height:140px;margin-top:14px;padding:20px;border:1px dashed var(--line-2);
+  border-radius:10px;color:var(--dim);font-size:13px;line-height:1.55;text-align:center}
+.chart-empty.busy{height:250px;background:linear-gradient(100deg,transparent 30%,rgba(255,255,255,.035) 50%,transparent 70%) 0 0/250% 100%;
+  animation:shimmer 1.6s linear infinite}
+@keyframes shimmer{to{background-position:-250% 0}}
+/* A window being re-read keeps its old picture, dimmed: no flash, no jump. */
+.stale{opacity:.42;transition:opacity .2s ease;pointer-events:none}
 
 /* the figures */
 .facts{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px 10px;padding:15px 22px}
@@ -286,7 +338,7 @@ button.ext[aria-pressed="true"]{color:var(--brand-2);border-color:var(--brand);b
 .venue+.venue{border-top:1px solid var(--line)}
 
 /* ---------------------------------------------------------------- the list */
-.list{display:flex;flex-direction:column;min-width:0}
+.list{grid-area:list;display:flex;flex-direction:column;min-width:0}
 .list-head{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;padding:14px 22px 12px;border-bottom:1px solid var(--line)}
 .list-head h2{font:600 10px var(--sans);letter-spacing:.1em;color:var(--dim);text-transform:uppercase;white-space:nowrap}
 .list-head span{color:var(--dimmer);font-size:11.5px}
@@ -484,6 +536,10 @@ table.buys tr:first-child td{border-top:0}
 .fr-age{font:500 11px var(--mono);color:var(--dimmer);white-space:nowrap;justify-self:end}
 .fr-name{font-size:11.5px;color:var(--dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .fr-tags{display:flex;gap:4px;justify-self:end}
+.fr-fill{grid-column:1;align-self:center;height:4px;margin-top:5px;border-radius:999px;background:var(--surface-3);overflow:hidden}
+.fr-fill i{display:block;height:100%;border-radius:999px;background:linear-gradient(90deg,#a8832f,var(--brand));transition:width .6s ease}
+.fr-fill.near i{background:linear-gradient(90deg,#1f9e62,var(--ok))}
+.fr-pct{grid-column:2;justify-self:end;margin-top:5px;font:500 10.5px var(--mono);color:var(--dimmer)}
 .ftag{font:600 9px var(--sans);letter-spacing:.06em;text-transform:uppercase;padding:2px 5px;border-radius:4px;
   border:1px solid var(--line-2);color:var(--dim);white-space:nowrap}
 .ftag.grad{color:var(--ok);border-color:var(--ok-edge);background:var(--ok-bg)}
@@ -492,12 +548,25 @@ table.buys tr:first-child td{border-top:0}
 .feed-when{font:500 11px var(--mono);color:var(--dimmer);white-space:nowrap}
 .feed-empty{padding:22px 14px;color:var(--dim);font-size:12.5px;line-height:1.55}
 .feed-empty b{display:block;color:var(--muted);font-weight:550;margin-bottom:4px}
+.feed-demo{display:inline-flex;align-items:center;min-height:24px;margin-top:10px;font-size:12.5px}
 .feed-note{padding:9px 14px;border-top:1px solid var(--line);background:var(--surface-2);
   color:var(--dimmer);font-size:11px;line-height:1.5}
 /* The right pane before anything is picked. */
-.pickone{border:1px dashed var(--line-2);border-radius:var(--r-lg);padding:44px 26px;text-align:center;color:var(--dim)}
-.pickone b{display:block;color:var(--text);font:550 17px var(--sans);margin-bottom:6px}
-.pickone p{margin:0 auto;max-width:40ch;font-size:13.5px;line-height:1.6}
+.pickone{position:relative;overflow:hidden;padding:40px 28px 34px;text-align:center;color:var(--dim);
+  background:var(--surface);border:1px solid var(--line);border-radius:var(--r-lg);box-shadow:var(--shadow),var(--lip)}
+.pickone::before{content:"";position:absolute;inset:0;pointer-events:none;
+  background:radial-gradient(520px 220px at 50% -60px,rgba(232,184,75,.09),transparent 70%)}
+.pick-mascot{position:relative;width:72px;height:72px;image-rendering:pixelated}
+.pickone b{position:relative;display:block;margin-top:14px;color:var(--text);font:650 20px var(--sans);letter-spacing:-.02em}
+.pickone p{position:relative;margin:8px auto 0;max-width:46ch;font-size:13.5px;line-height:1.6}
+.pick-words{position:relative;display:grid;gap:8px;max-width:440px;margin:24px auto 0;padding:0;list-style:none;text-align:left}
+.pick-words li{display:grid;grid-template-columns:96px 1fr;gap:12px;align-items:center;font-size:12.5px;color:var(--muted)}
+.vmini{justify-self:start;padding:3px 8px;border:1.5px solid currentColor;border-radius:6px;font:800 11px var(--sans);letter-spacing:.07em}
+.vmini.stop{color:var(--stop)} .vmini.watch{color:var(--warn)} .vmini.clear{color:var(--ok)} .vmini.unknown{color:var(--dim)}
+.pickone .pick-keys{margin-top:24px;font-size:12px;color:var(--dimmer)}
+kbd{display:inline-flex;align-items:center;justify-content:center;min-width:20px;height:20px;padding:0 5px;margin:0 2px;
+  border:1px solid var(--line-2);border-bottom-width:2px;border-radius:5px;background:var(--surface-2);
+  font:500 11px var(--mono);color:var(--muted)}
 /* Under the two-pane width the rail stops being a rail: it goes to the top of
    the page with a bounded height, because a 320px column beside a slip that
    needs 600 is two things both too narrow to read. */
@@ -575,6 +644,11 @@ table.trades tr.fresh{animation:land .8s ease-out}
 @keyframes land{from{background:rgba(232,184,75,.11)}to{background:transparent}}
 .t-side{font:600 10px var(--sans);letter-spacing:.07em;text-transform:uppercase}
 .t-buy .t-side{color:var(--ok)} .t-sell .t-side{color:var(--stop)}
+/* The side as a 2px edge on the row too, so a run of sells reads as a red
+   stripe down the tape before a single word of it is read. */
+table.trades tr.t-buy td:first-child{box-shadow:inset 2px 0 0 var(--ok-edge)}
+table.trades tr.t-sell td:first-child{box-shadow:inset 2px 0 0 var(--stop)}
+table.trades tbody tr:hover td{background:rgba(255,255,255,.025)}
 .t-num{font-family:var(--mono);color:var(--text)}
 .t-w{font-family:var(--mono);font-size:11.5px;color:var(--dim)}
 .t-w.flagged{color:var(--warn)}
@@ -658,8 +732,15 @@ table.trades tr.fresh{animation:land .8s ease-out}
 
 /* the history list */
 .seen{margin-top:20px}
-.seen-head{display:flex;align-items:center;gap:10px;font:600 10.5px var(--sans);letter-spacing:.1em;text-transform:uppercase;color:var(--dimmer)}
-.seen-head .link{margin-left:auto;font-size:11px;letter-spacing:0;text-transform:none;font-weight:400}
+.seen-head{display:flex;align-items:center;gap:10px;min-height:32px;cursor:pointer;list-style:none;
+  font:600 10.5px var(--sans);letter-spacing:.1em;text-transform:uppercase;color:var(--dimmer)}
+.seen-head::-webkit-details-marker{display:none}
+.seen-head:hover{color:var(--muted)}
+.seen-n{display:inline-flex;align-items:center;justify-content:center;min-width:18px;height:18px;padding:0 5px;border-radius:999px;
+  background:var(--surface-3);color:var(--dim);font-size:10.5px;letter-spacing:0}
+.seen[open] .seen-head .chev{transform:rotate(45deg)}
+.seen-head .chev{margin-left:2px}
+body.board .seen{margin-top:12px}
 .seen-list{list-style:none;margin:10px 0 0;padding:0;display:grid;gap:6px}
 .seen-row a{display:grid;grid-template-columns:16px auto 1fr auto;gap:11px;align-items:center;padding:10px 13px;
   background:var(--surface);border:1px solid var(--line);border-radius:var(--r);color:var(--muted);font-size:13px}
@@ -767,19 +848,33 @@ table.buys tr.exempt td:first-child{box-shadow:inset 2px 0 0 var(--line-3)}
   .hero{padding:36px 0 22px}
   .hero h1{font-size:30px}
   .hero p{font-size:15px}
-  .door form{flex-wrap:wrap}
-  .door input{flex:1 1 100%}
-  .btn{flex:1 1 100%}
+  /* The box and its button share a line: stacked, they spent a second 44px
+     row above the answer on the one screen where every row counts. */
+  .door form{flex-wrap:nowrap}
+  .door input{flex:1 1 auto}
+  .btn{flex:none;padding:0 16px}
+  body.board .door input,body.board .btn{min-height:44px}
   .head-top,.verdict,.vfoot,.q>summary,.qbody,.sec>summary,.sec>.body,.more-head{padding-left:16px;padding-right:16px}
   /* One column, and the bouncer stands BESIDE his stamp rather than above
      it: stacked, the mascot pushed the verdict 738px down a 844px screen. */
-  .doorway{grid-template-columns:1fr}
+  .doorway{grid-template-columns:1fr;grid-template-areas:"bar" "door" "chart" "list"}
+  /* The token bar folds to two rows — who, then price beside the window —
+     so the verdict under it starts on the first screen. */
+  .tokbar{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:end;padding:12px 16px;gap:6px 12px}
+  .who2{grid-column:1/-1}
+  .tokprice{margin-left:0;text-align:left}
+  .tp-s{justify-content:flex-start;margin-top:3px}
+  .tp-v{font-size:24px}
+  .tokbar .frames{align-self:end}
+  .chart-plot,.chart-empty.busy{height:190px}
+  .chart-plot{margin-right:64px}
+  .doorway>.chartbox{padding-left:16px;padding-right:16px}
   .doorman{border-right:0;border-bottom:1px solid var(--line)}
   .stand{display:flex;align-items:center;gap:16px;text-align:left;padding:16px}
   .mascot{width:56px;height:56px;flex:none}
   .vword{margin-top:0;font-size:19px;padding:6px 13px}
   .lead{margin-top:8px;font-size:12.5px}
-  .who2,.chartbox,.facts,.venues{padding-left:16px;padding-right:16px}
+  .facts,.venues{padding-left:16px;padding-right:16px}
   .tape-head,.flow,.tape-note,.tape-empty{padding-left:16px;padding-right:16px}
   table.trades th,table.trades td{padding-left:16px;padding-right:16px}
   /* Six columns do not fit a phone. The two that go are the ones the other
@@ -790,7 +885,6 @@ table.buys tr.exempt td:first-child{box-shadow:inset 2px 0 0 var(--line-3)}
   .qbody{padding-left:16px;padding-right:16px}
   .vfoot{padding-left:16px;padding-right:16px}
   .sym{font-size:22px}
-  .vword{font-size:28px}
   /* The answer moves under the question: at this width they were fighting
      for the same line and the answer, which is the point, was losing.
      Explicit order, because wrapping alone pushed the chevron onto a third
@@ -811,7 +905,7 @@ table.buys tr.exempt td:first-child{box-shadow:inset 2px 0 0 var(--line-3)}
      The desktop sizes stay as they are — a finger is not the pointer there. */
   .ghost,.btn,.chip,.picker-btn,.ext,.vaddr,.door input,.calc input,.row input,.settings input{min-height:44px}
   .chip{padding:0 14px}
-  .vaddr{display:inline-flex;align-items:center}
+  .vaddr{display:block;width:100%;margin-top:0;line-height:44px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .link{min-height:44px;display:inline-flex;align-items:center}
   .morelinks a{min-height:24px;display:inline-flex;align-items:center}
   footer a{display:inline-flex;min-height:24px;align-items:center}
@@ -4437,6 +4531,18 @@ table.buys tr.exempt td:first-child{box-shadow:inset 2px 0 0 var(--line-3)}
   }
   function groupThousands(digits) {
     return digits.replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+  }
+  var SUBSCRIPT = "\u2080\u2081\u2082\u2083\u2084\u2085\u2086\u2087\u2088\u2089";
+  function formatPrice(value, decimals) {
+    if (value <= 0n) return "0";
+    const base = 10n ** BigInt(decimals);
+    if (value >= base) return formatUnits(value, decimals, value >= 1000n * base ? 2 : 4);
+    const fraction = value.toString().padStart(decimals, "0");
+    const zeros = fraction.match(/^0*/)[0].length;
+    const digits = fraction.slice(zeros, zeros + 4).replace(/0+$/, "") || "0";
+    if (zeros < 4) return `0.${"0".repeat(zeros)}${digits}`;
+    const count = String(zeros).split("").map((d) => SUBSCRIPT[Number(d)]).join("");
+    return `0.0${count}${digits}`;
   }
 
   // src/bouncer/door.ts
@@ -8733,7 +8839,8 @@ table.buys tr.exempt td:first-child{box-shadow:inset 2px 0 0 var(--line-3)}
             graduationThreshold: log.args.graduationThreshold,
             deployerLaunches: 1,
             graduated: false,
-            swept: false
+            swept: false,
+            fill: null
           });
         } else if (log.name === "PoolGraduated") {
           graduated.add(token);
@@ -8751,9 +8858,28 @@ table.buys tr.exempt td:first-child{box-shadow:inset 2px 0 0 var(--line-3)}
       row.deployerLaunches = byDeployer.get(row.deployer) ?? 1;
     }
     await stampTimes(rpc, rows, head.timestamp);
+    if (!options.skipFill) await stampFill(rpc, rows, head.block);
     const namesUnread = options.skipNames ? rows.map((r) => r.token) : await stampNames(rpc, rows, head.block);
     const unread = readFrom > options.fromBlock ? { fromBlock: options.fromBlock, toBlock: readFrom - 1 } : null;
-    return { rows, window: { fromBlock: readFrom, toBlock: options.toBlock }, unread, head, chunks, namesUnread };
+    return { rows, window: { fromBlock: readFrom, toBlock: options.toBlock }, unread, head, chunks, namesUnread, graduated: [...graduated], swept: [...swept] };
+  }
+  async function stampFill(rpc, rows, blockNumber) {
+    const live = rows.filter((r) => !r.graduated && !r.swept && r.graduationThreshold > 0n);
+    for (const r of rows) if (r.graduated || r.swept) r.fill = null;
+    if (!live.length) return;
+    const answers = await rpc.callBatchSettled(
+      live.map((r) => ({ to: r.curve, data: encodeCall(CURVE_FUNCTIONS.realQuoteReserve, []) })),
+      blockNumber
+    );
+    live.forEach((row, i) => {
+      const answer = answers[i];
+      if (answer === void 0 || answer instanceof RpcError) return;
+      try {
+        const [real] = decodeOutputs(CURVE_FUNCTIONS.realQuoteReserve, answer);
+        row.fill = { real, bps: Math.min(1e4, Number(real * 10000n / row.graduationThreshold)) };
+      } catch {
+      }
+    });
   }
   async function stampTimes(rpc, rows, headTimestamp) {
     const blocks = [...new Set(rows.map((r) => r.block))];
@@ -9120,7 +9246,7 @@ table.buys tr.exempt td:first-child{box-shadow:inset 2px 0 0 var(--line-3)}
     const where = found ? "from the pool" : exit?.venue === "curve" ? "from the curve" : exit ? "from the V4 pool" : "";
     const facts2 = [];
     facts2.push(
-      spot !== null ? { label: "Price", value: formatUnits(spot, quote.decimals, 10).replace(/0+$/, "").replace(/\.$/, ""), note: `${quote.symbol} per token \xB7 ${where}`, source: "chain" } : { label: "Price", value: null, note: quote.symbol, source: "chain", why: slip.exit?.venue === "closed" ? "swept, and the pool does not exist yet" : o?.pools === null ? "the pool read did not finish" : "no pool could be priced" }
+      spot !== null ? { label: "Price", value: formatPrice(spot, quote.decimals), note: `${quote.symbol} per token \xB7 ${where}`, source: "chain" } : { label: "Price", value: null, note: quote.symbol, source: "chain", why: slip.exit?.venue === "closed" ? "swept, and the pool does not exist yet" : o?.pools === null ? "the pool read did not finish" : "no pool could be priced" }
     );
     const supply = meta?.totalSupply ?? null;
     facts2.push(
@@ -9555,8 +9681,9 @@ table.buys tr.exempt td:first-child{box-shadow:inset 2px 0 0 var(--line-3)}
       const c = CHAINS[key];
       return c ? `<span class="seen-mark" style="color:${esc2(c.tint)}">${chainMark(key)}</span>` : "";
     };
-    host.innerHTML = `<div class="seen">
-    <div class="seen-head"><span>Checked before</span><button class="link" id="seen-clear" type="button">Forget these</button></div>
+    const busy2 = document.body.classList.contains("board") || Boolean(out.querySelector(".slip"));
+    host.innerHTML = `<details class="seen"${busy2 ? "" : " open"}>
+    <summary class="seen-head"><span>Checked before</span><span class="seen-n">${rows.length}</span><span class="chev" aria-hidden="true"></span></summary>
     <ul class="seen-list">${rows.map((sn) => {
       const href = `#/${mode === "demo" ? "demo" : "t"}/${sn.address}${mode === "demo" ? "" : `?chain=${esc2(sn.chain)}`}`;
       return `<li class="seen-row">
@@ -9569,8 +9696,8 @@ table.buys tr.exempt td:first-child{box-shadow:inset 2px 0 0 var(--line-3)}
           </a>
         </li>`;
     }).join("")}</ul>
-    <p class="seen-foot">What each one read when you last looked, not what it reads now \u2014 a token that was CLEAR in March is not CLEAR because this list says so. Kept in this browser only.</p>
-  </div>`;
+    <p class="seen-foot">What each one read when you last looked, not what it reads now \u2014 a token that was CLEAR in March is not CLEAR because this list says so. Kept in this browser only. <button class="link" id="seen-clear" type="button">Forget these</button></p>
+  </details>`;
     document.getElementById("seen-clear")?.addEventListener("click", () => {
       storage(HISTORY_KEY, "[]");
       renderSeen();
@@ -9628,6 +9755,7 @@ table.buys tr.exempt td:first-child{box-shadow:inset 2px 0 0 var(--line-3)}
     stopWatch();
     stopTape();
     shown = null;
+    document.querySelector("details.seen")?.removeAttribute("open");
     status.innerHTML = `<span class="dot"></span> ${esc2(text)} ${mode === "demo" ? "(demo chain, every address invented)" : `(${esc2(chain().name)}, ${chain().family === "solana" ? "read slot by slot" : "one block pinned"})`}`;
     out.innerHTML = "";
     if (ticker) {
@@ -10205,26 +10333,31 @@ table.buys tr.exempt td:first-child{box-shadow:inset 2px 0 0 var(--line-3)}
       opts.evidence.unread ?? ""
     ) : "";
     return `<section class="doorway head v-${v.kind}"${stage === "done" ? "" : ' data-pending="1"'}>
+    <div class="tokbar">
+      <div class="who2">
+        <div class="tokline">
+          <span class="sym">${opts.sym}</span>
+          <span class="name">${opts.name}</span>
+          <span class="stamp ${stampTone(opts.stampKind)}">${opts.stamp}</span>
+        </div>
+        <button class="vaddr" type="button" data-copy="${esc2(opts.address)}" title="Copy the address">${esc2(opts.address)}</button>
+      </div>
+      ${opts.price ?? ""}
+      ${opts.frames ?? ""}
+    </div>
     <aside class="doorman">
       <div class="stand">
-        <img class="mascot" src="${MASCOT_URL}" alt="" width="104" height="104">
+        <img class="mascot" src="${MASCOT_URL}" alt="" width="64" height="64">
         <div class="verdict">
           <span class="vword ${v.kind}" aria-label="Verdict">${v.word}</span>
           <p class="lead">${esc2(v.line)}${pending}</p>
         </div>
       </div>
       ${opts.bands ?? ""}
-      <div class="who2">
-        <div class="cap-l">At the door</div>
-        <div class="sym">${opts.sym}</div>
-        <div class="name">${opts.name}</div>
-        <button class="vaddr" type="button" data-copy="${esc2(opts.address)}" title="Copy the address">${esc2(opts.address)}</button>
-        <div><span class="stamp ${stampTone(opts.stampKind)}">${opts.stamp}</span></div>
-      </div>
-      ${opts.chart ?? ""}
       ${opts.facts?.length ? `<div class="facts">${opts.facts.map(factCell).join("")}</div>` : ""}
       ${opts.venues ?? ""}
     </aside>
+    ${opts.chart ?? ""}
     <div class="list">
       <div class="list-head">
         <h2>Guest list</h2>
@@ -10248,9 +10381,61 @@ table.buys tr.exempt td:first-child{box-shadow:inset 2px 0 0 var(--line-3)}
     return { points: thin(t.points, 120), venue: t.sub, poolAddress: "", fromBlock: t.from, toBlock: t.head ?? t.from, swaps: t.points.length, unread: null };
   }
   function paintChart() {
+    if (!shown) return;
     const box = document.getElementById("chart");
-    if (!box || !shown) return;
-    box.outerHTML = chartPanel(tapeSeries(), shown.m.quoteSymbol, shown.m.quoteDecimals, shown.m.spot, "why" in shown.picked ? shown.picked.why : true);
+    if (box) {
+      const before = box.querySelector(".chart-plot");
+      const held = before?.dataset.i;
+      const focused = before !== null && before === document.activeElement;
+      box.outerHTML = chartPanel(tapeSeries(), shown.m.quoteSymbol, shown.m.quoteDecimals, shown.m.spot, "why" in shown.picked ? shown.picked.why : true);
+      const plot = document.querySelector("#chart .chart-plot");
+      if (plot && focused) plot.focus({ preventScroll: true });
+      if (plot && held !== void 0) showPoint(plot, Number(held));
+    }
+    const price = document.getElementById("tokprice");
+    if (price) price.outerHTML = tokPrice(shown.m, shown.slip.at.block);
+  }
+  function tokPrice(m, block) {
+    const t = tape;
+    const lastPoint = t && t.points.length ? t.points[t.points.length - 1] : null;
+    const value = lastPoint?.price ?? m.spot;
+    const series = tapeSeries();
+    const change = series && series.points.length > 1 ? seriesChangeBps(series) : null;
+    const tone = change === null ? "flat" : change > 50 ? "up" : change < -50 ? "down" : "flat";
+    const move = change === null ? "" : `<span class="move ${tone}">${change > 0 ? "+" : ""}${(change / 100).toFixed(1)}%</span>`;
+    const sub = lastPoint ? `last trade ${agoOf(lastPoint.block, t.head)} ago` : value !== null ? `read at block ${block}` : "no price read";
+    return `<div class="tokprice" id="tokprice">
+    <div class="tp-v">${value === null ? "\u2014" : esc2(formatPrice(value, m.quoteDecimals))}<small>${esc2(m.quoteSymbol)}</small></div>
+    <div class="tp-s">${move}<span>${esc2(sub)}</span></div>
+  </div>`;
+  }
+  function showPoint(plot, i) {
+    const pts = (plot.dataset.pts ?? "").split(";").filter(Boolean);
+    if (!pts.length) return;
+    const at = Math.max(0, Math.min(pts.length - 1, i));
+    const [price, ago2, side] = pts[at].split("|");
+    const left = pts.length === 1 ? 100 : at / (pts.length - 1) * 100;
+    plot.dataset.i = String(at);
+    const xh = plot.querySelector(".chart-xh");
+    const tip = plot.querySelector(".chart-tip");
+    if (!xh || !tip) return;
+    xh.hidden = false;
+    xh.style.left = `${left}%`;
+    tip.hidden = false;
+    tip.replaceChildren();
+    const v = document.createElement("b");
+    v.textContent = price;
+    const k = document.createElement("span");
+    k.className = `t-${side}`;
+    k.textContent = `${side} \xB7 ${ago2} ago`;
+    tip.append(v, k);
+    tip.style.left = `${left}%`;
+    tip.classList.toggle("flip", left > 62);
+  }
+  function hidePoint(plot) {
+    delete plot.dataset.i;
+    plot.querySelector(".chart-xh")?.setAttribute("hidden", "");
+    plot.querySelector(".chart-tip")?.setAttribute("hidden", "");
   }
   var FRAMES = ["5m", "1h", "6h", "24h"];
   var FRAME_SECONDS = { "5m": 300, "1h": 3600, "6h": 21600, "24h": 86400 };
@@ -10268,7 +10453,7 @@ table.buys tr.exempt td:first-child{box-shadow:inset 2px 0 0 var(--line-3)}
     }
     if (!shown) return;
     const { slip, m, picked } = shown;
-    if (!("why" in picked)) startTape(slip, picked, m);
+    if (!("why" in picked)) startTape(slip, picked, m, true);
   }
   function frameBlocks() {
     return Math.max(1, Math.round(FRAME_SECONDS[frame] * chain().blocksPerSecond));
@@ -10281,6 +10466,7 @@ table.buys tr.exempt td:first-child{box-shadow:inset 2px 0 0 var(--line-3)}
   var FEED_FILTERS = [
     { key: "all", label: "all", hint: "every launch in the window" },
     { key: "new", label: "fresh", hint: "launched in the last five minutes" },
+    { key: "near", label: "near grad", hint: "the curve is at least 70% of the way to graduating" },
     { key: "graduated", label: "graduated", hint: "the curve filled and the pool exists" },
     { key: "serial", label: "serial dev", hint: "the deployer launched more than one in this window" }
   ];
@@ -10293,6 +10479,8 @@ table.buys tr.exempt td:first-child{box-shadow:inset 2px 0 0 var(--line-3)}
         return r.deployerLaunches > 1;
       case "new":
         return r.ageSeconds !== null && r.ageSeconds <= 300;
+      case "near":
+        return r.fill !== null && r.fill.bps >= 7e3;
       default:
         return true;
     }
@@ -10324,6 +10512,8 @@ table.buys tr.exempt td:first-child{box-shadow:inset 2px 0 0 var(--line-3)}
     feedBox.hidden = !on;
     deck.classList.toggle("two", on);
     document.querySelector("main")?.classList.toggle("wide", on);
+    document.body.classList.toggle("board", on);
+    renderSeen();
     if (!on) {
       stopFeed();
       feedBox.innerHTML = "";
@@ -10402,6 +10592,26 @@ table.buys tr.exempt td:first-child{box-shadow:inset 2px 0 0 var(--line-3)}
         } else {
           f.fresh = /* @__PURE__ */ new Set();
         }
+        if (!first) {
+          const done2 = new Set(feed.graduated);
+          const gone = new Set(feed.swept);
+          for (const row of f.rows) {
+            if (done2.has(row.token)) {
+              row.graduated = true;
+              row.fill = null;
+            }
+            if (gone.has(row.token)) {
+              row.swept = true;
+              row.fill = null;
+            }
+          }
+        }
+        if (!first && f.rows.length) {
+          try {
+            await stampFill(rpc, f.rows.slice(0, 30), head.number);
+          } catch {
+          }
+        }
         for (const row of f.rows) {
           if (row.timestamp !== null) row.ageSeconds = Math.max(0, head.timestamp - row.timestamp);
         }
@@ -10426,10 +10636,11 @@ table.buys tr.exempt td:first-child{box-shadow:inset 2px 0 0 var(--line-3)}
     const f = feedState;
     if (!f) return;
     const at = feedBox.querySelector(".feed-rows")?.scrollTop ?? 0;
+    const focusedToken = document.activeElement?.closest?.("#feed .fr")?.dataset.token ?? null;
     const here = openToken();
     const stalled = Boolean(f.failing);
     const kept = f.rows.filter(keepRow);
-    const body = kept.length ? `<div class="feed-rows">${kept.map((r) => feedRow(r, here)).join("")}</div>` : f.rows.length ? `<div class="feed-empty"><b>Nothing matches "${esc2(FEED_FILTERS.find((x) => x.key === feedFilter).label)}"</b>${f.rows.length} launch${f.rows.length === 1 ? "" : "es"} in the window, none of them ${esc2(FEED_FILTERS.find((x) => x.key === feedFilter).hint.replace(/^the |^every /, ""))}.</div>` : `<div class="feed-empty">${f.opening ? "<b>Reading the factory\u2026</b>walking back from the head for the launches that just happened" : f.head === null ? "<b>Could not read the launches</b>the chain did not answer, so this says nothing about whether anything launched. The column keeps trying every fifteen seconds." : `<b>No launch in the window</b>nothing was launched between block ${f.from ?? "?"} and ${f.head}. The column keeps looking.`}</div>`;
+    const body = kept.length ? `<div class="feed-rows">${kept.map((r) => feedRow(r, here)).join("")}</div>` : f.rows.length ? `<div class="feed-empty"><b>Nothing matches "${esc2(FEED_FILTERS.find((x) => x.key === feedFilter).label)}"</b>${f.rows.length} launch${f.rows.length === 1 ? "" : "es"} in the window, none of them ${esc2(FEED_FILTERS.find((x) => x.key === feedFilter).hint.replace(/^the |^every /, ""))}.</div>` : `<div class="feed-empty">${f.opening ? "<b>Reading the factory\u2026</b>walking back from the head for the launches that just happened" : f.head === null ? `<b>Could not read the launches</b>the chain did not answer, so this says nothing about whether anything launched. The column keeps trying every fifteen seconds.${mode === "demo" ? "" : `<a class="feed-demo" href="#/demo/${DEMO.tokens.fresh.token}">See how the board works on the invented demo chain</a>`}` : `<b>No launch in the window</b>nothing was launched between block ${f.from ?? "?"} and ${f.head}. The column keeps looking.`}</div>`;
     feedBox.innerHTML = `<div class="feed-head">
       <h2>New launches</h2>
       <span class="tape-live${stalled ? " stalled" : ""}"><span class="dot"></span>${stalled ? "stalled" : "live"}</span>
@@ -10439,17 +10650,27 @@ table.buys tr.exempt td:first-child{box-shadow:inset 2px 0 0 var(--line-3)}
       (x) => `<button class="fchip${x.key === feedFilter ? " on" : ""}" type="button" data-filter="${x.key}" aria-pressed="${x.key === feedFilter}" title="${esc2(x.hint)}">${esc2(x.label)}</button>`
     ).join("")}</div>
     ${body}
-    <div class="feed-note">${esc2(
-      f.failing ? f.failing : `${chain().launchpad ?? "The launchpad"} on ${chain().name}. ${f.rows.length ? `${feedFilter === "all" ? `The newest ${f.rows.length}` : `${kept.length} of ${f.rows.length}`}` : "Nothing"} between block ${f.from ?? "?"} and ${f.head ?? "?"}${f.unread ? `; blocks ${f.unread.fromBlock}\u2013${f.unread.toBlock} were not opened` : ""}.`
+    <div class="feed-note"${f.failing ? ` title="${esc2(f.failing)}"` : ""}>${esc2(
+      f.failing ? `Stalled: ${f.failing.length > 90 ? `${f.failing.slice(0, 88).replace(/\s+\S*$/, "")}\u2026` : f.failing}` : `j / k to move, Enter to open. ${chain().launchpad ?? "The launchpad"} on ${chain().name}. ${f.rows.length ? `${feedFilter === "all" ? `The newest ${f.rows.length}` : `${kept.length} of ${f.rows.length}`}` : "Nothing"} between block ${f.from ?? "?"} and ${f.head ?? "?"}${f.unread ? `; blocks ${f.unread.fromBlock}\u2013${f.unread.toBlock} were not opened` : ""}.`
     )}</div>`;
     const rows = feedBox.querySelector(".feed-rows");
     if (rows && at > 0) rows.scrollTop = at;
+    if (focusedToken) feedBox.querySelector(`.fr[data-token="${CSS.escape(focusedToken)}"]`)?.focus({ preventScroll: true });
   }
   function pickOne() {
     const blocked = feedBlocker(chain());
+    const words = [
+      ["stop", "STOP", "something here can cost you money outright"],
+      ["watch", "WATCH", "nothing outright dangerous, but read before you buy"],
+      ["clear", "CLEAR", "nothing in what was read stands out \u2014 not a promise about price"],
+      ["unknown", "INCOMPLETE", "part of it could not be read, so it is not a clean result"]
+    ];
     return `<div class="pickone">
+    <img class="pick-mascot" src="${MASCOT_URL}" alt="" width="72" height="72">
     <b>${blocked ? "Paste a token to check it" : "Pick a launch to check it"}</b>
     <p>${blocked ? "There is no launchpad column on this chain, so paste any token address above \u2014 BOUNCER reads the chain itself and answers the five questions you would ask before buying." : "Every launch in the column opens here with its verdict, its figures and a live tape of who is buying and who is selling. Or paste any token address above."}</p>
+    <ul class="pick-words">${words.map(([kind, word, meaning]) => `<li><span class="vmini ${kind}">${word}</span><span>${esc2(meaning)}</span></li>`).join("")}</ul>
+    <p class="pick-keys"><kbd>/</kbd> search <kbd>j</kbd><kbd>k</kbd> move down the column <kbd>Enter</kbd> open</p>
   </div>`;
   }
   function feedRow(r, here) {
@@ -10460,11 +10681,13 @@ table.buys tr.exempt td:first-child{box-shadow:inset 2px 0 0 var(--line-3)}
     ].filter(Boolean).join("");
     const sym = r.symbol ?? "no ticker";
     const name = r.name ?? shortAddress(r.token);
+    const fill = r.fill && !r.graduated && !r.swept ? `<span class="fr-fill${r.fill.bps >= 7e3 ? " near" : ""}" role="img" aria-label="${(r.fill.bps / 100).toFixed(0)}% of the way to graduating"><i style="width:${Math.max(2, r.fill.bps / 100).toFixed(1)}%"></i></span><span class="fr-pct">${(r.fill.bps / 100).toFixed(0)}%</span>` : "";
     return `<button class="fr${here === r.token ? " on" : ""}${feedState?.fresh.has(r.token) ? " fresh" : ""}" type="button" data-token="${esc2(r.token)}">
     <span class="fr-sym">${esc2(sym)}</span>
     <span class="fr-age">${esc2(r.ageSeconds === null ? `block ${r.block}` : shortAge(r.ageSeconds))}</span>
     <span class="fr-name">${esc2(name)}</span>
     <span class="fr-tags">${tags}</span>
+    ${fill}
   </button>`;
   }
   var tape = null;
@@ -10558,7 +10781,6 @@ table.buys tr.exempt td:first-child{box-shadow:inset 2px 0 0 var(--line-3)}
     <div class="tape-head">
       <h2>The tape</h2>
       <span class="tape-src">${esc2(tape.sub)}</span>
-      ${frameTabs()}
       <span class="tape-live${stalled ? " stalled" : ""}"><span class="dot"></span>${stalled ? "stalled" : "live"}</span>
       <span class="tape-when">${tape.failing ? esc2(tape.failing) : tape.head === null ? "opening" : `block ${tape.head}`}</span>
     </div>
@@ -10584,7 +10806,7 @@ table.buys tr.exempt td:first-child{box-shadow:inset 2px 0 0 var(--line-3)}
     if (after2 && at > 0) after2.scrollTop = at;
     paintChart();
   }
-  function startTape(slip, picked, m) {
+  function startTape(slip, picked, m, keepFrame = false) {
     stopTape();
     const everyMs = mode === "demo" ? 5e3 : 15e3;
     const from = Math.max(0, slip.at.block - frameBlocks());
@@ -10611,7 +10833,15 @@ table.buys tr.exempt td:first-child{box-shadow:inset 2px 0 0 var(--line-3)}
       opening: true,
       points: []
     };
-    paintTape();
+    if (keepFrame) {
+      for (const id of ["tape", "chart", "tokprice"]) {
+        const el = document.getElementById(id);
+        el?.classList.add("stale");
+        el?.setAttribute("aria-busy", "true");
+      }
+    } else {
+      paintTape();
+    }
     let cursor = from;
     const tick = async () => {
       const t = tape;
@@ -10706,7 +10936,7 @@ table.buys tr.exempt td:first-child{box-shadow:inset 2px 0 0 var(--line-3)}
   function factCell(f) {
     return `<div class="fact">
     <div class="fact-l">${esc2(f.label)}</div>
-    <div class="fact-v ${f.value === null ? "none" : f.warn ? "warn" : ""}">${f.value === null ? "not read" : esc2(f.value)}</div>
+    <div class="fact-v ${f.value === null ? "none" : f.warn ? "warn" : ""}"${f.value === null ? ' aria-label="not read"' : ""}>${f.value === null ? "\u2014" : esc2(f.value)}</div>
     <div class="fact-n">${esc2(f.value === null ? f.why ?? f.note : f.note)}</div>
   </div>`;
   }
@@ -10726,38 +10956,52 @@ table.buys tr.exempt td:first-child{box-shadow:inset 2px 0 0 var(--line-3)}
   </details>`;
   }
   function chartPanel(series, quoteSymbol, quoteDecimals, spot, pending = true) {
-    const head = `<div class="chart-head"><span class="cap-l" title="Drawn from this token's own trades: each point is what one trade paid per token">Price</span>${frameTabs()}`;
+    void spot;
+    const head = (move2 = "") => `<div class="chart-head"><span class="cap-l" title="Drawn from this token's own trades: each point is what one trade paid per token">Price</span><span class="chart-win">${esc2(FRAME_WORD[frame])} \xB7 ${esc2(quoteSymbol)}</span>${move2}</div>`;
     if (!series) {
-      return `<div class="chartbox" id="chart">${head}</div><p class="chart-no">${pending === true ? "Reading the trades\u2026" : esc2(pending)}</p></div>`;
+      return `<div class="chartbox" id="chart">${head()}<div class="chart-empty${pending === true ? " busy" : ""}">${pending === true ? "Reading the trades\u2026" : esc2(pending)}</div></div>`;
     }
     if (series.unread || series.points.length < 2) {
-      const why = series.unread ?? (series.swaps === 0 ? `no trade in ${FRAME_WORD[frame]}: nobody bought or sold it` : `one trade in ${FRAME_WORD[frame]}, which is not a line`);
-      return `<div class="chartbox" id="chart">${head}</div><p class="chart-no">${esc2(why)}</p></div>`;
+      const why = series.unread ?? (series.swaps === 0 ? `No trade in ${FRAME_WORD[frame]}: nobody bought or sold it.` : `One trade in ${FRAME_WORD[frame]}, which is not a line yet.`);
+      return `<div class="chartbox" id="chart">${head()}<div class="chart-empty">${esc2(why)}</div></div>`;
     }
     const range = seriesRange(series);
     const span = range.high > range.low ? range.high - range.low : 1n;
-    const w = 286;
-    const h = 76;
-    const points = series.points.map((p, i) => {
-      const x = i / (series.points.length - 1) * w;
-      const y = h - Number((p.price - range.low) * 1000n / span) / 1e3 * (h - 8) - 4;
-      return `${x.toFixed(1)},${y.toFixed(1)}`;
-    }).join(" ");
+    const W = 1e3;
+    const H = 260;
+    const PAD = 18;
+    const n = series.points.length;
+    const yOf = (price) => PAD + (1 - Number((price - range.low) * 10000n / span) / 1e4) * (H - PAD * 2);
+    const coords = series.points.map((p, i) => [i / (n - 1) * W, yOf(p.price)]);
+    const line = coords.map(([x, y]) => `${x.toFixed(1)},${y.toFixed(1)}`).join(" ");
+    const area = `0,${H} ${line} ${W},${H}`;
     const change = seriesChangeBps(series);
     const tone = change === null ? "flat" : change > 50 ? "up" : change < -50 ? "down" : "flat";
     const move = change === null ? "" : `<span class="move ${tone}">${change > 0 ? "+" : ""}${(change / 100).toFixed(1)}%</span>`;
-    const stroke = tone === "down" ? "var(--stop)" : tone === "up" ? "var(--ok)" : "var(--dim)";
+    const last = coords[n - 1];
+    const pts = series.points.map((p) => `${formatPrice(p.price, quoteDecimals)}|${agoOf(p.block, tape?.head ?? null)}|${p.sell ? "sell" : "buy"}`).join(";");
+    void move;
     return `<div class="chartbox" id="chart">
-    ${head}${move}</div>
-    <svg class="chart" viewBox="0 0 ${w} ${h}" role="img" aria-label="Price over the window, from its own trades">
-      <polyline points="${points}" fill="none" stroke="${stroke}" stroke-width="1.8" stroke-linejoin="round"/>
-    </svg>
+    ${head()}
+    <div class="chart-plot t-${tone}" tabindex="0" role="img" data-pts="${esc2(pts)}"
+      aria-label="Price over ${esc2(FRAME_WORD[frame])}, ${n} points from ${formatPrice(range.low, quoteDecimals)} to ${formatPrice(range.high, quoteDecimals)} ${esc2(quoteSymbol)}. Every trade behind it is listed in the tape. Arrow keys move along the line.">
+      <svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" aria-hidden="true">
+        <defs><linearGradient id="chart-wash" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="currentColor" stop-opacity=".2"/><stop offset="1" stop-color="currentColor" stop-opacity="0"/></linearGradient></defs>
+        <line class="grid" x1="0" x2="${W}" y1="${PAD}" y2="${PAD}"/>
+        <line class="grid" x1="0" x2="${W}" y1="${H / 2}" y2="${H / 2}"/>
+        <line class="grid" x1="0" x2="${W}" y1="${H - PAD}" y2="${H - PAD}"/>
+        <polygon points="${area}" fill="url(#chart-wash)"/>
+        <polyline points="${line}" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" vector-effect="non-scaling-stroke"/>
+      </svg>
+      <span class="chart-hi">${esc2(formatPrice(range.high, quoteDecimals))}</span>
+      <span class="chart-lo">${esc2(formatPrice(range.low, quoteDecimals))}</span>
+      <span class="chart-dot" style="top:${(last[1] / H * 100).toFixed(2)}%"></span>
+      <span class="chart-xh" hidden></span>
+      <div class="chart-tip" hidden></div>
+    </div>
     <div class="chart-foot">
       <span>${series.swaps} trade${series.swaps === 1 ? "" : "s"} \xB7 ${esc2(series.venue)}</span>
-      <span title="What the most recent trade paid per token. The price in the figures below is the one read at the pinned block.">${(() => {
-      const last = series.points[series.points.length - 1]?.price ?? spot;
-      return last === null ? "" : `last ${formatUnits(last, quoteDecimals, 10).replace(/0+$/, "").replace(/\.$/, "")} ${esc2(quoteSymbol)}`;
-    })()}</span>
+      <span>hover or use the arrow keys to read a point</span>
     </div>
   </div>`;
   }
@@ -11374,6 +11618,8 @@ table.buys tr.exempt td:first-child{box-shadow:inset 2px 0 0 var(--line-3)}
       answers,
       facts: m.facts,
       chart,
+      price: tokPrice(m, slip.at.block),
+      frames: "why" in picked ? "" : frameTabs(),
       venues: venueList(slip.open?.pools, slip.rules?.quote ?? slip.chain.native, slip.id.meta?.decimals ?? 18),
       bands: `${coverage ? coverageBand(coverage, stage0) : ""}${changes ?? ""}`,
       evidence,
@@ -11768,6 +12014,60 @@ table.buys tr.exempt td:first-child{box-shadow:inset 2px 0 0 var(--line-3)}
       submit();
     });
     feedToggle.addEventListener("click", () => setFeed(!feedOn));
+    out.addEventListener("pointermove", (event) => {
+      const plot = event.target.closest(".chart-plot");
+      if (!plot) return;
+      const box = plot.getBoundingClientRect();
+      const n = (plot.dataset.pts ?? "").split(";").filter(Boolean).length;
+      if (n < 2) return;
+      showPoint(plot, Math.round((event.clientX - box.left) / box.width * (n - 1)));
+    });
+    out.addEventListener("pointerout", (event) => {
+      const plot = event.target.closest(".chart-plot");
+      if (plot && !plot.contains(event.relatedTarget)) hidePoint(plot);
+    });
+    out.addEventListener("keydown", (event) => {
+      const plot = event.target.closest(".chart-plot");
+      if (!plot) return;
+      const n = (plot.dataset.pts ?? "").split(";").filter(Boolean).length;
+      const at = plot.dataset.i === void 0 ? n - 1 : Number(plot.dataset.i);
+      const step = event.shiftKey ? 10 : 1;
+      if (event.key === "ArrowLeft") showPoint(plot, at - step);
+      else if (event.key === "ArrowRight") showPoint(plot, at + step);
+      else if (event.key === "Home") showPoint(plot, 0);
+      else if (event.key === "End") showPoint(plot, n - 1);
+      else if (event.key === "Escape") hidePoint(plot);
+      else return;
+      event.preventDefault();
+    });
+    out.addEventListener("focusout", (event) => {
+      const plot = event.target.closest?.(".chart-plot");
+      if (plot) hidePoint(plot);
+    });
+    document.addEventListener("keydown", (event) => {
+      if (event.metaKey || event.ctrlKey || event.altKey) return;
+      const typing = event.target instanceof HTMLElement && (event.target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(event.target.tagName));
+      if (typing) {
+        if (event.key === "Escape" && event.target === q) q.blur();
+        return;
+      }
+      if (event.key === "/") {
+        event.preventDefault();
+        q.focus();
+        q.select();
+        return;
+      }
+      if ((event.key === "j" || event.key === "k") && feedOn) {
+        const rows = [...feedBox.querySelectorAll(".fr")];
+        if (!rows.length) return;
+        const now = rows.indexOf(document.activeElement);
+        const from = now >= 0 ? now : rows.findIndex((r) => r.classList.contains("on"));
+        const next = rows[Math.max(0, Math.min(rows.length - 1, from + (event.key === "j" ? 1 : -1)))] ?? rows[0];
+        next.focus();
+        next.scrollIntoView({ block: "nearest" });
+        event.preventDefault();
+      }
+    });
     out.addEventListener("click", (event) => {
       const button = event.target.closest("[data-frame]");
       if (button?.dataset.frame) setFrame(button.dataset.frame);
