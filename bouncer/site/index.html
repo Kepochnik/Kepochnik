@@ -445,6 +445,59 @@ table.buys tr:first-child td{border-top:0}
 .whylist{margin:12px 0 0;padding-left:20px;color:var(--muted);font-size:13px;display:grid;gap:7px}
 .whylist code{color:var(--dimmer);font-size:11.5px;margin-left:6px}
 
+/* ---------------------------------------------------------------- tape */
+/* Everything above is a judgement that was true at one block. This is the
+   only part of the page that moves, so it has to look like it: a pulse that
+   is really tied to a round landing, a flow bar that redraws, and rows that
+   arrive at the top. A static table pretending to be live is worse than no
+   table — it is the page telling you nothing is happening. */
+.tape{margin-top:14px;border:1px solid var(--line);border-radius:var(--r-lg);background:var(--surface);
+  box-shadow:var(--shadow),var(--lip);overflow:hidden}
+.tape-head{display:flex;align-items:center;gap:9px 14px;flex-wrap:wrap;padding:12px 20px;
+  border-bottom:1px solid var(--line);background:var(--surface-2)}
+.tape-head h2{margin:0;font:600 10px var(--sans);letter-spacing:.1em;text-transform:uppercase;color:var(--dim)}
+.tape-src{color:var(--dimmer);font-size:12px}
+.tape-live{display:inline-flex;align-items:center;gap:6px;font:500 11px var(--sans);letter-spacing:.05em;
+  text-transform:uppercase;color:var(--ok);padding:3px 8px;border:1px solid var(--ok-edge);
+  border-radius:999px;background:var(--ok-bg)}
+.tape-live .dot{width:5px;height:5px;border-radius:50%;background:var(--ok);animation:pulse 1.1s ease-in-out infinite}
+.tape-live.stalled{color:var(--warn);border-color:var(--warn-edge);background:var(--warn-bg)}
+.tape-live.stalled .dot{background:var(--warn);animation:none}
+.tape-when{margin-left:auto;color:var(--dimmer);font-size:11.5px;font-variant-numeric:var(--tnum)}
+
+/* Bought against sold over the window: the one figure worth five seconds. */
+.flow{display:grid;gap:7px;padding:13px 20px;border-bottom:1px solid var(--line)}
+.flow-keys{display:flex;align-items:baseline;gap:6px 16px;flex-wrap:wrap;font-size:12.5px;color:var(--dim)}
+.flow-keys b{font:550 13.5px var(--mono);font-variant-numeric:var(--tnum)}
+.flow-keys .in b{color:var(--ok)} .flow-keys .out b{color:var(--stop)}
+.flow-keys .net{margin-left:auto;color:var(--dimmer)}
+.flow-bar{display:flex;height:6px;border-radius:999px;overflow:hidden;background:var(--surface-3)}
+.flow-bar i{display:block;transition:width .4s ease}
+.flow-bar .in{background:var(--ok)} .flow-bar .out{background:var(--stop)}
+
+/* Both axes: the row is wider than a phone even with two columns hidden, and
+   a cut-off address is the one cell on the row nobody can guess. */
+.tape-rows{max-height:392px;overflow:auto;overscroll-behavior:contain}
+table.trades{width:100%;border-collapse:collapse;font-size:12.5px;font-variant-numeric:var(--tnum)}
+table.trades th{position:sticky;top:0;z-index:1;text-align:left;padding:8px 20px;background:var(--surface-2);
+  color:var(--dimmer);font:600 9.5px var(--sans);letter-spacing:.09em;text-transform:uppercase;
+  border-bottom:1px solid var(--line);white-space:nowrap}
+table.trades td{padding:8px 20px;border-top:1px solid var(--line);color:var(--muted);white-space:nowrap}
+table.trades tr:first-child td{border-top:0}
+table.trades tr.fresh{animation:land .8s ease-out}
+@keyframes land{from{background:rgba(232,184,75,.11)}to{background:transparent}}
+.t-side{font:600 10px var(--sans);letter-spacing:.07em;text-transform:uppercase}
+.t-buy .t-side{color:var(--ok)} .t-sell .t-side{color:var(--stop)}
+.t-num{font-family:var(--mono);color:var(--text)}
+.t-w{font-family:var(--mono);font-size:11.5px;color:var(--dim)}
+.t-w.flagged{color:var(--warn)}
+.t-share{color:var(--dim)}
+.t-share.big{color:var(--warn);font-weight:550}
+.t-ago{font-family:var(--mono);font-size:11.5px;color:var(--dimmer);white-space:nowrap}
+.tape-empty{padding:26px 20px;color:var(--dim);font-size:13.5px;text-align:center}
+.tape-empty b{display:block;color:var(--muted);font-weight:550;margin-bottom:3px}
+.tape-note{padding:10px 20px;border-top:1px solid var(--line);color:var(--dimmer);font-size:11.5px;background:var(--surface-2)}
+
 /* ---------------------------------------------------------------- more */
 .more{border-top:1px solid var(--line)}
 .more-head{padding:13px 22px 0;font:600 10px var(--sans);letter-spacing:.1em;text-transform:uppercase;color:var(--dimmer)}
@@ -618,6 +671,12 @@ section.sec .kv{margin-top:12px}
   .vword{margin-top:0;font-size:19px;padding:6px 13px}
   .lead{margin-top:8px;font-size:12.5px}
   .who2,.chartbox,.facts,.venues{padding-left:16px;padding-right:16px}
+  .tape-head,.flow,.tape-note,.tape-empty{padding-left:16px;padding-right:16px}
+  table.trades th,table.trades td{padding-left:16px;padding-right:16px}
+  /* Six columns do not fit a phone. The two that go are the ones the other
+     four already imply: the token count (the share of supply says it better)
+     and the exact block (the age says it well enough on a screen this size). */
+  table.trades .c-tok,table.trades .c-blk{display:none}
   .list-head,.q>summary,.log>summary,.log-body{padding-left:16px;padding-right:16px}
   .qbody{padding-left:16px;padding-right:16px}
   .vfoot{padding-left:16px;padding-right:16px}

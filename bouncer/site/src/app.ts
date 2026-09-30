@@ -13,7 +13,7 @@ import { doorCoverage, plainReason, splCoverage, type Coverage } from "../../src
 import { readVerdict, type VerdictKind } from "../../src/bouncer/verdict.js";
 import { missingVenues, tradeVenues } from "../../src/bouncer/trade.js";
 import { CHAINS, canDo, chainByKey, featureBlocker, type ChainConfig, type Feature } from "../../src/chain/chains.js";
-import { PHASE_LABEL } from "../../src/chain/pons.js";
+import { GraduationPhase, PHASE_LABEL } from "../../src/chain/pons.js";
 import { PonsReader } from "../../src/chain/reader.js";
 import { RpcClient, type BlockHeader } from "../../src/chain/rpc.js";
 import { SolanaRpc } from "../../src/chain/solana.js";
@@ -38,8 +38,9 @@ import { roomLine } from "../../src/bouncer/room.js";
 import { readBoard, type Board } from "../../src/bouncer/leaderboard.js";
 import { readWatchEvents, type WatchEvent } from "../../src/bouncer/watch.js";
 import { readTokenWatchEvents, type TokenWatchEvent } from "../../src/bouncer/tokenWatch.js";
+import { readTrades, type Trade, type TradeSource } from "../../src/bouncer/trades.js";
 import { doorAnswers, splAnswers, SHORT_QUESTION, type Answer } from "../../src/bouncer/answers.js";
-import { marketFacts, type Fact } from "../../src/bouncer/marketFacts.js";
+import { marketFacts, shortAge, type Fact } from "../../src/bouncer/marketFacts.js";
 import type { MarketPool } from "../../src/chain/market.js";
 import { readPriceSeries, seriesChangeBps, seriesRange, type PriceSeries } from "../../src/chain/priceSeries.js";
 import { doorWatch, readLag, splWatch, type WatchOffer, type WatchPlan } from "../../src/bouncer/watchPlan.js";
@@ -526,6 +527,7 @@ function showToast(text: string): void {
 function busy(text: string): void {
   go.disabled = true;
   stopWatch();
+  stopTape();
   status.innerHTML = `<span class="dot"></span> ${esc(text)} ${mode === "demo" ? "(demo chain, every address invented)" : `(${esc(chain().name)}, ${chain().family === "solana" ? "read slot by slot" : "one block pinned"})`}`;
   out.innerHTML = "";
   if (ticker) { clearInterval(ticker); ticker = null; }
@@ -1678,6 +1680,306 @@ async function fillChart(slip: DoorSlip, m: ReturnType<typeof marketFacts>): Pro
   }
 }
 
+// ---------------------------------------------------------------- the tape
+
+/**
+ * THE ONLY PART OF THIS PAGE THAT MOVES.
+ *
+ * Everything above the tape is a judgement about one block, and it is the
+ * right shape for what it says — who can freeze your tokens does not change
+ * every fifteen seconds. But a page made only of that reads as a document,
+ * and the thing somebody staring at a token wants to know is what is
+ * happening to it right now. So the trades go under the verdict, they arrive
+ * at the top, and the pulse beside the heading is tied to a round actually
+ * landing rather than being an animation that plays whether or not the read
+ * worked.
+ *
+ * `cursor` is the whole reason a throttled tab is a delay and not a hole:
+ * each round asks from the last block it finished to the head it can see
+ * now, and a failed round does not advance it.
+ */
+interface TapeView {
+  /** The trades so far, newest first. Null until the first round lands. */
+  trades: Trade[];
+  source: TradeSource;
+  /** What is being read, in words: "Pons V2 curve", "Uniswap V3 · 0.30% pool". */
+  sub: string;
+  quote: { symbol: string; decimals: number };
+  tokenDecimals: number;
+  supply: bigint;
+  /** The window the tape opened with, for the line under the table. */
+  from: number;
+  head: number | null;
+  /** Quote in and out over everything read so far. */
+  boughtQuote: bigint;
+  soldQuote: bigint;
+  buys: number;
+  sells: number;
+  lastAt: number;
+  failing: string | null;
+  /** Rows from the round that just landed, so they can flash once. */
+  fresh: Set<string>;
+  /** True before the first round has come back. */
+  opening: boolean;
+}
+
+let tape: TapeView | null = null;
+let taper: number | null = null;
+let tapeClock: number | null = null;
+
+function stopTape(): void {
+  if (taper) { clearInterval(taper); taper = null; }
+  if (tapeClock) { clearInterval(tapeClock); tapeClock = null; }
+  tape = null;
+}
+
+/** Where this token's trades live, or the reason they cannot be read. */
+function tradeSourceFor(slip: DoorSlip, m: ReturnType<typeof marketFacts>): { source: TradeSource; sub: string } | { why: string } {
+  const launch = slip.id.launch;
+  const phase = slip.rules?.phase ?? launch?.phase ?? null;
+  // Before graduation the curve IS the market, and its own events name the
+  // buyer and the seller — a better tape than any pool can give.
+  if (launch && phase === GraduationPhase.NotGraduated) {
+    return { source: { kind: "curve", curve: launch.curve, venue: slip.chain.launchpad ?? "the curve" }, sub: `${slip.chain.launchpad ?? "launchpad"} curve` };
+  }
+  if (m.pool) {
+    return { source: { kind: "pool", pool: m.pool }, sub: `${m.pool.dex}${m.pool.feeBps ? ` · ${(m.pool.feeBps / 100).toFixed(2)}% fee` : ""}` };
+  }
+  if (phase === GraduationPhase.Swept) {
+    return { why: "The curve is closed and the pool has not been created yet, so right now there is nothing trading to put on a tape." };
+  }
+  // Unreachable is not the same as empty, and this is the one place on the
+  // page where confusing them would read as "nobody is trading it".
+  const skipped = slip.skipped.find((x) => /market|pool|liquid/i.test(x.section));
+  if (skipped) return { why: `The pool read did not come back, so there is no tape to open: ${plainReason(skipped.reason)}` };
+  if (slip.open && !slip.open.market) return { why: "The pool read did not come back, so BOUNCER cannot say where this token trades — which is not the same as saying it does not trade." };
+  return { why: "BOUNCER found no pool for this token on this chain, so there are no trades to read." };
+}
+
+/** The panel, drawn from whatever the tape knows so far. */
+function tapeBody(): string {
+  if (!tape) return "";
+  const t = tape;
+  const dec = t.quote.decimals;
+  const sym = t.quote.symbol;
+  const amount = (v: bigint) => `${formatUnits(v, dec, v > 0n && v < 10n ** BigInt(dec) ? 4 : 2)} ${sym}`;
+  const total = t.boughtQuote + t.soldQuote;
+  const inPct = total > 0n ? Number((t.boughtQuote * 1000n) / total) / 10 : 50;
+  const net = t.boughtQuote - t.soldQuote;
+  const since = Math.max(0, Math.round((Date.now() - t.lastAt) / 1000));
+
+  const flow = `<div class="flow">
+    <div class="flow-keys">
+      <span class="in">bought <b>${esc(amount(t.boughtQuote))}</b></span>
+      <span class="out">sold <b>${esc(amount(t.soldQuote))}</b></span>
+      <span class="net">${t.buys + t.sells === 0 ? "nothing yet" : `${net === 0n ? "level" : `net ${net > 0n ? "in" : "out"} ${esc(amount(net > 0n ? net : -net))}`} · ${t.buys} buy${t.buys === 1 ? "" : "s"}, ${t.sells} sell${t.sells === 1 ? "" : "s"}`}</span>
+    </div>
+    <div class="flow-bar"><i class="in" style="width:${total > 0n ? inPct : 0}%"></i><i class="out" style="width:${total > 0n ? 100 - inPct : 0}%"></i></div>
+  </div>`;
+
+  const body = t.trades.length
+    ? `<div class="tape-rows"><table class="trades">
+        <thead><tr><th>ago</th><th>side</th><th>${esc(sym)}</th><th class="c-tok">tokens</th><th>of supply</th><th>${t.source.kind === "curve" ? "trader" : "to"}</th><th class="c-blk">block</th></tr></thead>
+        <tbody>${t.trades.map((x) => tradeRow(x, t)).join("")}</tbody>
+      </table></div>`
+    : `<div class="tape-empty">${t.opening
+        ? "<b>Reading the trades…</b>the first round is walking the log"
+        : `<b>Nothing traded in the window</b>no buy and no sell between block ${t.from} and ${t.head ?? "?"}`}</div>`;
+
+  return `${flow}${body}
+    <div class="tape-note">${esc(
+      t.source.kind === "curve"
+        ? `Read from the curve's own CurveBuy and CurveSell, which name the trader. Ages are worked out from this chain's block rate; the block beside each row is the exact figure. Window opens at block ${t.from}${t.head ? `, read up to ${t.head}` : ""}. Last look ${since} s ago.`
+        : `Read from the pool's Swap log. The address is where the tokens went, which is a router at least as often as a person. Ages are worked out from this chain's block rate; the block beside each row is the exact figure. Window opens at block ${t.from}${t.head ? `, read up to ${t.head}` : ""}. Last look ${since} s ago.`,
+    )}</div>`;
+}
+
+function tradeRow(x: Trade, t: TapeView): string {
+  const key = `${x.tx}:${x.logIndex}`;
+  const share = x.shareBps === null ? "—" : `${(x.shareBps / 100).toFixed(x.shareBps >= 100 ? 2 : 3)}%`;
+  const big = x.shareBps !== null && x.shareBps >= 100;
+  return `<tr class="t-${x.side}${t.fresh.has(key) ? " fresh" : ""}">
+    <td class="t-ago">${esc(agoOf(x.block, t.head))}</td>
+    <td><span class="t-side">${x.side}</span></td>
+    <td class="t-num">${esc(formatUnits(x.quote, t.quote.decimals, x.quote < 10n ** BigInt(t.quote.decimals) ? 4 : 2))}</td>
+    <td class="t-num c-tok">${esc(formatUnits(x.tokens, t.tokenDecimals, 0))}</td>
+    <td class="t-share${big ? " big" : ""}">${esc(share)}</td>
+    <td>${walletCell(x)}</td>
+    <td class="t-w c-blk">${x.block}</td>
+  </tr>`;
+}
+
+/**
+ * Whether this address is a trader or merely where the tokens went is said
+ * once, in the column heading and in the note under the table, not repeated
+ * on every row. A badge on sixty rows is noise; getting the heading wrong is
+ * the page claiming to know who bought.
+ */
+/**
+ * How long ago, from the chain's own block rate.
+ *
+ * This is the one derived figure on the tape and it is marked as one: the
+ * block number stays in its own column, exact, and the note under the table
+ * says where the age came from. A tape with no sense of time is a list, and a
+ * trader reading a list cannot tell a sale that landed ten seconds ago from
+ * one that landed at breakfast — but neither should the page print a
+ * timestamp it never read.
+ */
+function agoOf(block: number, head: number | null): string {
+  if (head === null || head < block) return "—";
+  const rate = chain().blocksPerSecond;
+  if (!rate || rate <= 0) return `−${head - block}`;
+  return shortAge((head - block) / rate);
+}
+
+function walletCell(x: Trade): string {
+  const explorer = chain().explorerUrl;
+  const short = shortAddress(x.wallet);
+  return explorer && mode === "live"
+    ? `<a class="t-w" href="${esc(explorer)}/address/${esc(x.wallet)}" target="_blank" rel="noopener">${esc(short)}</a>`
+    : `<span class="t-w">${esc(short)}</span>`;
+}
+
+/** The whole section, head included, so one repaint covers it. */
+function tapePanel(): string {
+  if (!tape) return "";
+  const stalled = Boolean(tape.failing);
+  return `<section class="tape" id="tape">
+    <div class="tape-head">
+      <h2>The tape</h2>
+      <span class="tape-src">${esc(tape.sub)}</span>
+      <span class="tape-live${stalled ? " stalled" : ""}"><span class="dot"></span>${stalled ? "stalled" : "live"}</span>
+      <span class="tape-when">${tape.failing ? esc(tape.failing) : tape.head === null ? "opening" : `block ${tape.head}`}</span>
+    </div>
+    ${tapeBody()}
+  </section>`;
+}
+
+/** No tape here, and why — never an empty table pretending the token is quiet. */
+function tapeNone(why: string): string {
+  return `<section class="tape" id="tape">
+    <div class="tape-head"><h2>The tape</h2><span class="tape-live stalled"><span class="dot"></span>no tape</span></div>
+    <div class="tape-empty"><b>There are no trades to show</b>${esc(why)}</div>
+  </section>`;
+}
+
+/**
+ * Repaints the panel in place, keeping where the reader had scrolled to.
+ *
+ * Without the scroll carry a reader who scrolled down the tape gets yanked
+ * back to the top every fifteen seconds, which makes the one live thing on
+ * the page the one thing you cannot read.
+ */
+function paintTape(): void {
+  const box = document.getElementById("tape");
+  if (!box) { stopTape(); return; }
+  const rows = box.querySelector<HTMLElement>(".tape-rows");
+  const at = rows?.scrollTop ?? 0;
+  box.outerHTML = tapePanel();
+  const after = document.getElementById("tape")?.querySelector<HTMLElement>(".tape-rows");
+  if (after && at > 0) after.scrollTop = at;
+}
+
+/**
+ * Opens the tape and keeps it fed.
+ *
+ * The first round reads a window of history so the table is not empty on
+ * arrival; every round after it asks only for what is new. Rounds are 15
+ * seconds, the same as the watch, because both are one narrow log read and
+ * a public endpoint is somebody else's machine.
+ */
+function startTape(slip: DoorSlip, picked: { source: TradeSource; sub: string }, m: ReturnType<typeof marketFacts>): void {
+  stopTape();
+  const everyMs = mode === "demo" ? 5_000 : 15_000;
+  // Fifteen minutes of history to open with. Long enough that a quiet token
+  // still shows something, short enough that a busy one opens with the last
+  // few minutes rather than a wall.
+  const back = Math.max(1, Math.round(900 * chain().blocksPerSecond));
+  const from = Math.max(0, slip.at.block - back);
+  const supply = slip.id.meta?.totalSupply ?? 0n;
+  tape = {
+    trades: [],
+    source: picked.source,
+    sub: picked.sub,
+    // The same quote asset the figures and the chart above use, so the tape
+    // does not price a trade in one coin while the panel prices the token in
+    // another.
+    quote: { symbol: m.quoteSymbol, decimals: m.quoteDecimals },
+    tokenDecimals: slip.id.meta?.decimals ?? 18,
+    supply,
+    from,
+    head: null,
+    boughtQuote: 0n,
+    soldQuote: 0n,
+    buys: 0,
+    sells: 0,
+    lastAt: Date.now(),
+    failing: null,
+    fresh: new Set(),
+    opening: true,
+  };
+  let cursor = from;
+
+  const tick = async () => {
+    const t = tape;
+    if (!t || !document.getElementById("tape")) { stopTape(); return; }
+    t.lastAt = Date.now();
+    try {
+      const rpc = rpcFor();
+      const head = await rpc.blockNumber();
+      if (head >= cursor) {
+        const round = await readTrades(rpc, t.source, {
+          fromBlock: cursor,
+          toBlock: head,
+          supply: t.supply,
+          tokenDecimals: t.tokenDecimals,
+          limit: 200,
+          chunkSize: mode === "demo" ? 100_000 : undefined,
+        });
+        // A refused walk comes back as a reason, not a throw, so it has to be
+        // checked here or a stalled tape reads as a quiet token.
+        if (round.unread) {
+          t.failing = plainReason(round.unread);
+        } else {
+          // Only now is the window behind us actually read.
+          cursor = head + 1;
+          t.failing = null;
+          t.head = head;
+          t.buys += round.buys;
+          t.sells += round.sells;
+          t.boughtQuote += round.boughtQuote;
+          t.soldQuote += round.soldQuote;
+          t.fresh = new Set(round.trades.map((x) => `${x.tx}:${x.logIndex}`));
+          t.trades = [...round.trades, ...t.trades].slice(0, 120);
+        }
+      } else {
+        t.head = head;
+        t.failing = null;
+        t.fresh = new Set();
+      }
+      t.opening = false;
+    } catch (error) {
+      // The cursor stays put. A failed round leaves its blocks unread and the
+      // next round has to cover them, or the tape quietly loses a window —
+      // which on a tape means losing exactly the sale worth seeing.
+      t.failing = plainReason(error instanceof Error ? error.message : String(error));
+      t.opening = false;
+    }
+    paintTape();
+  };
+
+  void tick();
+  taper = window.setInterval(() => void tick(), everyMs);
+  // Keeps "last look 4 s ago" true. Without it a stalled tape and a working
+  // one look exactly the same.
+  tapeClock = window.setInterval(() => {
+    if (!document.getElementById("tape")) { stopTape(); return; }
+    const note = document.querySelector<HTMLElement>("#tape .tape-note");
+    if (!note || !tape) return;
+    note.textContent = note.textContent!.replace(/Last look \d+ s ago\./, `Last look ${Math.max(0, Math.round((Date.now() - tape.lastAt) / 1000))} s ago.`);
+  }, 1_000);
+}
+
 /**
  * The same left rail for a Solana mint: different reads, same questions a
  * buyer asks first. There is no price line here — the chain has no log filter
@@ -2393,6 +2695,7 @@ function renderSplSlip(slip: SplSlip, opts: { stage?: Stage; source?: Source } =
       ]),
       actions: `<button class="ghost primary" id="act-share" type="button">Copy card</button><button class="ghost" id="act-link" type="button">Copy link</button><button class="ghost" id="act-json" type="button">JSON</button>`,
     })}
+    ${stage0 === "done" ? tapeNone("Solana has no log filter to walk, so there is no cheap way to read a mint's trades one window at a time. Every buy and sell would mean re-reading each token account, which is the read the public endpoints refuse. The figures above are the slot they were read at.") : ""}
     ${buyStrip(slip.chain.key, slip.subject, Boolean(slip.mint), verdictOf(slip.notes as DoorNote[], "done", coverage).kind)}
   </div>`;
 
@@ -2915,6 +3218,7 @@ function renderSlip(slip: DoorSlip, opts: { stage?: Stage; source?: Source } = {
   // painted in place when it lands. It walks a log, which is the one thing
   // here measured in seconds, and nothing above it should wait for that.
   const chart = chartPanel(seriesFor(slip.subject), m.quoteSymbol, m.quoteDecimals, m.spot);
+  const picked = tradeSourceFor(slip, m);
 
   out.innerHTML = `<div class="slip">
     ${doorBlock({
@@ -2939,12 +3243,16 @@ function renderSlip(slip: DoorSlip, opts: { stage?: Stage; source?: Source } = {
       ]),
       actions: `<button class="ghost primary" id="act-share" type="button">Copy card</button><button class="ghost" id="act-card" type="button">Preview</button><button class="ghost" id="act-link" type="button">Copy link</button><button class="ghost" id="act-json" type="button">JSON</button>`,
     })}
+    ${stage0 === "done" ? ("why" in picked ? tapeNone(picked.why) : `<section class="tape" id="tape"></section>`) : ""}
     <div class="card-wrap" id="card"></div>
     ${buyStrip(mode === "demo" ? "" : slip.chain.key, slip.subject, Boolean(slip.id.meta) && slip.open?.transferFunction !== false, verdictOf(slip.notes, "done", coverage).kind)}
   </div>`;
 
   // Start the swap walk once, on the complete slip, and repaint just the panel.
   if (stage0 === "done" && m.pool) void fillChart(slip, m);
+  // The tape opens itself. It is the answer to "why does this page not move",
+  // and a live panel behind a button is a panel nobody presses.
+  if (stage0 === "done" && !("why" in picked)) startTape(slip, picked, m);
 
   const cardSvg = () => {
     noteCard("door", slip.id.meta?.symbol ?? slip.subject);

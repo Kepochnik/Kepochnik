@@ -3581,7 +3581,7 @@
     const spanEnd = Math.min(head.number, options.launchBlock + spanBlocks);
     const spanHeader = spanEnd === head.number ? head : await rpc.getBlock(spanEnd);
     const secondsPerBlock = spanEnd > options.launchBlock ? (spanHeader.timestamp - launchHeader.timestamp) / (spanEnd - options.launchBlock) : 0;
-    const tape = await readTape(rpc, {
+    const tape2 = await readTape(rpc, {
       fromBlock: options.launchBlock,
       toBlock: spanEnd,
       address: launch.curve,
@@ -3590,7 +3590,7 @@
     });
     const creatorWallets = /* @__PURE__ */ new Set([launch.deployer.toLowerCase(), launch.creatorFeeRecipient.toLowerCase()]);
     const observed = [];
-    for (const log of tape.logs) {
+    for (const log of tape2.logs) {
       const secondsAfterLaunch = (log.blockNumber - options.launchBlock) * secondsPerBlock;
       if (secondsAfterLaunch > seconds) continue;
       const quoteIn = log.args.quoteIn;
@@ -3641,12 +3641,12 @@
   async function readDevReport(rpc, deployer, options) {
     const address = normalizeAddress(deployer);
     const factory = options.factory ?? PONS_V2_FACTORY;
-    const tape = await readTapeAdaptive(
+    const tape2 = await readTapeAdaptive(
       rpc,
       { fromBlock: options.fromBlock, toBlock: options.toBlock, address: factory, events: [FACTORY_EVENTS.TokenLaunched], topics: [null, null, addressTopic(address)] },
       options.chunking
     );
-    const all = tape.logs.slice().reverse();
+    const all = tape2.logs.slice().reverse();
     const limit = options.limit ?? 40;
     const detailed = all.slice(0, limit);
     const records = detailed.length ? await rpc.callBatch(
@@ -4913,7 +4913,7 @@
     let windowComplete = true;
     try {
       const { readTapeAdaptive: readTapeAdaptive2 } = await Promise.resolve().then(() => (init_tape(), tape_exports));
-      const tape = await readTapeAdaptive2(
+      const tape2 = await readTapeAdaptive2(
         rpc,
         { address: pool.address, events: [POOL_EVENTS.Mint], fromBlock: options.fromBlock, toBlock: block },
         // The budget is the whole point on a busy pool. USDC/WETH on Base makes
@@ -4929,8 +4929,8 @@
         // memecoin pool, which is quiet, to spare the handful that are not.
         { minChunk: 1, startChunk: options.chunkSize ?? 2e4, maxChunk: 1e5, maxRequests: options.maxRequests ?? 15, budgetMs: options.budgetMs ?? 2e4 }
       );
-      logs = tape.logs;
-      windowComplete = tape.complete !== false;
+      logs = tape2.logs;
+      windowComplete = tape2.complete !== false;
     } catch {
       return { ...base, unread: "the pool's mint history did not answer, so who holds the liquidity is not read" };
     }
@@ -5630,7 +5630,7 @@
   // src/bouncer/room.ts
   init_tape();
   async function readRoom(rpc, launch, fromBlock, toBlock, chunkSize, firstMinuteBlocks = 600) {
-    const tape = await readTapeAdaptive(
+    const tape2 = await readTapeAdaptive(
       rpc,
       { fromBlock, toBlock, address: launch.curve, events: [CURVE_EVENTS.CurveBuy, CURVE_EVENTS.CurveSell] },
       chunkSize ? { startChunk: chunkSize, maxChunk: chunkSize, minChunk: Math.min(1e3, chunkSize) } : { startChunk: 2e4 }
@@ -5644,7 +5644,7 @@
     let devQuoteIn = 0n;
     let firstMinuteQuoteIn = 0n;
     const first = [];
-    for (const log of tape.logs) {
+    for (const log of tape2.logs) {
       const isBuy = log.name === "CurveBuy";
       const who = String(isBuy ? log.args.buyer : log.args.seller).toLowerCase();
       let w = wallets2.get(who);
@@ -5841,12 +5841,12 @@
     const floor = Math.max(0, head - maxBlocks);
     while (to >= floor) {
       const from = Math.max(floor, to - chunk + 1);
-      const tape = await readTapeAdaptive(
+      const tape2 = await readTapeAdaptive(
         rpc,
         { fromBlock: from, toBlock: to, address: factory, events: [FACTORY_EVENTS.TokenLaunched], topics: [addressTopic(token)] },
         { startChunk: chunk, maxChunk: chunk, minChunk: Math.min(1e3, chunk) }
       );
-      if (tape.logs.length) return tape.logs[0].blockNumber;
+      if (tape2.logs.length) return tape2.logs[0].blockNumber;
       if (from === floor) break;
       to = from - 1;
       chunk = Math.min(chunk * 2, chunkSize ?? 4e5);
@@ -7480,13 +7480,13 @@
     const minShareBps = options.minShareBps ?? 25;
     const pools = new Set((options.pools ?? []).map((p) => p.toLowerCase()));
     const watched = new Set((options.watch ?? []).map((w) => w.toLowerCase()));
-    const tape = await readTapeAdaptive(
+    const tape2 = await readTapeAdaptive(
       rpc,
       { address: token.toLowerCase(), events: [ERC20_EVENTS.Transfer], fromBlock: options.fromBlock, toBlock: options.toBlock },
       { minChunk: 1, startChunk: options.chunkSize ?? 200, maxChunk: 5e3 }
     );
     const events = [];
-    for (const log of tape.logs) {
+    for (const log of tape2.logs) {
       const from = String(log.args.from).toLowerCase();
       const to = String(log.args.to).toLowerCase();
       const tokens = log.args.value;
@@ -7518,6 +7518,239 @@
     }
     events.sort((a, b) => a.block - b.block);
     return events;
+  }
+
+  // src/chain/priceSeries.ts
+  init_tape();
+  var V3_SWAP = {
+    name: "Swap",
+    inputs: [
+      { name: "sender", type: "address", indexed: true },
+      { name: "recipient", type: "address", indexed: true },
+      { name: "amount0", type: "int256", indexed: false },
+      { name: "amount1", type: "int256", indexed: false },
+      { name: "sqrtPriceX96", type: "uint160", indexed: false },
+      { name: "liquidity", type: "uint128", indexed: false },
+      { name: "tick", type: "int24", indexed: false }
+    ]
+  };
+  var V2_SWAP = {
+    name: "Swap",
+    inputs: [
+      { name: "sender", type: "address", indexed: true },
+      { name: "amount0In", type: "uint256", indexed: false },
+      { name: "amount1In", type: "uint256", indexed: false },
+      { name: "amount0Out", type: "uint256", indexed: false },
+      { name: "amount1Out", type: "uint256", indexed: false },
+      { name: "to", type: "address", indexed: true }
+    ]
+  };
+  var Q963 = 1n << 96n;
+  function priceFromSqrt(sqrt, tokenIsToken0, one) {
+    if (sqrt <= 0n) return null;
+    return tokenIsToken0 ? sqrt * sqrt * one / (Q963 * Q963) : Q963 * Q963 * one / (sqrt * sqrt);
+  }
+  async function readPriceSeries(rpc, pool, options) {
+    const base = {
+      points: [],
+      venue: pool.dex,
+      poolAddress: pool.address,
+      fromBlock: options.fromBlock,
+      toBlock: options.toBlock,
+      swaps: 0,
+      unread: null
+    };
+    const event = pool.kind === "v3" || pool.kind === "v4" ? V3_SWAP : pool.kind === "v2" || pool.kind === "solidly" ? V2_SWAP : null;
+    if (!event) return { ...base, unread: `a ${pool.kind} pool's swaps are not read here` };
+    const one = 10n ** BigInt(options.tokenDecimals);
+    let logs;
+    try {
+      const tape2 = await readTapeAdaptive(
+        rpc,
+        { address: pool.address.toLowerCase(), events: [event], fromBlock: options.fromBlock, toBlock: options.toBlock },
+        { minChunk: 1, startChunk: options.chunkSize ?? 2e3, maxChunk: 2e4 }
+      );
+      logs = tape2.logs;
+    } catch (error) {
+      return { ...base, unread: error instanceof Error ? error.message : String(error) };
+    }
+    const points = [];
+    for (const log of logs) {
+      if (event === V3_SWAP) {
+        const price = priceFromSqrt(log.args.sqrtPriceX96, pool.tokenIsToken0, one);
+        if (price === null || price === 0n) continue;
+        const amount = pool.tokenIsToken0 ? log.args.amount0 : log.args.amount1;
+        points.push({ block: log.blockNumber, price, sell: amount > 0n });
+        continue;
+      }
+      const a0In = log.args.amount0In;
+      const a1In = log.args.amount1In;
+      const a0Out = log.args.amount0Out;
+      const a1Out = log.args.amount1Out;
+      const tokenIn = pool.tokenIsToken0 ? a0In : a1In;
+      const tokenOut = pool.tokenIsToken0 ? a0Out : a1Out;
+      const quoteIn = pool.tokenIsToken0 ? a1In : a0In;
+      const quoteOut = pool.tokenIsToken0 ? a1Out : a0Out;
+      const tokens = tokenIn > 0n ? tokenIn : tokenOut;
+      const quote = quoteIn > 0n ? quoteIn : quoteOut;
+      if (tokens <= 0n || quote <= 0n) continue;
+      points.push({ block: log.blockNumber, price: quote * one / tokens, sell: tokenIn > 0n });
+    }
+    return { ...base, points: thin(points, options.maxPoints ?? 120), swaps: points.length };
+  }
+  function thin(points, max) {
+    if (points.length <= max || max < 2) return points;
+    const out2 = [];
+    const step = (points.length - 1) / (max - 1);
+    for (let i = 0; i < max; i++) out2.push(points[Math.round(i * step)]);
+    return out2;
+  }
+  function seriesRange(series) {
+    if (!series.points.length) return null;
+    let low = series.points[0].price;
+    let high = low;
+    for (const p of series.points) {
+      if (p.price < low) low = p.price;
+      if (p.price > high) high = p.price;
+    }
+    return { low, high };
+  }
+  function seriesChangeBps(series) {
+    if (series.points.length < 2) return null;
+    const first = series.points[0].price;
+    const last = series.points[series.points.length - 1].price;
+    if (first <= 0n) return null;
+    return Number((last - first) * 10000n / first);
+  }
+
+  // src/bouncer/trades.ts
+  init_tape();
+  async function readTrades(rpc, source, options) {
+    const base = {
+      trades: [],
+      source: source.kind,
+      venue: source.kind === "curve" ? source.venue : source.pool.dex,
+      address: (source.kind === "curve" ? source.curve : source.pool.address).toLowerCase(),
+      fromBlock: options.fromBlock,
+      toBlock: options.toBlock,
+      total: 0,
+      buys: 0,
+      sells: 0,
+      boughtQuote: 0n,
+      soldQuote: 0n,
+      unread: null
+    };
+    const event = source.kind === "curve" ? null : swapEvent(source.pool);
+    if (source.kind === "pool" && !event) return { ...base, unread: `a ${source.pool.kind} pool's swaps are not read here` };
+    let logs;
+    try {
+      const tape2 = await readTapeAdaptive(
+        rpc,
+        {
+          address: base.address,
+          events: source.kind === "curve" ? [CURVE_EVENTS.CurveBuy, CURVE_EVENTS.CurveSell] : [event],
+          fromBlock: options.fromBlock,
+          toBlock: options.toBlock
+        },
+        { minChunk: 1, startChunk: options.chunkSize ?? 2e3, maxChunk: 2e4 }
+      );
+      logs = tape2.logs;
+    } catch (error) {
+      return { ...base, unread: error instanceof Error ? error.message : String(error) };
+    }
+    const supply = options.supply ?? 0n;
+    const one = 10n ** BigInt(options.tokenDecimals ?? 18);
+    const trades = [];
+    for (const log of logs) {
+      const trade = source.kind === "curve" ? fromCurve(log) : fromSwap(log, source.pool, event === V3_SWAP);
+      if (!trade) continue;
+      trade.shareBps = supply > 0n ? Number(trade.tokens * 10000n / supply) : null;
+      trade.price = trade.quote > 0n ? trade.quote * one / trade.tokens : null;
+      trades.push(trade);
+    }
+    for (const t of trades) {
+      if (t.side === "buy") {
+        base.buys++;
+        base.boughtQuote += t.quote;
+      } else {
+        base.sells++;
+        base.soldQuote += t.quote;
+      }
+    }
+    trades.reverse();
+    return { ...base, trades: trades.slice(0, options.limit ?? 60), total: trades.length };
+  }
+  function swapEvent(pool) {
+    if (pool.kind === "v3" || pool.kind === "v4") return V3_SWAP;
+    if (pool.kind === "v2" || pool.kind === "solidly") return V2_SWAP;
+    return null;
+  }
+  function fromCurve(log) {
+    const buy = log.name === "CurveBuy";
+    const tokens = buy ? log.args.tokensOut : log.args.tokensIn;
+    const quote = buy ? log.args.quoteIn : log.args.quoteOut;
+    if (tokens <= 0n) return null;
+    return {
+      block: log.blockNumber,
+      logIndex: log.logIndex,
+      tx: log.transactionHash,
+      side: buy ? "buy" : "sell",
+      // The recipient is where the tokens actually landed, which on a curve is
+      // the buyer unless they deliberately sent them elsewhere. Both are named
+      // by the event; this is the one that says who holds them now.
+      wallet: String(buy ? log.args.recipient : log.args.seller).toLowerCase(),
+      walletExact: true,
+      tokens,
+      quote,
+      shareBps: null,
+      price: null,
+      feeQuote: log.args.fee,
+      taxQuote: log.args.tax
+    };
+  }
+  function fromSwap(log, pool, v3) {
+    if (v3) {
+      const tokenAmount = pool.tokenIsToken0 ? log.args.amount0 : log.args.amount1;
+      const quoteAmount = pool.tokenIsToken0 ? log.args.amount1 : log.args.amount0;
+      const tokens2 = tokenAmount < 0n ? -tokenAmount : tokenAmount;
+      const quote2 = quoteAmount < 0n ? -quoteAmount : quoteAmount;
+      if (tokens2 <= 0n || quote2 <= 0n) return null;
+      return {
+        block: log.blockNumber,
+        logIndex: log.logIndex,
+        tx: log.transactionHash,
+        side: tokenAmount > 0n ? "sell" : "buy",
+        wallet: String(log.args.recipient).toLowerCase(),
+        walletExact: false,
+        tokens: tokens2,
+        quote: quote2,
+        shareBps: null,
+        price: null
+      };
+    }
+    const a0In = log.args.amount0In;
+    const a1In = log.args.amount1In;
+    const a0Out = log.args.amount0Out;
+    const a1Out = log.args.amount1Out;
+    const tokenIn = pool.tokenIsToken0 ? a0In : a1In;
+    const tokenOut = pool.tokenIsToken0 ? a0Out : a1Out;
+    const quoteIn = pool.tokenIsToken0 ? a1In : a0In;
+    const quoteOut = pool.tokenIsToken0 ? a1Out : a0Out;
+    const tokens = tokenIn > 0n ? tokenIn : tokenOut;
+    const quote = quoteIn > 0n ? quoteIn : quoteOut;
+    if (tokens <= 0n || quote <= 0n) return null;
+    return {
+      block: log.blockNumber,
+      logIndex: log.logIndex,
+      tx: log.transactionHash,
+      side: tokenIn > 0n ? "sell" : "buy",
+      wallet: String(log.args.to).toLowerCase(),
+      walletExact: false,
+      tokens,
+      quote,
+      shareBps: null,
+      price: null
+    };
   }
 
   // src/bouncer/answers.ts
@@ -7864,109 +8097,6 @@
       v !== null ? { label: "Volume 24h", value: `$${Math.round(v).toLocaleString("en-US")}`, note: "the explorer's feed", source: "explorer" } : { label: "Volume 24h", value: null, note: "the explorer's feed", source: "explorer", why: o?.explorer ? "the explorer does not report volume for this token" : "the explorer could not be read" }
     );
     return { facts: facts2, pool, spot, quoteSymbol: quote.symbol, quoteDecimals: quote.decimals };
-  }
-
-  // src/chain/priceSeries.ts
-  init_tape();
-  var V3_SWAP = {
-    name: "Swap",
-    inputs: [
-      { name: "sender", type: "address", indexed: true },
-      { name: "recipient", type: "address", indexed: true },
-      { name: "amount0", type: "int256", indexed: false },
-      { name: "amount1", type: "int256", indexed: false },
-      { name: "sqrtPriceX96", type: "uint160", indexed: false },
-      { name: "liquidity", type: "uint128", indexed: false },
-      { name: "tick", type: "int24", indexed: false }
-    ]
-  };
-  var V2_SWAP = {
-    name: "Swap",
-    inputs: [
-      { name: "sender", type: "address", indexed: true },
-      { name: "amount0In", type: "uint256", indexed: false },
-      { name: "amount1In", type: "uint256", indexed: false },
-      { name: "amount0Out", type: "uint256", indexed: false },
-      { name: "amount1Out", type: "uint256", indexed: false },
-      { name: "to", type: "address", indexed: true }
-    ]
-  };
-  var Q963 = 1n << 96n;
-  function priceFromSqrt(sqrt, tokenIsToken0, one) {
-    if (sqrt <= 0n) return null;
-    return tokenIsToken0 ? sqrt * sqrt * one / (Q963 * Q963) : Q963 * Q963 * one / (sqrt * sqrt);
-  }
-  async function readPriceSeries(rpc, pool, options) {
-    const base = {
-      points: [],
-      venue: pool.dex,
-      poolAddress: pool.address,
-      fromBlock: options.fromBlock,
-      toBlock: options.toBlock,
-      swaps: 0,
-      unread: null
-    };
-    const event = pool.kind === "v3" || pool.kind === "v4" ? V3_SWAP : pool.kind === "v2" || pool.kind === "solidly" ? V2_SWAP : null;
-    if (!event) return { ...base, unread: `a ${pool.kind} pool's swaps are not read here` };
-    const one = 10n ** BigInt(options.tokenDecimals);
-    let logs;
-    try {
-      const tape = await readTapeAdaptive(
-        rpc,
-        { address: pool.address.toLowerCase(), events: [event], fromBlock: options.fromBlock, toBlock: options.toBlock },
-        { minChunk: 1, startChunk: options.chunkSize ?? 2e3, maxChunk: 2e4 }
-      );
-      logs = tape.logs;
-    } catch (error) {
-      return { ...base, unread: error instanceof Error ? error.message : String(error) };
-    }
-    const points = [];
-    for (const log of logs) {
-      if (event === V3_SWAP) {
-        const price = priceFromSqrt(log.args.sqrtPriceX96, pool.tokenIsToken0, one);
-        if (price === null || price === 0n) continue;
-        const amount = pool.tokenIsToken0 ? log.args.amount0 : log.args.amount1;
-        points.push({ block: log.blockNumber, price, sell: amount > 0n });
-        continue;
-      }
-      const a0In = log.args.amount0In;
-      const a1In = log.args.amount1In;
-      const a0Out = log.args.amount0Out;
-      const a1Out = log.args.amount1Out;
-      const tokenIn = pool.tokenIsToken0 ? a0In : a1In;
-      const tokenOut = pool.tokenIsToken0 ? a0Out : a1Out;
-      const quoteIn = pool.tokenIsToken0 ? a1In : a0In;
-      const quoteOut = pool.tokenIsToken0 ? a1Out : a0Out;
-      const tokens = tokenIn > 0n ? tokenIn : tokenOut;
-      const quote = quoteIn > 0n ? quoteIn : quoteOut;
-      if (tokens <= 0n || quote <= 0n) continue;
-      points.push({ block: log.blockNumber, price: quote * one / tokens, sell: tokenIn > 0n });
-    }
-    return { ...base, points: thin(points, options.maxPoints ?? 120), swaps: points.length };
-  }
-  function thin(points, max) {
-    if (points.length <= max || max < 2) return points;
-    const out2 = [];
-    const step = (points.length - 1) / (max - 1);
-    for (let i = 0; i < max; i++) out2.push(points[Math.round(i * step)]);
-    return out2;
-  }
-  function seriesRange(series) {
-    if (!series.points.length) return null;
-    let low = series.points[0].price;
-    let high = low;
-    for (const p of series.points) {
-      if (p.price < low) low = p.price;
-      if (p.price > high) high = p.price;
-    }
-    return { low, high };
-  }
-  function seriesChangeBps(series) {
-    if (series.points.length < 2) return null;
-    const first = series.points[0].price;
-    const last = series.points[series.points.length - 1].price;
-    if (first <= 0n) return null;
-    return Number((last - first) * 10000n / first);
   }
 
   // src/bouncer/watchPlan.ts
@@ -8418,6 +8548,7 @@
   function busy(text) {
     go.disabled = true;
     stopWatch();
+    stopTape();
     status.innerHTML = `<span class="dot"></span> ${esc2(text)} ${mode === "demo" ? "(demo chain, every address invented)" : `(${esc2(chain().name)}, ${chain().family === "solana" ? "read slot by slot" : "one block pinned"})`}`;
     out.innerHTML = "";
     if (ticker) {
@@ -9052,6 +9183,204 @@
       if (box) box.outerHTML = chartPanel(SERIES.get(key), m.quoteSymbol, m.quoteDecimals, m.spot);
     }
   }
+  var tape = null;
+  var taper = null;
+  var tapeClock = null;
+  function stopTape() {
+    if (taper) {
+      clearInterval(taper);
+      taper = null;
+    }
+    if (tapeClock) {
+      clearInterval(tapeClock);
+      tapeClock = null;
+    }
+    tape = null;
+  }
+  function tradeSourceFor(slip, m) {
+    const launch = slip.id.launch;
+    const phase = slip.rules?.phase ?? launch?.phase ?? null;
+    if (launch && phase === 0 /* NotGraduated */) {
+      return { source: { kind: "curve", curve: launch.curve, venue: slip.chain.launchpad ?? "the curve" }, sub: `${slip.chain.launchpad ?? "launchpad"} curve` };
+    }
+    if (m.pool) {
+      return { source: { kind: "pool", pool: m.pool }, sub: `${m.pool.dex}${m.pool.feeBps ? ` \xB7 ${(m.pool.feeBps / 100).toFixed(2)}% fee` : ""}` };
+    }
+    if (phase === 1 /* Swept */) {
+      return { why: "The curve is closed and the pool has not been created yet, so right now there is nothing trading to put on a tape." };
+    }
+    const skipped = slip.skipped.find((x) => /market|pool|liquid/i.test(x.section));
+    if (skipped) return { why: `The pool read did not come back, so there is no tape to open: ${plainReason(skipped.reason)}` };
+    if (slip.open && !slip.open.market) return { why: "The pool read did not come back, so BOUNCER cannot say where this token trades \u2014 which is not the same as saying it does not trade." };
+    return { why: "BOUNCER found no pool for this token on this chain, so there are no trades to read." };
+  }
+  function tapeBody() {
+    if (!tape) return "";
+    const t = tape;
+    const dec = t.quote.decimals;
+    const sym = t.quote.symbol;
+    const amount = (v) => `${formatUnits(v, dec, v > 0n && v < 10n ** BigInt(dec) ? 4 : 2)} ${sym}`;
+    const total = t.boughtQuote + t.soldQuote;
+    const inPct = total > 0n ? Number(t.boughtQuote * 1000n / total) / 10 : 50;
+    const net = t.boughtQuote - t.soldQuote;
+    const since = Math.max(0, Math.round((Date.now() - t.lastAt) / 1e3));
+    const flow = `<div class="flow">
+    <div class="flow-keys">
+      <span class="in">bought <b>${esc2(amount(t.boughtQuote))}</b></span>
+      <span class="out">sold <b>${esc2(amount(t.soldQuote))}</b></span>
+      <span class="net">${t.buys + t.sells === 0 ? "nothing yet" : `${net === 0n ? "level" : `net ${net > 0n ? "in" : "out"} ${esc2(amount(net > 0n ? net : -net))}`} \xB7 ${t.buys} buy${t.buys === 1 ? "" : "s"}, ${t.sells} sell${t.sells === 1 ? "" : "s"}`}</span>
+    </div>
+    <div class="flow-bar"><i class="in" style="width:${total > 0n ? inPct : 0}%"></i><i class="out" style="width:${total > 0n ? 100 - inPct : 0}%"></i></div>
+  </div>`;
+    const body = t.trades.length ? `<div class="tape-rows"><table class="trades">
+        <thead><tr><th>ago</th><th>side</th><th>${esc2(sym)}</th><th class="c-tok">tokens</th><th>of supply</th><th>${t.source.kind === "curve" ? "trader" : "to"}</th><th class="c-blk">block</th></tr></thead>
+        <tbody>${t.trades.map((x) => tradeRow(x, t)).join("")}</tbody>
+      </table></div>` : `<div class="tape-empty">${t.opening ? "<b>Reading the trades\u2026</b>the first round is walking the log" : `<b>Nothing traded in the window</b>no buy and no sell between block ${t.from} and ${t.head ?? "?"}`}</div>`;
+    return `${flow}${body}
+    <div class="tape-note">${esc2(
+      t.source.kind === "curve" ? `Read from the curve's own CurveBuy and CurveSell, which name the trader. Ages are worked out from this chain's block rate; the block beside each row is the exact figure. Window opens at block ${t.from}${t.head ? `, read up to ${t.head}` : ""}. Last look ${since} s ago.` : `Read from the pool's Swap log. The address is where the tokens went, which is a router at least as often as a person. Ages are worked out from this chain's block rate; the block beside each row is the exact figure. Window opens at block ${t.from}${t.head ? `, read up to ${t.head}` : ""}. Last look ${since} s ago.`
+    )}</div>`;
+  }
+  function tradeRow(x, t) {
+    const key = `${x.tx}:${x.logIndex}`;
+    const share = x.shareBps === null ? "\u2014" : `${(x.shareBps / 100).toFixed(x.shareBps >= 100 ? 2 : 3)}%`;
+    const big = x.shareBps !== null && x.shareBps >= 100;
+    return `<tr class="t-${x.side}${t.fresh.has(key) ? " fresh" : ""}">
+    <td class="t-ago">${esc2(agoOf(x.block, t.head))}</td>
+    <td><span class="t-side">${x.side}</span></td>
+    <td class="t-num">${esc2(formatUnits(x.quote, t.quote.decimals, x.quote < 10n ** BigInt(t.quote.decimals) ? 4 : 2))}</td>
+    <td class="t-num c-tok">${esc2(formatUnits(x.tokens, t.tokenDecimals, 0))}</td>
+    <td class="t-share${big ? " big" : ""}">${esc2(share)}</td>
+    <td>${walletCell(x)}</td>
+    <td class="t-w c-blk">${x.block}</td>
+  </tr>`;
+  }
+  function agoOf(block, head) {
+    if (head === null || head < block) return "\u2014";
+    const rate = chain().blocksPerSecond;
+    if (!rate || rate <= 0) return `\u2212${head - block}`;
+    return shortAge((head - block) / rate);
+  }
+  function walletCell(x) {
+    const explorer = chain().explorerUrl;
+    const short2 = shortAddress(x.wallet);
+    return explorer && mode === "live" ? `<a class="t-w" href="${esc2(explorer)}/address/${esc2(x.wallet)}" target="_blank" rel="noopener">${esc2(short2)}</a>` : `<span class="t-w">${esc2(short2)}</span>`;
+  }
+  function tapePanel() {
+    if (!tape) return "";
+    const stalled = Boolean(tape.failing);
+    return `<section class="tape" id="tape">
+    <div class="tape-head">
+      <h2>The tape</h2>
+      <span class="tape-src">${esc2(tape.sub)}</span>
+      <span class="tape-live${stalled ? " stalled" : ""}"><span class="dot"></span>${stalled ? "stalled" : "live"}</span>
+      <span class="tape-when">${tape.failing ? esc2(tape.failing) : tape.head === null ? "opening" : `block ${tape.head}`}</span>
+    </div>
+    ${tapeBody()}
+  </section>`;
+  }
+  function tapeNone(why) {
+    return `<section class="tape" id="tape">
+    <div class="tape-head"><h2>The tape</h2><span class="tape-live stalled"><span class="dot"></span>no tape</span></div>
+    <div class="tape-empty"><b>There are no trades to show</b>${esc2(why)}</div>
+  </section>`;
+  }
+  function paintTape() {
+    const box = document.getElementById("tape");
+    if (!box) {
+      stopTape();
+      return;
+    }
+    const rows = box.querySelector(".tape-rows");
+    const at = rows?.scrollTop ?? 0;
+    box.outerHTML = tapePanel();
+    const after2 = document.getElementById("tape")?.querySelector(".tape-rows");
+    if (after2 && at > 0) after2.scrollTop = at;
+  }
+  function startTape(slip, picked, m) {
+    stopTape();
+    const everyMs = mode === "demo" ? 5e3 : 15e3;
+    const back = Math.max(1, Math.round(900 * chain().blocksPerSecond));
+    const from = Math.max(0, slip.at.block - back);
+    const supply = slip.id.meta?.totalSupply ?? 0n;
+    tape = {
+      trades: [],
+      source: picked.source,
+      sub: picked.sub,
+      // The same quote asset the figures and the chart above use, so the tape
+      // does not price a trade in one coin while the panel prices the token in
+      // another.
+      quote: { symbol: m.quoteSymbol, decimals: m.quoteDecimals },
+      tokenDecimals: slip.id.meta?.decimals ?? 18,
+      supply,
+      from,
+      head: null,
+      boughtQuote: 0n,
+      soldQuote: 0n,
+      buys: 0,
+      sells: 0,
+      lastAt: Date.now(),
+      failing: null,
+      fresh: /* @__PURE__ */ new Set(),
+      opening: true
+    };
+    let cursor = from;
+    const tick = async () => {
+      const t = tape;
+      if (!t || !document.getElementById("tape")) {
+        stopTape();
+        return;
+      }
+      t.lastAt = Date.now();
+      try {
+        const rpc = rpcFor();
+        const head = await rpc.blockNumber();
+        if (head >= cursor) {
+          const round = await readTrades(rpc, t.source, {
+            fromBlock: cursor,
+            toBlock: head,
+            supply: t.supply,
+            tokenDecimals: t.tokenDecimals,
+            limit: 200,
+            chunkSize: mode === "demo" ? 1e5 : void 0
+          });
+          if (round.unread) {
+            t.failing = plainReason(round.unread);
+          } else {
+            cursor = head + 1;
+            t.failing = null;
+            t.head = head;
+            t.buys += round.buys;
+            t.sells += round.sells;
+            t.boughtQuote += round.boughtQuote;
+            t.soldQuote += round.soldQuote;
+            t.fresh = new Set(round.trades.map((x) => `${x.tx}:${x.logIndex}`));
+            t.trades = [...round.trades, ...t.trades].slice(0, 120);
+          }
+        } else {
+          t.head = head;
+          t.failing = null;
+          t.fresh = /* @__PURE__ */ new Set();
+        }
+        t.opening = false;
+      } catch (error) {
+        t.failing = plainReason(error instanceof Error ? error.message : String(error));
+        t.opening = false;
+      }
+      paintTape();
+    };
+    void tick();
+    taper = window.setInterval(() => void tick(), everyMs);
+    tapeClock = window.setInterval(() => {
+      if (!document.getElementById("tape")) {
+        stopTape();
+        return;
+      }
+      const note = document.querySelector("#tape .tape-note");
+      if (!note || !tape) return;
+      note.textContent = note.textContent.replace(/Last look \d+ s ago\./, `Last look ${Math.max(0, Math.round((Date.now() - tape.lastAt) / 1e3))} s ago.`);
+    }, 1e3);
+  }
   function splFacts(slip) {
     const m = slip.mint;
     const pool = slip.market?.pools.filter((x) => x.quoteReserve > 0n).sort((a, b) => b.quoteReserve > a.quoteReserve ? 1 : -1)[0] ?? null;
@@ -9415,6 +9744,7 @@
       ]),
       actions: `<button class="ghost primary" id="act-share" type="button">Copy card</button><button class="ghost" id="act-link" type="button">Copy link</button><button class="ghost" id="act-json" type="button">JSON</button>`
     })}
+    ${stage0 === "done" ? tapeNone("Solana has no log filter to walk, so there is no cheap way to read a mint's trades one window at a time. Every buy and sell would mean re-reading each token account, which is the read the public endpoints refuse. The figures above are the slot they were read at.") : ""}
     ${buyStrip(slip.chain.key, slip.subject, Boolean(slip.mint), verdictOf(slip.notes, "done", coverage).kind)}
   </div>`;
     $("act-share").addEventListener("click", async (event) => {
@@ -9732,6 +10062,7 @@
     const answers = doorAnswers(slip);
     const m = marketFacts(slip);
     const chart = chartPanel(seriesFor(slip.subject), m.quoteSymbol, m.quoteDecimals, m.spot);
+    const picked = tradeSourceFor(slip, m);
     out.innerHTML = `<div class="slip">
     ${doorBlock({
       sym,
@@ -9755,10 +10086,12 @@
       ]),
       actions: `<button class="ghost primary" id="act-share" type="button">Copy card</button><button class="ghost" id="act-card" type="button">Preview</button><button class="ghost" id="act-link" type="button">Copy link</button><button class="ghost" id="act-json" type="button">JSON</button>`
     })}
+    ${stage0 === "done" ? "why" in picked ? tapeNone(picked.why) : `<section class="tape" id="tape"></section>` : ""}
     <div class="card-wrap" id="card"></div>
     ${buyStrip(mode === "demo" ? "" : slip.chain.key, slip.subject, Boolean(slip.id.meta) && slip.open?.transferFunction !== false, verdictOf(slip.notes, "done", coverage).kind)}
   </div>`;
     if (stage0 === "done" && m.pool) void fillChart(slip, m);
+    if (stage0 === "done" && !("why" in picked)) startTape(slip, picked, m);
     const cardSvg = () => {
       noteCard("door", slip.id.meta?.symbol ?? slip.subject);
       return doorCard(slip, { repoUrl: REPO, ticker: MARK, mascotSvg: MASCOT_SVG_INNER, checkUrl: shareBase(), lead: summarySentence(slip) });
