@@ -693,6 +693,122 @@ await walk("an ordinary token can be watched, and the watch says what it cannot 
   const pressed = await page.$eval("#act-watch", (el) => el.getAttribute("aria-pressed"));
   if (pressed !== "false") throw new Error("stopping the watch left the button pressed");
 });
+await walk("the tape shows the trades and says where it read them", async (page) => {
+  // The one panel on the page that moves. A tape that shows an empty table on
+  // a token being traded, or a table on a token where the trades could not be
+  // read, is worse than no tape: both look exactly like "nobody is buying".
+  await page.goto(`${url}#/demo/0x00000000000000000000000000000000000f2e54`, { waitUntil: "load" });
+  await waitForDone(page);
+  await page.waitForFunction(() => document.querySelector("#tape .tape-note"), null, { timeout: 30_000 });
+  const rows = await page.$$eval("#tape table.trades tbody tr", (els) => els.length);
+  if (!rows) throw new Error("a demo token with buys and sells on its curve showed no trade at all");
+
+  // Both sides are on it, and each is coloured as itself.
+  const sides = await page.$$eval("#tape .t-side", (els) => [...new Set(els.map((e) => e.textContent.trim()))]);
+  if (!sides.includes("buy") || !sides.includes("sell")) throw new Error(`the tape shows only ${JSON.stringify(sides)}`);
+
+  // The heading says who the address on each row is, and it only says
+  // "trader" where the chain named one.
+  const head = await page.$$eval("#tape table.trades th", (els) => els.map((e) => e.textContent.trim()));
+  if (!head.includes("trader")) throw new Error(`a curve tape does not name the trader column: ${JSON.stringify(head)}`);
+
+  // Where the numbers came from, and which of them is worked out rather than read.
+  const note = await page.$eval("#tape .tape-note", (el) => el.textContent.replace(/\s+/g, " ").trim());
+  if (!/CurveBuy and CurveSell/.test(note)) throw new Error(`the tape does not say what it read: "${note}"`);
+  if (!/block rate/.test(note)) throw new Error(`the tape does not own up to the one derived column: "${note}"`);
+
+  // And the flow bar answers the five-second question above the table.
+  const flow = await page.$eval("#tape .flow-keys", (el) => el.textContent.replace(/\s+/g, " ").trim());
+  if (!/bought/.test(flow) || !/sold/.test(flow)) throw new Error(`the tape has no bought-against-sold line: "${flow}"`);
+});
+await walk("a token with no pool says so instead of reading a tape forever", async (page) => {
+  await page.goto(`${url}#/demo/0x00000000000000000000000000000000000bad01`, { waitUntil: "load" });
+  await waitForDone(page);
+  const tape = await page.$("#tape");
+  if (!tape) throw new Error("a token with no tape got no panel at all, which reads as nothing happening");
+  const text = await page.$eval("#tape", (el) => el.textContent.replace(/\s+/g, " ").trim());
+  if (/Reading the trades/.test(text)) throw new Error("the tape is still claiming to read something nobody started");
+  const chart = await page.$eval(".chart-no", (el) => el.textContent.replace(/\s+/g, " ").trim()).catch(() => "");
+  if (/Reading the pool/.test(chart)) throw new Error(`the price panel waits forever on a token with no pool: "${chart}"`);
+});
+await walk("the column of launches opens a token without losing itself", async (page) => {
+  // The column lives outside the report on purpose. Inside it, clicking one
+  // of its own rows would blink it away — which is the difference between a
+  // board you sit in front of and a list of links.
+  await page.goto(`${url}#/demo/0x00000000000000000000000000000000000f2e54`, { waitUntil: "load" });
+  await waitForDone(page);
+  await page.click("#feed-toggle");
+  await page.waitForFunction(() => document.querySelectorAll("#feed .fr").length > 0, null, { timeout: 30_000 });
+
+  const first = await page.$eval("#feed .fr .fr-sym", (el) => el.textContent.trim());
+  const note = await page.$eval("#feed .feed-note", (el) => el.textContent.replace(/\s+/g, " ").trim());
+  if (!/between block \d+ and \d+/.test(note)) throw new Error(`the column does not say which blocks it read: "${note}"`);
+
+  // Open a different launch from the column.
+  const rows = await page.$$("#feed .fr");
+  if (rows.length < 2) throw new Error("the demo chain has fewer launches than the column needs to be walked");
+  await rows[rows.length - 1].click();
+  await waitForDone(page);
+
+  const stillThere = await page.$$eval("#feed .fr", (els) => els.length);
+  if (!stillThere) throw new Error("clicking a row emptied the column it was clicked in");
+  const marked = await page.$eval("#feed .fr.on .fr-sym", (el) => el.textContent.trim()).catch(() => null);
+  if (!marked) throw new Error("the column does not mark the launch now open");
+  if (marked === first) throw new Error("clicking the last row marked the first one");
+  const shown = await page.$eval(".who2 .sym", (el) => el.textContent.trim());
+  if (shown !== marked) throw new Error(`the column marks ${marked} while the report is about ${shown}`);
+});
+await walk("one window governs the line and the tape, and they cannot disagree", async (page) => {
+  // The chart used to read a day while the tape read an hour, so the line and
+  // the bought-against-sold figure under it described different stretches of
+  // the same token with nothing saying so.
+  await page.goto(`${url}#/demo/0x00000000000000000000000000000000000000a7`, { waitUntil: "load" });
+  await waitForDone(page);
+  await page.waitForFunction(() => document.querySelector("#tape .tape-note"), null, { timeout: 30_000 });
+
+  const lit = () => page.evaluate(() => [...document.querySelectorAll(".frame.on")].map((b) => b.textContent.trim()));
+  const before = await lit();
+  if (new Set(before).size !== 1) throw new Error(`the two toggles disagree before anything was pressed: ${JSON.stringify(before)}`);
+
+  const opensAt = () => page.$eval("#tape .tape-note", (el) => Number(el.textContent.match(/Window opens at block (\d+)/)?.[1] ?? 0));
+  const narrow = await opensAt();
+  await page.click('#tape .frame[data-frame="24h"]');
+  await page.waitForFunction(() => document.querySelector("#tape .flow-win")?.textContent.includes("24 hours"), null, { timeout: 30_000 });
+
+  const after = await lit();
+  if (new Set(after).size !== 1 || after[0] !== "24h") throw new Error(`pressing one toggle left the other behind: ${JSON.stringify(after)}`);
+  const wide = await opensAt();
+  if (!(wide < narrow)) throw new Error(`a wider window did not open the tape any earlier: ${wide} vs ${narrow}`);
+});
+await walk("the column's filters narrow what is shown and say how many of how many", async (page) => {
+  await page.goto(`${url}#/demo/0x00000000000000000000000000000000000f2e54`, { waitUntil: "load" });
+  await waitForDone(page);
+  await page.click("#feed-toggle");
+  await page.waitForFunction(() => document.querySelectorAll("#feed .fr").length > 1, null, { timeout: 30_000 });
+
+  const all = await page.$$eval("#feed .fr", (els) => els.length);
+  await page.click('.fchip[data-filter="graduated"]');
+  await page.waitForTimeout(300);
+  const some = await page.$$eval("#feed .fr", (els) => els.length);
+  if (!(some < all)) throw new Error(`filtering to graduated launches changed nothing: ${some} of ${all}`);
+  if (!some) throw new Error("the demo chain has no graduated launch for the filter to keep");
+
+  // The note has to stop claiming to be the whole window the moment it is not.
+  const note = await page.$eval("#feed .feed-note", (el) => el.textContent.replace(/\s+/g, " ").trim());
+  if (!new RegExp(`${some} of ${all}`).test(note)) throw new Error(`a filtered column does not say how many of how many: "${note}"`);
+
+  // And every row it kept really is one.
+  const tags = await page.$$eval("#feed .fr", (els) => els.map((e) => e.textContent));
+  if (!tags.every((t) => /graduated/i.test(t))) throw new Error("the graduated filter kept a launch that has not graduated");
+});
+await walk("a chain with no launchpad says why there is no column", async (page) => {
+  await page.goto(`${url}#/t/0x532f27101965dd16442e59d40670faf5ebb142e4?chain=base`, { waitUntil: "load" });
+  await page.waitForTimeout(1_200);
+  await page.click("#feed-toggle");
+  await page.waitForFunction(() => document.querySelector("#feed .feed-empty"), null, { timeout: 15_000 });
+  const why = await page.$eval("#feed .feed-empty", (el) => el.textContent.replace(/\s+/g, " ").trim());
+  if (!/launchpad/i.test(why)) throw new Error(`the column on a chain with no launchpad does not say why: "${why}"`);
+});
 await walk("Solana says why it cannot watch instead of hiding the section", async (page) => {
   await page.goto(`${url}#/t/So11111111111111111111111111111111111111112?chain=solana`, { waitUntil: "load" });
   // No network here, so the slip will not finish. The point of the walk is

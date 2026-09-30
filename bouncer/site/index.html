@@ -134,6 +134,11 @@ header{position:sticky;top:0;z-index:40;background:rgba(10,11,13,.82);backdrop-f
 .ext{min-height:36px;display:flex;align-items:center;padding:0 11px;border:1px solid var(--line);border-radius:var(--r-sm);
   color:var(--muted);font:500 13px var(--sans)}
 .ext:hover{color:var(--text);border-color:var(--line-2);text-decoration:none}
+/* The toggle wears the same chip as the extension link, and says it is on by
+   lighting up rather than by changing its word — the word is the thing it
+   opens, and a button whose label moves is a button you have to re-read. */
+button.ext{background:none;cursor:pointer;font-family:var(--sans)}
+button.ext[aria-pressed="true"]{color:var(--brand-2);border-color:var(--brand);background:rgba(232,184,75,.1)}
 
 .wrap{max-width:var(--max);margin:0 auto;padding:0 20px 64px}
 
@@ -445,6 +450,88 @@ table.buys tr:first-child td{border-top:0}
 .whylist{margin:12px 0 0;padding-left:20px;color:var(--muted);font-size:13px;display:grid;gap:7px}
 .whylist code{color:var(--dimmer);font-size:11.5px;margin-left:6px}
 
+/* ---------------------------------------------------------------- feed */
+/* The launches that just happened, as a column you sit in front of rather
+   than a page you visit. It lives OUTSIDE #out, so clicking through token
+   after token never takes it off the screen — which is the whole difference
+   between a board and a list of links. */
+.deck{display:grid;gap:16px;align-items:start}
+.deck.two{grid-template-columns:318px minmax(0,1fr)}
+.wrap.wide{max-width:1380px}
+.feed{position:sticky;top:14px;max-height:calc(100vh - 28px);display:flex;flex-direction:column;
+  border:1px solid var(--line);border-radius:var(--r-lg);background:var(--surface);
+  box-shadow:var(--shadow),var(--lip);overflow:hidden}
+.feed[hidden]{display:none}
+.feed-head{display:flex;align-items:center;gap:8px;padding:12px 14px;border-bottom:1px solid var(--line);
+  background:var(--surface-2)}
+.feed-head h2{margin:0;font:600 10px var(--sans);letter-spacing:.1em;text-transform:uppercase;color:var(--dim)}
+.feed-head .tape-live{margin-left:auto}
+.feed-filters{display:flex;gap:4px;flex-wrap:wrap;padding:8px 14px;border-bottom:1px solid var(--line)}
+.fchip{min-height:24px;padding:0 8px;background:var(--surface-3);border:1px solid var(--line);border-radius:999px;
+  cursor:pointer;color:var(--dim);font:500 11px var(--sans);transition:color .12s ease,background .12s ease,border-color .12s ease}
+.fchip:hover{color:var(--text);border-color:var(--line-2)}
+.fchip.on{color:var(--brand-ink);background:var(--brand);border-color:transparent;font-weight:600}
+.fchip:focus-visible{outline:none;box-shadow:var(--ring)}
+.feed-rows{flex:1;overflow-y:auto;overscroll-behavior:contain}
+.fr{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:2px 10px;align-items:baseline;width:100%;
+  min-height:46px;padding:9px 14px;text-align:left;cursor:pointer;color:inherit;font:inherit;
+  background:none;border:0;border-top:1px solid var(--line)}
+.feed-rows>.fr:first-child{border-top:0}
+.fr:hover{background:var(--surface-2)}
+.fr:focus-visible{outline:none;box-shadow:var(--ring);position:relative;z-index:1}
+.fr.on{background:var(--surface-3);box-shadow:inset 2px 0 0 var(--brand)}
+.fr.fresh{animation:land .9s ease-out}
+.fr-sym{font:600 13px var(--sans);color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.fr-age{font:500 11px var(--mono);color:var(--dimmer);white-space:nowrap;justify-self:end}
+.fr-name{font-size:11.5px;color:var(--dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.fr-tags{display:flex;gap:4px;justify-self:end}
+.ftag{font:600 9px var(--sans);letter-spacing:.06em;text-transform:uppercase;padding:2px 5px;border-radius:4px;
+  border:1px solid var(--line-2);color:var(--dim);white-space:nowrap}
+.ftag.grad{color:var(--ok);border-color:var(--ok-edge);background:var(--ok-bg)}
+.ftag.swept{color:var(--warn);border-color:var(--warn-edge);background:var(--warn-bg)}
+.ftag.serial{color:var(--warn);border-color:var(--warn-edge);background:var(--warn-bg)}
+.feed-when{font:500 11px var(--mono);color:var(--dimmer);white-space:nowrap}
+.feed-empty{padding:22px 14px;color:var(--dim);font-size:12.5px;line-height:1.55}
+.feed-empty b{display:block;color:var(--muted);font-weight:550;margin-bottom:4px}
+.feed-note{padding:9px 14px;border-top:1px solid var(--line);background:var(--surface-2);
+  color:var(--dimmer);font-size:11px;line-height:1.5}
+/* The right pane before anything is picked. */
+.pickone{border:1px dashed var(--line-2);border-radius:var(--r-lg);padding:44px 26px;text-align:center;color:var(--dim)}
+.pickone b{display:block;color:var(--text);font:550 17px var(--sans);margin-bottom:6px}
+.pickone p{margin:0 auto;max-width:40ch;font-size:13.5px;line-height:1.6}
+/* Under the two-pane width the rail stops being a rail: it goes to the top of
+   the page with a bounded height, because a 320px column beside a slip that
+   needs 600 is two things both too narrow to read. */
+@media (max-width:1060px){
+  .deck.two{grid-template-columns:minmax(0,1fr)}
+  /* Below the two-pane width the column goes UNDER the answer, not over it.
+     Above it, a 330px list pushed the verdict a thousand pixels down an 844px
+     phone — the answer below the fold on the one screen where being above it
+     matters most. You arrived here by tapping a launch; the list can wait. */
+  .feed{position:static;max-height:330px;order:2}
+  #out{order:1}
+  .wrap.wide{max-width:var(--max)}
+}
+
+/* --------------------------------------------------------------- window */
+/* One control, drawn twice: on the price line and on the tape. They read the
+   same stretch of the token, so they must not be able to disagree — which is
+   what two separate toggles would eventually let them do. */
+.frames{display:inline-flex;gap:1px;padding:2px;background:var(--surface-3);border-radius:var(--r-sm);
+  border:1px solid var(--line)}
+.frame{min-height:22px;padding:0 8px;background:none;border:0;border-radius:4px;cursor:pointer;
+  color:var(--dimmer);font:600 10.5px var(--mono);letter-spacing:.02em;
+  transition:color .12s ease,background .12s ease}
+.frame:hover{color:var(--muted);background:rgba(255,255,255,.04)}
+.frame.on{color:var(--brand-ink);background:var(--brand)}
+.frame:focus-visible{outline:none;box-shadow:var(--ring)}
+/* Only the toggle takes the free space. Two items with an auto margin split
+   it between them, which put the toggle somewhere in the middle depending on
+   how wide the percentage happened to be. */
+.chart-head{align-items:center}
+.chart-head .frames{margin-left:auto}
+.chart-head .frames~.move{margin-left:8px}
+
 /* ---------------------------------------------------------------- tape */
 /* Everything above is a judgement that was true at one block. This is the
    only part of the page that moves, so it has to look like it: a pulse that
@@ -470,6 +557,7 @@ table.buys tr:first-child td{border-top:0}
 .flow-keys{display:flex;align-items:baseline;gap:6px 16px;flex-wrap:wrap;font-size:12.5px;color:var(--dim)}
 .flow-keys b{font:550 13.5px var(--mono);font-variant-numeric:var(--tnum)}
 .flow-keys .in b{color:var(--ok)} .flow-keys .out b{color:var(--stop)}
+.flow-keys .flow-win{color:var(--dimmer);font-size:11.5px}
 .flow-keys .net{margin-left:auto;color:var(--dimmer)}
 .flow-bar{display:flex;height:6px;border-radius:999px;overflow:hidden;background:var(--surface-3)}
 .flow-bar i{display:block;transition:width .4s ease}
@@ -645,6 +733,22 @@ section.sec .kv{margin-top:12px}
 .wcl{color:var(--muted)}
 .wcr{color:var(--dimmer);font-size:12px;grid-column:1/-1}
 
+/* Four more the redesign dropped. Nothing noticed because no route that was
+   being measured opened a launch whose door tax is still running, which is
+   the only page that draws three of them. The column of launches opens
+   exactly that, which is how they turned up. */
+.bar{height:6px;border-radius:999px;background:var(--surface-3);overflow:hidden;margin:12px 0 4px}
+.bar>i{display:block;height:100%;background:var(--warn);border-radius:999px;transition:width .5s linear}
+table.buys tr.exempt td{color:var(--dimmer)}
+table.buys tr.exempt td:first-child{box-shadow:inset 2px 0 0 var(--line-3)}
+.wallet-row{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:12px}
+.wallet-row input{flex:1;min-width:210px;min-height:38px;padding:0 12px;background:var(--bg);color:var(--text);
+  border:1px solid var(--line-2);border-radius:var(--r-sm);font:400 12.5px var(--mono)}
+.wallet-row input::placeholder{color:var(--dimmer);font-family:var(--sans)}
+.wallet-row input:focus{border-color:rgba(232,184,75,.5);box-shadow:var(--ring);outline:none}
+.wallet-row .ghost{min-height:38px}
+@media (max-width:720px){.wallet-row input,.wallet-row .ghost{min-height:44px}}
+
 /* three that had rules under the old design and lost them */
 .qblurb{margin-top:12px;color:var(--muted);font-size:13.5px;line-height:1.6}
 .calc-row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
@@ -654,6 +758,12 @@ section.sec .kv{margin-top:12px}
 /* ---------------------------------------------------------------- phone */
 @media (max-width:720px){
   .wrap{padding:0 16px 48px}
+  /* A Chrome extension cannot be installed on a phone, and the link to it was
+     the 70 pixels pushing the whole page sideways. The column of launches
+     stays: it is the one control in the bar a phone can use. */
+  #ext-link{display:none}
+  /* Every control on a phone gets a thumb's worth of height. */
+  .frame,.fchip{min-height:44px;padding:0 12px}
   .hbar{padding:10px 16px}
   .hero{padding:36px 0 22px}
   .hero h1{font-size:30px}
@@ -734,6 +844,7 @@ section.sec .kv{margin-top:12px}
         <option value="arc-testnet">Arc Testnet</option>
         <option value="arc">Arc</option>
       </select>
+      <button class="ext" id="feed-toggle" type="button" aria-pressed="false" title="A live column of the launches that just happened">Launches</button>
       <a class="ext" id="ext-link" href="https://github.com/Kepochnik/bouncer#browser-extension" target="_blank" rel="noopener" title="BOUNCER for Chrome: the same check in a popup on any token page">Chrome</a>
     </div>
   </div>
@@ -770,7 +881,10 @@ section.sec .kv{margin-top:12px}
     <div id="seen"></div>
   </section>
 
-  <div id="out"></div>
+  <div class="deck" id="deck">
+    <aside class="feed" id="feed" hidden aria-label="New launches"></aside>
+    <div id="out"></div>
+  </div>
 
   <footer>
     <span><b>No key · no signer · no transaction path.</b><br>Every number is read from the chain — pinned to one block on EVM chains, and on Solana across the slots the reading spans, which the slip states. Nothing is scored, predicted or advised.</span>

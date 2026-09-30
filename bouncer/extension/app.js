@@ -2595,7 +2595,7 @@
     offset += 32;
     const mint = base58Encode(d.slice(offset, offset + 32));
     offset += 32;
-    const readString = () => {
+    const readString2 = () => {
       if (offset + 4 > d.length) return "";
       const length = view2.getUint32(offset, true);
       offset += 4;
@@ -2604,9 +2604,9 @@
       offset += length;
       return text.replace(/\0+$/, "");
     };
-    const name = readString();
-    const symbol = readString();
-    const uri = readString();
+    const name = readString2();
+    const symbol = readString2();
+    const uri = readString2();
     if (offset + 2 > d.length) return null;
     const sellerFeeBasisPoints = view2.getUint16(offset, true);
     offset += 2;
@@ -6148,8 +6148,8 @@
     if (o.liquidity) {
       const l = o.liquidity;
       const held = l.holders.filter((h2) => h2.kind === "wallet" || h2.kind === "contract");
-      const shown = held.slice(0, 3);
-      const heldBy = held.length ? `Held by ${shown.map((h2) => h2.name ? `${h2.name} (${shortAddress(h2.address)})` : shortAddress(h2.address)).join(", ")}${held.length > 3 ? ` and ${held.length - 3} more` : ""}.${shown.some((h2) => h2.namedByExplorer) ? " Those names come from the explorer's verified source, not from anything BOUNCER checked: a contract called a locker can still be told to release." : ""}` : "";
+      const shown2 = held.slice(0, 3);
+      const heldBy = held.length ? `Held by ${shown2.map((h2) => h2.name ? `${h2.name} (${shortAddress(h2.address)})` : shortAddress(h2.address)).join(", ")}${held.length > 3 ? ` and ${held.length - 3} more` : ""}.${shown2.some((h2) => h2.namedByExplorer) ? " Those names come from the explorer's verified source, not from anything BOUNCER checked: a contract called a locker can still be told to release." : ""}` : "";
       const sliver = l.shareOfLiquidityBps < 1e3;
       const size = sliver ? ` That pool holds ${pct2(l.shareOfLiquidityBps)} of this token's liquidity, so it is not where a sale of any size would go.` : "";
       if (l.partial) {
@@ -6393,7 +6393,7 @@
     const v = cardVerdict(model.notes, model.coverage);
     const cov = model.coverage;
     const rank = { stop: 0, watch: 1, info: 2 };
-    const shown = [...model.notes].sort((a, b) => rank[a.level] - rank[b.level]).slice(0, 3);
+    const shown2 = [...model.notes].sort((a, b) => rank[a.level] - rank[b.level]).slice(0, 3);
     const levelColor = (l) => l === "stop" ? c.stop : l === "watch" ? c.watch : c.info;
     const ROWS = { bar: 44, subject: 104, verdict: 288, head: 320, facts: 408, foot: 560 };
     const L = 40;
@@ -6409,8 +6409,8 @@
       <text x="${x + 16}" y="${ROWS.head + 44}" font-size="${long ? 24 : 32}" font-weight="700" fill="${f.bad ? c.stop : c.text}">${esc(f.value)}</text>
       <text x="${x + 16}" y="${ROWS.head + 70}" font-size="13" fill="${c.dim}">${esc(clip(f.note ?? "", Math.floor(colW / 7.6)))}</text>`;
     }).join("");
-    const rowH = Math.floor((ROWS.foot - ROWS.facts) / Math.max(1, shown.length));
-    const noteRows = shown.map((n, i) => {
+    const rowH = Math.floor((ROWS.foot - ROWS.facts) / Math.max(1, shown2.length));
+    const noteRows = shown2.map((n, i) => {
       const top = ROWS.facts + i * rowH;
       const mid = top + rowH / 2 + 6;
       return `${i ? line(top) : ""}
@@ -7753,6 +7753,126 @@
     };
   }
 
+  // src/bouncer/feed.ts
+  init_abi();
+  init_tape();
+  function feedBlocker(chain2) {
+    return featureBlocker(chain2, "board");
+  }
+  async function readFeed(rpc, options) {
+    const factory = options.factory ?? PONS_V2_FACTORY;
+    const limit = options.limit ?? 30;
+    const slice = Math.max(1, options.sliceSize ?? 2e3);
+    const maxSlices = options.maxSlices ?? 12;
+    const head = { block: options.toBlock, timestamp: options.headTimestamp };
+    const launches = [];
+    const graduated = /* @__PURE__ */ new Set();
+    const swept = /* @__PURE__ */ new Set();
+    const byDeployer = /* @__PURE__ */ new Map();
+    let chunks = 0;
+    let readFrom = options.toBlock + 1;
+    let slices = 0;
+    for (let to = options.toBlock; to >= options.fromBlock && launches.length < limit && slices < maxSlices; to -= slice) {
+      const from = Math.max(options.fromBlock, to - slice + 1);
+      const tape2 = await readTapeAdaptive(
+        rpc,
+        {
+          fromBlock: from,
+          toBlock: to,
+          address: factory,
+          events: [FACTORY_EVENTS.TokenLaunched, FACTORY_EVENTS.LaunchSwept, FACTORY_EVENTS.PoolGraduated, FACTORY_EVENTS.PoolGraduatedLegacy]
+        },
+        { startChunk: slice, maxChunk: slice }
+      );
+      chunks += tape2.chunks;
+      slices++;
+      readFrom = from;
+      const here = [];
+      for (const log of tape2.logs) {
+        const token = String(log.args.token).toLowerCase();
+        if (log.name === "TokenLaunched") {
+          const deployer = String(log.args.deployer).toLowerCase();
+          byDeployer.set(deployer, (byDeployer.get(deployer) ?? 0) + 1);
+          here.push({
+            token,
+            curve: String(log.args.curve).toLowerCase(),
+            deployer,
+            block: log.blockNumber,
+            tx: log.transactionHash,
+            timestamp: null,
+            ageSeconds: null,
+            symbol: null,
+            name: null,
+            pairToken: String(log.args.pairToken).toLowerCase(),
+            graduationThreshold: log.args.graduationThreshold,
+            deployerLaunches: 1,
+            graduated: false,
+            swept: false
+          });
+        } else if (log.name === "PoolGraduated") {
+          graduated.add(token);
+        } else if (log.name === "LaunchSwept") {
+          swept.add(token);
+        }
+      }
+      here.reverse();
+      launches.push(...here);
+    }
+    const rows = launches.slice(0, limit);
+    for (const row of rows) {
+      row.graduated = graduated.has(row.token);
+      row.swept = swept.has(row.token);
+      row.deployerLaunches = byDeployer.get(row.deployer) ?? 1;
+    }
+    await stampTimes(rpc, rows, head.timestamp);
+    const namesUnread = options.skipNames ? rows.map((r) => r.token) : await stampNames(rpc, rows, head.block);
+    const unread = readFrom > options.fromBlock ? { fromBlock: options.fromBlock, toBlock: readFrom - 1 } : null;
+    return { rows, window: { fromBlock: readFrom, toBlock: options.toBlock }, unread, head, chunks, namesUnread };
+  }
+  async function stampTimes(rpc, rows, headTimestamp) {
+    const blocks = [...new Set(rows.map((r) => r.block))];
+    if (blocks.length === 0) return;
+    const answers = await rpc.sendBatchSettled(blocks.map((b) => ({ method: "eth_getBlockByNumber", params: [`0x${b.toString(16)}`, false] })));
+    const times = /* @__PURE__ */ new Map();
+    answers.forEach((answer, i) => {
+      if (answer instanceof RpcError || !answer) return;
+      const raw = answer.timestamp;
+      if (typeof raw !== "string") return;
+      times.set(blocks[i], Number(BigInt(raw)));
+    });
+    for (const row of rows) {
+      const t = times.get(row.block);
+      if (t === void 0) continue;
+      row.timestamp = t;
+      row.ageSeconds = Math.max(0, headTimestamp - t);
+    }
+  }
+  async function stampNames(rpc, rows, blockNumber) {
+    if (rows.length === 0) return [];
+    const calls = rows.flatMap((row) => [
+      { to: row.token, data: encodeCall(ERC20_FUNCTIONS.symbol, []) },
+      { to: row.token, data: encodeCall(ERC20_FUNCTIONS.name, []) }
+    ]);
+    const answers = await rpc.callBatchSettled(calls, blockNumber);
+    const unread = [];
+    rows.forEach((row, i) => {
+      row.symbol = readString(answers[i * 2]);
+      row.name = readString(answers[i * 2 + 1]);
+      if (row.symbol === null && row.name === null) unread.push(row.token);
+    });
+    return unread;
+  }
+  function readString(answer) {
+    if (answer === void 0 || answer instanceof RpcError) return null;
+    try {
+      const [value] = decodeOutputs(ERC20_FUNCTIONS.symbol, answer);
+      const trimmed = value.trim();
+      return trimmed === "" ? null : trimmed;
+    } catch {
+      return null;
+    }
+  }
+
   // src/bouncer/answers.ts
   function plain(topic, value, tone, detail, notes, figure = null) {
     return { topic, question: SHORT_QUESTION[topic], value, tone, figure, chips: [], bar: null, detail, notes };
@@ -8269,6 +8389,9 @@
   var sourceText = $("source-text");
   var settingsToggle = $("settings-toggle");
   var toast = $("toast");
+  var deck = $("deck");
+  var feedBox = $("feed");
+  var feedToggle = $("feed-toggle");
   var mode = "demo";
   var view = "door";
   var ticker = null;
@@ -8300,6 +8423,7 @@
     sourceText.innerHTML = SANDBOXED ? `This preview on claude.ai cannot reach the internet, so nothing here can be read. Use the <a href="${HOSTED}">hosted site</a>, the Chrome extension or the CLI.` : chainOrNull() ? `Reading ${esc2(chainOrNull().name)} from your browser${chainOrNull().family === "solana" ? ", slot by slot" : " at one block"}. Nothing is cached.` : "Paste an address and BOUNCER finds the chain it lives on. Read from your browser at one block, nothing cached.";
     renderChips();
     if (!silent) storage("bouncer.mode", next);
+    refreshFeed();
   }
   function setView(next) {
     view = next;
@@ -8549,6 +8673,7 @@
     go.disabled = true;
     stopWatch();
     stopTape();
+    shown = null;
     status.innerHTML = `<span class="dot"></span> ${esc2(text)} ${mode === "demo" ? "(demo chain, every address invented)" : `(${esc2(chain().name)}, ${chain().family === "solana" ? "read slot by slot" : "one block pinned"})`}`;
     out.innerHTML = "";
     if (ticker) {
@@ -9071,9 +9196,9 @@
     const quiet = d.changes.filter((c) => c.level === "info");
     const tag = (c) => c.kind.startsWith("new:") ? "NEW" : c.kind.startsWith("gone:") ? "GONE" : c.kind === "verdict" ? "VERDICT" : "CHANGED";
     const row = (c) => `<li><span class="chglvl ${c.level}">${tag(c)}</span><span>${esc2(c.text)}</span></li>`;
-    const shown = [...loud, ...quiet.slice(0, Math.max(0, 4 - loud.length))];
-    const rest = d.changes.length - shown.length;
-    const rows = shown.map(row).join("") + (rest ? `<li><details><summary>${rest} more change${rest === 1 ? "" : "s"}, none of them urgent</summary><ul class="chgrows">${quiet.slice(shown.length - loud.length).map(row).join("")}</ul></details></li>` : "");
+    const shown2 = [...loud, ...quiet.slice(0, Math.max(0, 4 - loud.length))];
+    const rest = d.changes.length - shown2.length;
+    const rows = shown2.map(row).join("") + (rest ? `<li><details><summary>${rest} more change${rest === 1 ? "" : "s"}, none of them urgent</summary><ul class="chgrows">${quiet.slice(shown2.length - loud.length).map(row).join("")}</ul></details></li>` : "");
     return `<section class="band chg ${worst}" data-changes="${d.changes.length}">
     <span class="bandword">${d.changes.length} change${d.changes.length === 1 ? "" : "s"}</span>
     <div class="bandtext">
@@ -9160,13 +9285,17 @@
   <div class="vfoot"><div class="vacts">${opts.actions}</div></div>`;
   }
   var SERIES = /* @__PURE__ */ new Map();
+  function seriesKey(address) {
+    return `${address.toLowerCase()}@${frame}`;
+  }
   function seriesFor(address) {
-    return SERIES.get(address.toLowerCase()) ?? null;
+    return SERIES.get(seriesKey(address)) ?? null;
   }
   async function fillChart(slip, m) {
-    const key = slip.subject.toLowerCase();
+    const key = seriesKey(slip.subject);
     if (!m.pool || SERIES.has(key)) return;
-    const back = Math.round(24 * 3600 * chain().blocksPerSecond);
+    const back = frameBlocks();
+    const asked = frame;
     try {
       const series = await readPriceSeries(rpcFor(true), m.pool, {
         fromBlock: Math.max(0, slip.at.block - back),
@@ -9175,13 +9304,223 @@
         chunkSize: mode === "demo" ? 1e5 : void 0
       });
       SERIES.set(key, series);
-      const box = document.getElementById("chart");
+      const box = asked === frame ? document.getElementById("chart") : null;
       if (box) box.outerHTML = chartPanel(series, m.quoteSymbol, m.quoteDecimals, m.spot);
     } catch (error) {
       SERIES.set(key, { points: [], venue: m.pool.dex, poolAddress: m.pool.address, fromBlock: 0, toBlock: 0, swaps: 0, unread: plainReason(error instanceof Error ? error.message : String(error)) });
-      const box = document.getElementById("chart");
+      const box = asked === frame ? document.getElementById("chart") : null;
       if (box) box.outerHTML = chartPanel(SERIES.get(key), m.quoteSymbol, m.quoteDecimals, m.spot);
     }
+  }
+  var FRAMES = ["5m", "1h", "6h", "24h"];
+  var FRAME_SECONDS = { "5m": 300, "1h": 3600, "6h": 21600, "24h": 86400 };
+  var FRAME_WORD = { "5m": "the last 5 minutes", "1h": "the last hour", "6h": "the last 6 hours", "24h": "the last 24 hours" };
+  var frame = FRAMES.includes(storage("bouncer.frame")) ? storage("bouncer.frame") : "1h";
+  var shown = null;
+  function setFrame(next) {
+    if (next === frame) return;
+    frame = next;
+    storage("bouncer.frame", next);
+    for (const box of document.querySelectorAll(".frame")) {
+      const on = box.dataset.frame === next;
+      box.classList.toggle("on", on);
+      box.setAttribute("aria-pressed", String(on));
+    }
+    if (!shown) return;
+    const { slip, m, picked } = shown;
+    if (m.pool) {
+      const box = document.getElementById("chart");
+      if (box) box.outerHTML = chartPanel(seriesFor(slip.subject), m.quoteSymbol, m.quoteDecimals, m.spot, true);
+      void fillChart(slip, m);
+    }
+    if (!("why" in picked)) startTape(slip, picked, m);
+  }
+  function frameBlocks() {
+    return Math.max(1, Math.round(FRAME_SECONDS[frame] * chain().blocksPerSecond));
+  }
+  function frameTabs() {
+    return `<div class="frames" role="group" aria-label="Window">${FRAMES.map(
+      (f) => `<button class="frame${f === frame ? " on" : ""}" type="button" data-frame="${f}" aria-pressed="${f === frame}">${f}</button>`
+    ).join("")}</div>`;
+  }
+  var FEED_FILTERS = [
+    { key: "all", label: "all", hint: "every launch in the window" },
+    { key: "new", label: "fresh", hint: "launched in the last five minutes" },
+    { key: "graduated", label: "graduated", hint: "the curve filled and the pool exists" },
+    { key: "serial", label: "serial dev", hint: "the deployer launched more than one in this window" }
+  ];
+  var feedFilter = "all";
+  function keepRow(r) {
+    switch (feedFilter) {
+      case "graduated":
+        return r.graduated;
+      case "serial":
+        return r.deployerLaunches > 1;
+      case "new":
+        return r.ageSeconds !== null && r.ageSeconds <= 300;
+      default:
+        return true;
+    }
+  }
+  var feedOn = false;
+  var feedState = null;
+  var feedTimer = null;
+  var feedClock = null;
+  function stopFeed() {
+    if (feedTimer) {
+      clearInterval(feedTimer);
+      feedTimer = null;
+    }
+    if (feedClock) {
+      clearInterval(feedClock);
+      feedClock = null;
+    }
+    feedState = null;
+  }
+  function openToken() {
+    const path = location.hash.replace(/^#/, "").split("?")[0];
+    const parts = path.split("/").filter(Boolean);
+    return (parts[0] === "t" || parts[0] === "demo") && parts[1] ? parts[1].toLowerCase() : null;
+  }
+  function setFeed(on, remember2 = true) {
+    feedOn = on;
+    if (remember2) storage("bouncer.feed", on ? "1" : "0");
+    feedToggle.setAttribute("aria-pressed", on ? "true" : "false");
+    feedBox.hidden = !on;
+    deck.classList.toggle("two", on);
+    document.querySelector("main")?.classList.toggle("wide", on);
+    if (!on) {
+      stopFeed();
+      feedBox.innerHTML = "";
+      return;
+    }
+    startFeed();
+  }
+  function refreshFeed() {
+    if (!feedOn) return;
+    startFeed();
+  }
+  function startFeed() {
+    stopFeed();
+    const blocked = chain().family === "evm" ? feedBlocker(chain()) : feedBlocker(chain());
+    if (blocked) {
+      feedBox.innerHTML = `<div class="feed-head"><h2>New launches</h2><span class="tape-live stalled"><span class="dot"></span>none</span></div>
+      <div class="feed-empty"><b>No column on ${esc2(chain().name)}</b>${esc2(blocked)}</div>`;
+      return;
+    }
+    feedState = {
+      rows: [],
+      head: null,
+      from: null,
+      unread: null,
+      lastAt: Date.now(),
+      failing: null,
+      opening: true,
+      fresh: /* @__PURE__ */ new Set(),
+      chainKey: chain().key,
+      demo: mode === "demo"
+    };
+    paintFeed();
+    let cursor = null;
+    const tick = async () => {
+      const f = feedState;
+      if (!f || !feedOn) {
+        stopFeed();
+        return;
+      }
+      if (f.chainKey !== chain().key || f.demo !== (mode === "demo")) {
+        refreshFeed();
+        return;
+      }
+      f.lastAt = Date.now();
+      try {
+        const rpc = rpcFor();
+        const head = await rpc.head();
+        const slice = Math.min(2e4, Math.max(200, Math.round(900 * chain().blocksPerSecond)));
+        const first = cursor === null;
+        const feed = await readFeed(rpc, {
+          fromBlock: first ? Math.max(0, head.number - slice * 12 + 1) : cursor,
+          toBlock: head.number,
+          headTimestamp: head.timestamp,
+          factory: factoryFor(),
+          limit: first ? 30 : 12,
+          sliceSize: slice,
+          maxSlices: first ? 12 : 2
+        });
+        cursor = head.number + 1;
+        f.head = head.number;
+        f.failing = null;
+        f.opening = false;
+        if (first) {
+          f.rows = feed.rows;
+          f.from = feed.window.fromBlock;
+          f.unread = feed.unread;
+          f.fresh = /* @__PURE__ */ new Set();
+        } else if (feed.rows.length) {
+          const known = new Set(f.rows.map((r) => r.token));
+          const added = feed.rows.filter((r) => !known.has(r.token));
+          f.fresh = new Set(added.map((r) => r.token));
+          f.rows = [...added, ...f.rows].slice(0, 60);
+        } else {
+          f.fresh = /* @__PURE__ */ new Set();
+        }
+        for (const row of f.rows) {
+          if (row.timestamp !== null) row.ageSeconds = Math.max(0, head.timestamp - row.timestamp);
+        }
+      } catch (error) {
+        f.failing = plainReason(error instanceof Error ? error.message : String(error));
+        f.opening = false;
+      }
+      paintFeed();
+    };
+    void tick();
+    feedTimer = window.setInterval(() => void tick(), mode === "demo" ? 6e3 : 15e3);
+    feedClock = window.setInterval(() => {
+      if (!feedOn || !feedState) {
+        stopFeed();
+        return;
+      }
+      const when = feedBox.querySelector(".feed-when");
+      if (when) when.textContent = `${Math.max(0, Math.round((Date.now() - feedState.lastAt) / 1e3))} s ago`;
+    }, 1e3);
+  }
+  function paintFeed() {
+    const f = feedState;
+    if (!f) return;
+    const at = feedBox.querySelector(".feed-rows")?.scrollTop ?? 0;
+    const here = openToken();
+    const stalled = Boolean(f.failing);
+    const kept = f.rows.filter(keepRow);
+    const body = kept.length ? `<div class="feed-rows">${kept.map((r) => feedRow(r, here)).join("")}</div>` : f.rows.length ? `<div class="feed-empty"><b>Nothing matches "${esc2(FEED_FILTERS.find((x) => x.key === feedFilter).label)}"</b>${f.rows.length} launch${f.rows.length === 1 ? "" : "es"} in the window, none of them ${esc2(FEED_FILTERS.find((x) => x.key === feedFilter).hint.replace(/^the |^every /, ""))}.</div>` : `<div class="feed-empty">${f.opening ? "<b>Reading the factory\u2026</b>walking back from the head for the launches that just happened" : `<b>No launch in the window</b>nothing was launched between block ${f.from ?? "?"} and ${f.head ?? "?"}. The column keeps looking.`}</div>`;
+    feedBox.innerHTML = `<div class="feed-head">
+      <h2>New launches</h2>
+      <span class="tape-live${stalled ? " stalled" : ""}"><span class="dot"></span>${stalled ? "stalled" : "live"}</span>
+      <span class="fr-age feed-when">0 s ago</span>
+    </div>
+    <div class="feed-filters" role="group" aria-label="Which launches">${FEED_FILTERS.map(
+      (x) => `<button class="fchip${x.key === feedFilter ? " on" : ""}" type="button" data-filter="${x.key}" aria-pressed="${x.key === feedFilter}" title="${esc2(x.hint)}">${esc2(x.label)}</button>`
+    ).join("")}</div>
+    ${body}
+    <div class="feed-note">${esc2(
+      f.failing ? f.failing : `${chain().launchpad ?? "The launchpad"} on ${chain().name}. ${f.rows.length ? `${feedFilter === "all" ? `The newest ${f.rows.length}` : `${kept.length} of ${f.rows.length}`}` : "Nothing"} between block ${f.from ?? "?"} and ${f.head ?? "?"}${f.unread ? `; blocks ${f.unread.fromBlock}\u2013${f.unread.toBlock} were not opened` : ""}.`
+    )}</div>`;
+    const rows = feedBox.querySelector(".feed-rows");
+    if (rows && at > 0) rows.scrollTop = at;
+  }
+  function feedRow(r, here) {
+    const tags = [
+      r.graduated ? '<span class="ftag grad">graduated</span>' : "",
+      r.swept ? '<span class="ftag swept">swept</span>' : "",
+      r.deployerLaunches > 1 ? `<span class="ftag serial">${r.deployerLaunches}\xD7 dev</span>` : ""
+    ].filter(Boolean).join("");
+    const sym = r.symbol ?? "no ticker";
+    const name = r.name ?? shortAddress(r.token);
+    return `<button class="fr${here === r.token ? " on" : ""}${feedState?.fresh.has(r.token) ? " fresh" : ""}" type="button" data-token="${esc2(r.token)}">
+    <span class="fr-sym">${esc2(sym)}</span>
+    <span class="fr-age">${esc2(r.ageSeconds === null ? `block ${r.block}` : shortAge(r.ageSeconds))}</span>
+    <span class="fr-name">${esc2(name)}</span>
+    <span class="fr-tags">${tags}</span>
+  </button>`;
   }
   var tape = null;
   var taper = null;
@@ -9226,6 +9565,7 @@
     const since = Math.max(0, Math.round((Date.now() - t.lastAt) / 1e3));
     const flow = `<div class="flow">
     <div class="flow-keys">
+      <span class="flow-win">${esc2(FRAME_WORD[frame])}</span>
       <span class="in">bought <b>${esc2(amount(t.boughtQuote))}</b></span>
       <span class="out">sold <b>${esc2(amount(t.soldQuote))}</b></span>
       <span class="net">${t.buys + t.sells === 0 ? "nothing yet" : `${net === 0n ? "level" : `net ${net > 0n ? "in" : "out"} ${esc2(amount(net > 0n ? net : -net))}`} \xB7 ${t.buys} buy${t.buys === 1 ? "" : "s"}, ${t.sells} sell${t.sells === 1 ? "" : "s"}`}</span>
@@ -9273,6 +9613,7 @@
     <div class="tape-head">
       <h2>The tape</h2>
       <span class="tape-src">${esc2(tape.sub)}</span>
+      ${frameTabs()}
       <span class="tape-live${stalled ? " stalled" : ""}"><span class="dot"></span>${stalled ? "stalled" : "live"}</span>
       <span class="tape-when">${tape.failing ? esc2(tape.failing) : tape.head === null ? "opening" : `block ${tape.head}`}</span>
     </div>
@@ -9300,8 +9641,7 @@
   function startTape(slip, picked, m) {
     stopTape();
     const everyMs = mode === "demo" ? 5e3 : 15e3;
-    const back = Math.max(1, Math.round(900 * chain().blocksPerSecond));
-    const from = Math.max(0, slip.at.block - back);
+    const from = Math.max(0, slip.at.block - frameBlocks());
     const supply = slip.id.meta?.totalSupply ?? 0n;
     tape = {
       trades: [],
@@ -9324,6 +9664,7 @@
       fresh: /* @__PURE__ */ new Set(),
       opening: true
     };
+    paintTape();
     let cursor = from;
     const tick = async () => {
       const t = tape;
@@ -9431,10 +9772,10 @@
     </div>
   </details>`;
   }
-  function chartPanel(series, quoteSymbol, quoteDecimals, spot) {
-    const head = `<div class="chart-head"><span class="cap-l">Price \xB7 from the pool's swaps</span>`;
+  function chartPanel(series, quoteSymbol, quoteDecimals, spot, pending = true) {
+    const head = `<div class="chart-head"><span class="cap-l">Price \xB7 from the pool&#39;s swaps</span>${frameTabs()}`;
     if (!series) {
-      return `<div class="chartbox" id="chart">${head}</div><p class="chart-no">Reading the pool's swap log\u2026</p></div>`;
+      return `<div class="chartbox" id="chart">${head}</div><p class="chart-no">${pending ? "Reading the pool&#39;s swap log\u2026" : "There is no pool to read a price line from."}</p></div>`;
     }
     if (series.unread || series.points.length < 2) {
       const why = series.unread ?? (series.swaps === 0 ? "no swap in the window this read: nobody traded it" : "one swap in the window, which is not a line");
@@ -10061,7 +10402,7 @@
     };
     const answers = doorAnswers(slip);
     const m = marketFacts(slip);
-    const chart = chartPanel(seriesFor(slip.subject), m.quoteSymbol, m.quoteDecimals, m.spot);
+    const chart = chartPanel(seriesFor(slip.subject), m.quoteSymbol, m.quoteDecimals, m.spot, Boolean(m.pool));
     const picked = tradeSourceFor(slip, m);
     out.innerHTML = `<div class="slip">
     ${doorBlock({
@@ -10091,6 +10432,7 @@
     ${buyStrip(mode === "demo" ? "" : slip.chain.key, slip.subject, Boolean(slip.id.meta) && slip.open?.transferFunction !== false, verdictOf(slip.notes, "done", coverage).kind)}
   </div>`;
     if (stage0 === "done" && m.pool) void fillChart(slip, m);
+    shown = { slip, m, picked };
     if (stage0 === "done" && !("why" in picked)) startTape(slip, picked, m);
     const cardSvg = () => {
       noteCard("door", slip.id.meta?.symbol ?? slip.subject);
@@ -10452,6 +10794,7 @@
       paintSelectedChain();
       if (mode === "live") setMode("live", true);
       renderChips();
+      refreshFeed();
       const showing = q.value.trim();
       if (view === "door" && showing && out.innerHTML.trim()) {
         const to = chainSelect.value === "auto" ? "auto" : chainSelect.value;
@@ -10469,13 +10812,36 @@
       e.preventDefault();
       submit();
     });
-    window.addEventListener("hashchange", route);
+    feedToggle.addEventListener("click", () => setFeed(!feedOn));
+    out.addEventListener("click", (event) => {
+      const button = event.target.closest("[data-frame]");
+      if (button?.dataset.frame) setFrame(button.dataset.frame);
+    });
+    feedBox.addEventListener("click", (event) => {
+      const chip = event.target.closest("[data-filter]");
+      if (chip?.dataset.filter) {
+        feedFilter = chip.dataset.filter;
+        paintFeed();
+        return;
+      }
+      const row = event.target.closest(".fr");
+      const token = row?.dataset.token;
+      if (!token) return;
+      const next = `#/${mode === "demo" ? "demo" : "t"}/${token}${mode === "demo" ? "" : `?chain=${chain().key}`}`;
+      if (location.hash === next) void route();
+      else location.hash = next;
+    });
+    window.addEventListener("hashchange", () => {
+      route();
+      if (feedOn && feedState) paintFeed();
+    });
     setMode("live", true);
     setView("door");
     if (location.hash) route();
     else {
       q.focus();
     }
+    if (storage("bouncer.feed") === "1") setFeed(true, false);
   }
   boot();
 })();

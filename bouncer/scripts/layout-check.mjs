@@ -41,6 +41,10 @@ const ROUTES = [
   { hash: "#/demo/0x00000000000000000000000000000000000bad01", what: "an impostor (STOP, every card)", tall: true },
   { hash: "#/demo/0x0000000000000000000000000000000000f1a1a1", what: "an ordinary token", tall: true },
   { hash: "#/board?hours=1&chain=demo", what: "the board" },
+  // The two-pane board, which is the only layout on the site with a second
+  // column — and the one shape none of the routes above can produce.
+  { hash: "#/demo/0x00000000000000000000000000000000000f2e54", what: "a launch with the column of launches open", tall: true, feed: true },
+  { hash: "", what: "the column of launches with nothing picked", feed: true },
   { hash: "#/plan?tax=100&chain=demo", what: "the launch planner" },
 ];
 
@@ -106,10 +110,16 @@ for (const size of WIDTHS) {
   const errors = [];
   page.on("pageerror", (e) => errors.push(String(e)));
   for (const route of ROUTES) {
+    // The column is remembered in localStorage, so the way to open a page
+    // with it already on is the same way a returning reader does.
+    await page.evaluate((on) => { try { localStorage.setItem("bouncer.feed", on ? "1" : "0"); } catch { /* fine */ } }, Boolean(route.feed)).catch(() => {});
     await page.goto(url, { waitUntil: "load" });
     await page.waitForTimeout(400);
     if (route.hash) await page.evaluate((h) => { location.hash = h; }, route.hash);
-    await page.waitForTimeout(1800);
+    // The column and the tape are both log walks started after the page is
+    // up, so a measurement taken before they land measures a page nobody
+    // sees. Two seconds more only where they are on.
+    await page.waitForTimeout(route.feed ? 4200 : 1800);
     checked++;
     // Did the display face actually arrive?
     //

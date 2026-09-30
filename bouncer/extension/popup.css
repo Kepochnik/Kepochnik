@@ -60,3 +60,17 @@ header{position:static}
 .sec>summary .what{display:none}
 footer{margin-top:24px;font-size:11px}
 footer span{flex:1 1 100%}
+
+/* No column of launches in the popup.
+   The popup exists to answer one question about the token on the page you
+   are already looking at. A live column of everything else launching is the
+   opposite of that — and in 560 pixels it would push the answer off the
+   bottom of the window, which is the one thing this layout is for. The tape
+   stays: it is about THIS token. */
+#feed-toggle,#feed{display:none!important}
+.tape-head,.flow,.tape-note,.tape-empty{padding-inline:16px}
+table.trades th,table.trades td{padding-inline:16px}
+/* Six columns in a 560px window is a scrollbar the reader has to find. The
+   size in the quote asset and the share of supply say what the raw token
+   count and the block number say, in less room. */
+table.trades .c-tok,table.trades .c-blk{display:none}

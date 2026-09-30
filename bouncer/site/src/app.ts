@@ -39,6 +39,7 @@ import { readBoard, type Board } from "../../src/bouncer/leaderboard.js";
 import { readWatchEvents, type WatchEvent } from "../../src/bouncer/watch.js";
 import { readTokenWatchEvents, type TokenWatchEvent } from "../../src/bouncer/tokenWatch.js";
 import { readTrades, type Trade, type TradeSource } from "../../src/bouncer/trades.js";
+import { feedBlocker, readFeed, type FeedRow } from "../../src/bouncer/feed.js";
 import { doorAnswers, splAnswers, SHORT_QUESTION, type Answer } from "../../src/bouncer/answers.js";
 import { marketFacts, shortAge, type Fact } from "../../src/bouncer/marketFacts.js";
 import type { MarketPool } from "../../src/chain/market.js";
@@ -88,6 +89,9 @@ const sourcePill = $("source-pill");
 const sourceText = $("source-text");
 const settingsToggle = $<HTMLButtonElement>("settings-toggle");
 const toast = $("toast");
+const deck = $("deck");
+const feedBox = $("feed");
+const feedToggle = $<HTMLButtonElement>("feed-toggle");
 
 let mode: Mode = "demo";
 let view: View = "door";
@@ -143,6 +147,8 @@ function setMode(next: Mode, silent = false): void {
       : "Paste an address and BOUNCER finds the chain it lives on. Read from your browser at one block, nothing cached.";
   renderChips();
   if (!silent) storage("bouncer.mode", next);
+  // Demo and live are two different sets of launches under one heading.
+  refreshFeed();
 }
 
 function setView(next: View): void {
@@ -528,6 +534,8 @@ function busy(text: string): void {
   go.disabled = true;
   stopWatch();
   stopTape();
+  // A toggle press after this would re-read a token the page has left.
+  shown = null;
   status.innerHTML = `<span class="dot"></span> ${esc(text)} ${mode === "demo" ? "(demo chain, every address invented)" : `(${esc(chain().name)}, ${chain().family === "solana" ? "read slot by slot" : "one block pinned"})`}`;
   out.innerHTML = "";
   if (ticker) { clearInterval(ticker); ticker = null; }
@@ -1647,8 +1655,13 @@ function doorBlock(opts: {
  */
 const SERIES = new Map<string, PriceSeries>();
 
+/** The key carries the window: the same token over an hour and over a day are two different lines. */
+function seriesKey(address: string): string {
+  return `${address.toLowerCase()}@${frame}`;
+}
+
 function seriesFor(address: string): PriceSeries | null {
-  return SERIES.get(address.toLowerCase()) ?? null;
+  return SERIES.get(seriesKey(address)) ?? null;
 }
 
 /**
@@ -1658,11 +1671,12 @@ function seriesFor(address: string): PriceSeries | null {
  * should not have it close because a chart arrived.
  */
 async function fillChart(slip: DoorSlip, m: ReturnType<typeof marketFacts>): Promise<void> {
-  const key = slip.subject.toLowerCase();
+  const key = seriesKey(slip.subject);
   if (!m.pool || SERIES.has(key)) return;
-  // The slip only carries the chain's name and coin; the block rate lives on
-  // the picked chain, which is the same one this read came from.
-  const back = Math.round(24 * 3_600 * chain().blocksPerSecond);
+  // The window the toggle is on, so the line and the tape under it describe
+  // the same stretch of the token.
+  const back = frameBlocks();
+  const asked = frame;
   try {
     const series = await readPriceSeries(rpcFor(true), m.pool, {
       fromBlock: Math.max(0, slip.at.block - back),
@@ -1671,13 +1685,308 @@ async function fillChart(slip: DoorSlip, m: ReturnType<typeof marketFacts>): Pro
       chunkSize: mode === "demo" ? 100_000 : undefined,
     });
     SERIES.set(key, series);
-    const box = document.getElementById("chart");
+    // The reader may have moved the toggle while this was in flight, and a
+    // line drawn for a window nobody is looking at is a wrong chart.
+    const box = asked === frame ? document.getElementById("chart") : null;
     if (box) box.outerHTML = chartPanel(series, m.quoteSymbol, m.quoteDecimals, m.spot);
   } catch (error) {
     SERIES.set(key, { points: [], venue: m.pool.dex, poolAddress: m.pool.address, fromBlock: 0, toBlock: 0, swaps: 0, unread: plainReason(error instanceof Error ? error.message : String(error)) });
-    const box = document.getElementById("chart");
+    const box = asked === frame ? document.getElementById("chart") : null;
     if (box) box.outerHTML = chartPanel(SERIES.get(key)!, m.quoteSymbol, m.quoteDecimals, m.spot);
   }
+}
+
+
+// -------------------------------------------------------------- timeframe
+
+/**
+ * ONE WINDOW, EVERYWHERE ON THE TOKEN.
+ *
+ * The chart used to read a day and the tape an hour, which meant the line
+ * and the bought-against-sold figure under it described different stretches
+ * of the same token. Nothing said so, and that is the worst kind of wrong
+ * number: two true figures that cannot be compared, sitting next to each
+ * other as if they could.
+ *
+ * So the toggle sets the window for all three — the price line, the flow
+ * bar and the tape — and the panels say which window they are on.
+ */
+type Frame = "5m" | "1h" | "6h" | "24h";
+const FRAMES: Frame[] = ["5m", "1h", "6h", "24h"];
+const FRAME_SECONDS: Record<Frame, number> = { "5m": 300, "1h": 3_600, "6h": 21_600, "24h": 86_400 };
+const FRAME_WORD: Record<Frame, string> = { "5m": "the last 5 minutes", "1h": "the last hour", "6h": "the last 6 hours", "24h": "the last 24 hours" };
+
+let frame: Frame = FRAMES.includes(storage("bouncer.frame") as Frame) ? (storage("bouncer.frame") as Frame) : "1h";
+
+/**
+ * The token the page is currently about, kept so the toggle can re-read it
+ * without another full door check. Moving the window should cost the two log
+ * walks it changes, not the twenty reads behind the verdict above them —
+ * none of which the window touches.
+ */
+let shown: { slip: DoorSlip; m: ReturnType<typeof marketFacts>; picked: ReturnType<typeof tradeSourceFor> } | null = null;
+
+function setFrame(next: Frame): void {
+  if (next === frame) return;
+  frame = next;
+  storage("bouncer.frame", next);
+  // Both panels, in place. The verdict above them did not move, so it does
+  // not get redrawn and nothing a reader had opened closes.
+  for (const box of document.querySelectorAll<HTMLElement>(".frame")) {
+    const on = box.dataset.frame === next;
+    box.classList.toggle("on", on);
+    box.setAttribute("aria-pressed", String(on));
+  }
+  if (!shown) return;
+  const { slip, m, picked } = shown;
+  if (m.pool) {
+    const box = document.getElementById("chart");
+    if (box) box.outerHTML = chartPanel(seriesFor(slip.subject), m.quoteSymbol, m.quoteDecimals, m.spot, true);
+    void fillChart(slip, m);
+  }
+  if (!("why" in picked)) startTape(slip, picked, m);
+}
+
+/** How many blocks the current window is on the chain now selected. */
+function frameBlocks(): number {
+  return Math.max(1, Math.round(FRAME_SECONDS[frame] * chain().blocksPerSecond));
+}
+
+function frameTabs(): string {
+  return `<div class="frames" role="group" aria-label="Window">${FRAMES.map(
+    (f) => `<button class="frame${f === frame ? " on" : ""}" type="button" data-frame="${f}" aria-pressed="${f === frame}">${f}</button>`,
+  ).join("")}</div>`;
+}
+
+// ---------------------------------------------------------------- the feed
+
+/**
+ * THE COLUMN YOU SIT IN FRONT OF.
+ *
+ * It lives outside `#out`, which is the whole design: `busy()` clears the
+ * report on every route change, and a feed inside it would blink away the
+ * moment you clicked one of its own rows. Out here it stays put while you
+ * read token after token, and the row you are looking at stays marked.
+ *
+ * The first round walks backwards from the tip for history; every round
+ * after asks only for the blocks that are new and puts them on top. What it
+ * never does is fill in: a window the walk did not reach is named under the
+ * table, because "the newest thirty" and "every launch today" are different
+ * claims and the column is only ever making the first one.
+ */
+interface FeedView {
+  rows: FeedRow[];
+  head: number | null;
+  /** The oldest block the column has actually read back to. */
+  from: number | null;
+  /** The older end of the window that was never opened. */
+  unread: { fromBlock: number; toBlock: number } | null;
+  lastAt: number;
+  failing: string | null;
+  opening: boolean;
+  /** Tokens from the round that just landed, so they flash once. */
+  fresh: Set<string>;
+  /** The chain this column belongs to; a chain change throws it away. */
+  chainKey: string;
+  demo: boolean;
+}
+
+/**
+ * WHAT THE COLUMN IS SHOWING.
+ *
+ * A filter over rows already read, never a different read: the column asks
+ * the chain for the same window whatever is picked, so switching is instant
+ * and the note can always say how many of how many. A filter that quietly
+ * re-read a narrower window would make "3 launches" mean two different
+ * things depending on which chip was lit.
+ */
+type FeedFilter = "all" | "graduated" | "serial" | "new";
+const FEED_FILTERS: { key: FeedFilter; label: string; hint: string }[] = [
+  { key: "all", label: "all", hint: "every launch in the window" },
+  { key: "new", label: "fresh", hint: "launched in the last five minutes" },
+  { key: "graduated", label: "graduated", hint: "the curve filled and the pool exists" },
+  { key: "serial", label: "serial dev", hint: "the deployer launched more than one in this window" },
+];
+let feedFilter: FeedFilter = "all";
+
+function keepRow(r: FeedRow): boolean {
+  switch (feedFilter) {
+    case "graduated": return r.graduated;
+    case "serial": return r.deployerLaunches > 1;
+    case "new": return r.ageSeconds !== null && r.ageSeconds <= 300;
+    default: return true;
+  }
+}
+
+let feedOn = false;
+let feedState: FeedView | null = null;
+let feedTimer: number | null = null;
+let feedClock: number | null = null;
+
+function stopFeed(): void {
+  if (feedTimer) { clearInterval(feedTimer); feedTimer = null; }
+  if (feedClock) { clearInterval(feedClock); feedClock = null; }
+  feedState = null;
+}
+
+/** The address the report is currently about, so its row can be marked. */
+function openToken(): string | null {
+  const path = location.hash.replace(/^#/, "").split("?")[0];
+  const parts = path.split("/").filter(Boolean);
+  return (parts[0] === "t" || parts[0] === "demo") && parts[1] ? parts[1].toLowerCase() : null;
+}
+
+function setFeed(on: boolean, remember = true): void {
+  feedOn = on;
+  if (remember) storage("bouncer.feed", on ? "1" : "0");
+  feedToggle.setAttribute("aria-pressed", on ? "true" : "false");
+  feedBox.hidden = !on;
+  deck.classList.toggle("two", on);
+  document.querySelector("main")?.classList.toggle("wide", on);
+  if (!on) { stopFeed(); feedBox.innerHTML = ""; return; }
+  startFeed();
+}
+
+/** Restarts the column: a different chain is a different set of launches. */
+function refreshFeed(): void {
+  if (!feedOn) return;
+  startFeed();
+}
+
+function startFeed(): void {
+  stopFeed();
+  const blocked = chain().family === "evm" ? feedBlocker(chain()) : feedBlocker(chain());
+  if (blocked) {
+    feedBox.innerHTML = `<div class="feed-head"><h2>New launches</h2><span class="tape-live stalled"><span class="dot"></span>none</span></div>
+      <div class="feed-empty"><b>No column on ${esc(chain().name)}</b>${esc(blocked)}</div>`;
+    return;
+  }
+  feedState = {
+    rows: [],
+    head: null,
+    from: null,
+    unread: null,
+    lastAt: Date.now(),
+    failing: null,
+    opening: true,
+    fresh: new Set(),
+    chainKey: chain().key,
+    demo: mode === "demo",
+  };
+  paintFeed();
+  let cursor: number | null = null;
+
+  const tick = async () => {
+    const f = feedState;
+    if (!f || !feedOn) { stopFeed(); return; }
+    // A chain or mode change while a round was in flight: the answer belongs
+    // to a chain nobody is looking at any more.
+    if (f.chainKey !== chain().key || f.demo !== (mode === "demo")) { refreshFeed(); return; }
+    f.lastAt = Date.now();
+    try {
+      const rpc = rpcFor();
+      const head = await rpc.head();
+      // Roughly fifteen minutes of blocks per slice, so one column covers a
+      // few hours on a fast chain and on a slow one alike. Capped because a
+      // public endpoint will refuse a span much wider whatever the maths say.
+      const slice = Math.min(20_000, Math.max(200, Math.round(900 * chain().blocksPerSecond)));
+      const first = cursor === null;
+      const feed = await readFeed(rpc, {
+        fromBlock: first ? Math.max(0, head.number - slice * 12 + 1) : cursor!,
+        toBlock: head.number,
+        headTimestamp: head.timestamp,
+        factory: factoryFor(),
+        limit: first ? 30 : 12,
+        sliceSize: slice,
+        maxSlices: first ? 12 : 2,
+      });
+      cursor = head.number + 1;
+      f.head = head.number;
+      f.failing = null;
+      f.opening = false;
+      if (first) {
+        f.rows = feed.rows;
+        f.from = feed.window.fromBlock;
+        f.unread = feed.unread;
+        f.fresh = new Set();
+      } else if (feed.rows.length) {
+        const known = new Set(f.rows.map((r) => r.token));
+        const added = feed.rows.filter((r) => !known.has(r.token));
+        f.fresh = new Set(added.map((r) => r.token));
+        f.rows = [...added, ...f.rows].slice(0, 60);
+      } else {
+        f.fresh = new Set();
+      }
+      // The ages on the rows below are measured against the head, so they all
+      // move when it does.
+      for (const row of f.rows) {
+        if (row.timestamp !== null) row.ageSeconds = Math.max(0, head.timestamp - row.timestamp);
+      }
+    } catch (error) {
+      // The cursor stays where it was: a failed round's blocks are the next
+      // round's, or the column silently skips the launches inside them.
+      f.failing = plainReason(error instanceof Error ? error.message : String(error));
+      f.opening = false;
+    }
+    paintFeed();
+  };
+
+  void tick();
+  feedTimer = window.setInterval(() => void tick(), mode === "demo" ? 6_000 : 15_000);
+  feedClock = window.setInterval(() => {
+    if (!feedOn || !feedState) { stopFeed(); return; }
+    const when = feedBox.querySelector<HTMLElement>(".feed-when");
+    if (when) when.textContent = `${Math.max(0, Math.round((Date.now() - feedState.lastAt) / 1000))} s ago`;
+  }, 1_000);
+}
+
+function paintFeed(): void {
+  const f = feedState;
+  if (!f) return;
+  const at = feedBox.querySelector<HTMLElement>(".feed-rows")?.scrollTop ?? 0;
+  const here = openToken();
+  const stalled = Boolean(f.failing);
+  const kept = f.rows.filter(keepRow);
+  const body = kept.length
+    ? `<div class="feed-rows">${kept.map((r) => feedRow(r, here)).join("")}</div>`
+    : f.rows.length
+      ? `<div class="feed-empty"><b>Nothing matches "${esc(FEED_FILTERS.find((x) => x.key === feedFilter)!.label)}"</b>${f.rows.length} launch${f.rows.length === 1 ? "" : "es"} in the window, none of them ${esc(FEED_FILTERS.find((x) => x.key === feedFilter)!.hint.replace(/^the |^every /, ""))}.</div>`
+    : `<div class="feed-empty">${f.opening
+        ? "<b>Reading the factory…</b>walking back from the head for the launches that just happened"
+        : `<b>No launch in the window</b>nothing was launched between block ${f.from ?? "?"} and ${f.head ?? "?"}. The column keeps looking.`}</div>`;
+
+  feedBox.innerHTML = `<div class="feed-head">
+      <h2>New launches</h2>
+      <span class="tape-live${stalled ? " stalled" : ""}"><span class="dot"></span>${stalled ? "stalled" : "live"}</span>
+      <span class="fr-age feed-when">0 s ago</span>
+    </div>
+    <div class="feed-filters" role="group" aria-label="Which launches">${FEED_FILTERS.map(
+      (x) => `<button class="fchip${x.key === feedFilter ? " on" : ""}" type="button" data-filter="${x.key}" aria-pressed="${x.key === feedFilter}" title="${esc(x.hint)}">${esc(x.label)}</button>`,
+    ).join("")}</div>
+    ${body}
+    <div class="feed-note">${esc(
+      f.failing
+        ? f.failing
+        : `${chain().launchpad ?? "The launchpad"} on ${chain().name}. ${f.rows.length ? `${feedFilter === "all" ? `The newest ${f.rows.length}` : `${kept.length} of ${f.rows.length}`}` : "Nothing"} between block ${f.from ?? "?"} and ${f.head ?? "?"}${f.unread ? `; blocks ${f.unread.fromBlock}–${f.unread.toBlock} were not opened` : ""}.`,
+    )}</div>`;
+  const rows = feedBox.querySelector<HTMLElement>(".feed-rows");
+  if (rows && at > 0) rows.scrollTop = at;
+}
+
+function feedRow(r: FeedRow, here: string | null): string {
+  const tags = [
+    r.graduated ? '<span class="ftag grad">graduated</span>' : "",
+    r.swept ? '<span class="ftag swept">swept</span>' : "",
+    r.deployerLaunches > 1 ? `<span class="ftag serial">${r.deployerLaunches}× dev</span>` : "",
+  ].filter(Boolean).join("");
+  const sym = r.symbol ?? "no ticker";
+  const name = r.name ?? shortAddress(r.token);
+  return `<button class="fr${here === r.token ? " on" : ""}${feedState?.fresh.has(r.token) ? " fresh" : ""}" type="button" data-token="${esc(r.token)}">
+    <span class="fr-sym">${esc(sym)}</span>
+    <span class="fr-age">${esc(r.ageSeconds === null ? `block ${r.block}` : shortAge(r.ageSeconds))}</span>
+    <span class="fr-name">${esc(name)}</span>
+    <span class="fr-tags">${tags}</span>
+  </button>`;
 }
 
 // ---------------------------------------------------------------- the tape
@@ -1770,6 +2079,7 @@ function tapeBody(): string {
 
   const flow = `<div class="flow">
     <div class="flow-keys">
+      <span class="flow-win">${esc(FRAME_WORD[frame])}</span>
       <span class="in">bought <b>${esc(amount(t.boughtQuote))}</b></span>
       <span class="out">sold <b>${esc(amount(t.soldQuote))}</b></span>
       <span class="net">${t.buys + t.sells === 0 ? "nothing yet" : `${net === 0n ? "level" : `net ${net > 0n ? "in" : "out"} ${esc(amount(net > 0n ? net : -net))}`} · ${t.buys} buy${t.buys === 1 ? "" : "s"}, ${t.sells} sell${t.sells === 1 ? "" : "s"}`}</span>
@@ -1848,6 +2158,7 @@ function tapePanel(): string {
     <div class="tape-head">
       <h2>The tape</h2>
       <span class="tape-src">${esc(tape.sub)}</span>
+      ${frameTabs()}
       <span class="tape-live${stalled ? " stalled" : ""}"><span class="dot"></span>${stalled ? "stalled" : "live"}</span>
       <span class="tape-when">${tape.failing ? esc(tape.failing) : tape.head === null ? "opening" : `block ${tape.head}`}</span>
     </div>
@@ -1891,11 +2202,7 @@ function paintTape(): void {
 function startTape(slip: DoorSlip, picked: { source: TradeSource; sub: string }, m: ReturnType<typeof marketFacts>): void {
   stopTape();
   const everyMs = mode === "demo" ? 5_000 : 15_000;
-  // Fifteen minutes of history to open with. Long enough that a quiet token
-  // still shows something, short enough that a busy one opens with the last
-  // few minutes rather than a wall.
-  const back = Math.max(1, Math.round(900 * chain().blocksPerSecond));
-  const from = Math.max(0, slip.at.block - back);
+  const from = Math.max(0, slip.at.block - frameBlocks());
   const supply = slip.id.meta?.totalSupply ?? 0n;
   tape = {
     trades: [],
@@ -1918,6 +2225,11 @@ function startTape(slip: DoorSlip, picked: { source: TradeSource; sub: string },
     fresh: new Set(),
     opening: true,
   };
+  // The panel resets to the new window at once, rather than showing the old
+  // one's rows and figures under the new one's heading until the first round
+  // lands. Moving the toggle should never leave a true figure under a label
+  // that says it is about a different stretch of the token.
+  paintTape();
   let cursor = from;
 
   const tick = async () => {
@@ -2079,10 +2391,14 @@ function findingsLog(notes: DoorNote[]): string {
  * real points would hide exactly the thing worth seeing on a token nobody is
  * trading.
  */
-function chartPanel(series: PriceSeries | null, quoteSymbol: string, quoteDecimals: number, spot: bigint | null): string {
-  const head = `<div class="chart-head"><span class="cap-l">Price · from the pool's swaps</span>`;
+function chartPanel(series: PriceSeries | null, quoteSymbol: string, quoteDecimals: number, spot: bigint | null, pending = true): string {
+  const head = `<div class="chart-head"><span class="cap-l">Price · from the pool&#39;s swaps</span>${frameTabs()}`;
   if (!series) {
-    return `<div class="chartbox" id="chart">${head}</div><p class="chart-no">Reading the pool's swap log…</p></div>`;
+    // "Reading…" forever is what a token with no pool used to show, because
+    // the walk that would have replaced this line is never started for one.
+    // A panel that waits for something nobody asked for is the page telling
+    // you it is broken.
+    return `<div class="chartbox" id="chart">${head}</div><p class="chart-no">${pending ? "Reading the pool&#39;s swap log…" : "There is no pool to read a price line from."}</p></div>`;
   }
   if (series.unread || series.points.length < 2) {
     const why = series.unread ?? (series.swaps === 0 ? "no swap in the window this read: nobody traded it" : "one swap in the window, which is not a line");
@@ -3217,7 +3533,7 @@ function renderSlip(slip: DoorSlip, opts: { stage?: Stage; source?: Source } = {
   // The chart is a fourth read, started after the slip is on screen and
   // painted in place when it lands. It walks a log, which is the one thing
   // here measured in seconds, and nothing above it should wait for that.
-  const chart = chartPanel(seriesFor(slip.subject), m.quoteSymbol, m.quoteDecimals, m.spot);
+  const chart = chartPanel(seriesFor(slip.subject), m.quoteSymbol, m.quoteDecimals, m.spot, Boolean(m.pool));
   const picked = tradeSourceFor(slip, m);
 
   out.innerHTML = `<div class="slip">
@@ -3252,6 +3568,7 @@ function renderSlip(slip: DoorSlip, opts: { stage?: Stage; source?: Source } = {
   if (stage0 === "done" && m.pool) void fillChart(slip, m);
   // The tape opens itself. It is the answer to "why does this page not move",
   // and a live panel behind a button is a panel nobody presses.
+  shown = { slip, m, picked };
   if (stage0 === "done" && !("why" in picked)) startTape(slip, picked, m);
 
   const cardSvg = () => {
@@ -3727,6 +4044,9 @@ function boot(): void {
     paintSelectedChain();
     if (mode === "live") setMode("live", true);
     renderChips();
+    // A different chain is a different launchpad, so the column starts over
+    // rather than showing one chain's launches under another chain's name.
+    refreshFeed();
     // A report on screen belongs to the chain it was read from.
     //
     // Changing the menu used to leave it there, so picking Solana while a
@@ -3752,7 +4072,38 @@ function boot(): void {
     e.preventDefault();
     submit();
   });
-  window.addEventListener("hashchange", route);
+  // The column, its toggle and its rows.
+  //
+  // One delegated handler on the box rather than one per row: the rows are
+  // replaced wholesale every fifteen seconds, and per-row listeners would be
+  // re-attached fifteen times a minute for as long as the tab is open.
+  feedToggle.addEventListener("click", () => setFeed(!feedOn));
+  // One handler for every copy of the window toggle: it is drawn in two
+  // panels, both of which are replaced by their own reads.
+  out.addEventListener("click", (event) => {
+    const button = (event.target as HTMLElement).closest<HTMLElement>("[data-frame]");
+    if (button?.dataset.frame) setFrame(button.dataset.frame as Frame);
+  });
+  feedBox.addEventListener("click", (event) => {
+    const chip = (event.target as HTMLElement).closest<HTMLElement>("[data-filter]");
+    if (chip?.dataset.filter) {
+      feedFilter = chip.dataset.filter as FeedFilter;
+      paintFeed();
+      return;
+    }
+    const row = (event.target as HTMLElement).closest<HTMLElement>(".fr");
+    const token = row?.dataset.token;
+    if (!token) return;
+    const next = `#/${mode === "demo" ? "demo" : "t"}/${token}${mode === "demo" ? "" : `?chain=${chain().key}`}`;
+    if (location.hash === next) void route();
+    else location.hash = next;
+  });
+  window.addEventListener("hashchange", () => {
+    route();
+    // Which row is open changed, and the column shows that without waiting
+    // for its next round.
+    if (feedOn && feedState) paintFeed();
+  });
   setMode("live", true);
   setView("door");
   if (location.hash) route();
@@ -3766,6 +4117,14 @@ function boot(): void {
     // by asking which address.
     q.focus();
   }
+  // Restored, not defaulted on: the column is a log walk every fifteen
+  // seconds against somebody else's public endpoint, and a reader who has
+  // not asked for it should not be spending it.
+  //
+  // After the route, not before: routing settles the chain and the mode, and
+  // opening the column first meant walking one chain's factory and then
+  // immediately throwing it away to walk another's.
+  if (storage("bouncer.feed") === "1") setFeed(true, false);
 }
 
 boot();
