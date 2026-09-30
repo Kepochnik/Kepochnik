@@ -35,6 +35,12 @@ export interface ExitDoor {
   spot: bigint;
   quotes: ExitQuote[];
   note: string;
+  /**
+   * The graduated pool's identity, when the venue is a pool. Its trades are
+   * in the PoolManager's Swap log under this id, and nothing else on the slip
+   * can name it: the open-door pool search is not run for a launch.
+   */
+  pool?: { manager: string; poolId: Hex; tokenIsCurrency0: boolean; hooks: string; feePpm: bigint };
 }
 
 export interface PoolState {
@@ -168,6 +174,7 @@ export async function readExitDoor(rpc: RpcClient, launch: LaunchedToken, option
     creatorTaxBps: launch.creatorTaxBps,
     spot: reserves.token === 0n ? 0n : (reserves.quote * 10n ** 18n) / reserves.token,
     quotes,
+    pool: { manager: poolManager.toLowerCase(), poolId: state.poolId, tokenIsCurrency0: state.tokenIsCurrency0, hooks: hook.toLowerCase(), feePpm: launch.poolFee },
     note: `Estimate on the graduated pool: full-range liquidity and price read from PoolManager storage at this block, hook fee ${Number(hookFeeBps) / 100}% (live policy) and creator tax on the quote leg. Other LPs and concentrated positions, if any, are not modelled.`,
   };
 }

@@ -26,7 +26,7 @@
  */
 import type { MarketPool } from "../chain/market.js";
 import { CURVE_EVENTS } from "../chain/pons.js";
-import { V2_SWAP, V3_SWAP } from "../chain/priceSeries.js";
+import { swapShape } from "../chain/priceSeries.js";
 import type { RpcClient } from "../chain/rpc.js";
 import { readTapeAdaptive } from "../chain/tape.js";
 
@@ -109,8 +109,10 @@ export async function readTrades(rpc: RpcClient, source: TradeSource, options: T
     soldQuote: 0n,
     unread: null,
   };
-  const event = source.kind === "curve" ? null : swapEvent(source.pool);
-  if (source.kind === "pool" && !event) return { ...base, unread: `a ${source.pool.kind} pool's swaps are not read here` };
+  const shape = source.kind === "curve" ? null : swapShape(source.pool);
+  if (source.kind === "pool" && !shape) {
+    return { ...base, unread: source.pool.kind === "v4" ? "a V4 pool without its id cannot be told apart from the rest of the PoolManager" : `a ${source.pool.kind} pool's swaps are not read here` };
+  }
 
   let logs;
   try {
@@ -118,7 +120,8 @@ export async function readTrades(rpc: RpcClient, source: TradeSource, options: T
       rpc,
       {
         address: base.address,
-        events: source.kind === "curve" ? [CURVE_EVENTS.CurveBuy, CURVE_EVENTS.CurveSell] : [event!],
+        events: source.kind === "curve" ? [CURVE_EVENTS.CurveBuy, CURVE_EVENTS.CurveSell] : [shape!.event],
+        topics: shape?.topics ?? [],
         fromBlock: options.fromBlock,
         toBlock: options.toBlock,
       },
@@ -133,7 +136,7 @@ export async function readTrades(rpc: RpcClient, source: TradeSource, options: T
   const one = 10n ** BigInt(options.tokenDecimals ?? 18);
   const trades: Trade[] = [];
   for (const log of logs) {
-    const trade = source.kind === "curve" ? fromCurve(log) : fromSwap(log, source.pool, event === V3_SWAP);
+    const trade = source.kind === "curve" ? fromCurve(log) : fromSwap(log, source.pool, shape!.sqrt, shape!.traderSide);
     if (!trade) continue;
     trade.shareBps = supply > 0n ? Number((trade.tokens * 10_000n) / supply) : null;
     // What this trade actually paid per whole token. Not the marginal price
@@ -156,12 +159,6 @@ export async function readTrades(rpc: RpcClient, source: TradeSource, options: T
   // oldest first.
   trades.reverse();
   return { ...base, trades: trades.slice(0, options.limit ?? 60), total: trades.length };
-}
-
-function swapEvent(pool: MarketPool) {
-  if (pool.kind === "v3" || pool.kind === "v4") return V3_SWAP;
-  if (pool.kind === "v2" || pool.kind === "solidly") return V2_SWAP;
-  return null;
 }
 
 /** A curve trade, where the chain names the trader outright. */
@@ -193,21 +190,26 @@ function fromCurve(log: { name: string; blockNumber: number; logIndex: number; t
 function fromSwap(
   log: { blockNumber: number; logIndex: number; transactionHash: string; args: Record<string, unknown> },
   pool: MarketPool,
-  v3: boolean,
+  signed: boolean,
+  traderSide: boolean,
 ): Trade | null {
-  if (v3) {
-    // amount0/amount1 are signed: positive means that token went INTO the pool.
+  if (signed) {
+    // V3: positive means that token went INTO the pool. V4: the amounts are
+    // the trader's balance change, so negative is what the trader paid in.
     const tokenAmount = (pool.tokenIsToken0 ? log.args.amount0 : log.args.amount1) as bigint;
     const quoteAmount = (pool.tokenIsToken0 ? log.args.amount1 : log.args.amount0) as bigint;
     const tokens = tokenAmount < 0n ? -tokenAmount : tokenAmount;
     const quote = quoteAmount < 0n ? -quoteAmount : quoteAmount;
     if (tokens <= 0n || quote <= 0n) return null;
+    const intoPool = traderSide ? tokenAmount < 0n : tokenAmount > 0n;
     return {
       block: log.blockNumber,
       logIndex: log.logIndex,
       tx: log.transactionHash,
-      side: tokenAmount > 0n ? "sell" : "buy",
-      wallet: String(log.args.recipient).toLowerCase(),
+      side: intoPool ? "sell" : "buy",
+      // V4 names only the caller — the router that unlocked the manager —
+      // so on V4 this is the router, and walletExact stays false.
+      wallet: String(traderSide ? log.args.sender : log.args.recipient).toLowerCase(),
       walletExact: false,
       tokens,
       quote,

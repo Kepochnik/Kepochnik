@@ -53,6 +53,45 @@ export const V2_SWAP: EventAbi = {
   ],
 };
 
+/**
+ * Uniswap V4: every pool lives inside one PoolManager, so the swap names its
+ * pool by id rather than by the address that emitted it.
+ *
+ * Two things differ from V3 and both are traps. The signature is not V3's,
+ * so a V3 filter on the PoolManager matches nothing at all — which reads
+ * exactly like a token nobody traded. And the amounts are the SWAPPER's
+ * balance change, not the pool's: negative is what the trader paid in. V3
+ * is the other way round. Reading one with the other's sign convention turns
+ * every buy into a sell.
+ */
+export const V4_SWAP: EventAbi = {
+  name: "Swap",
+  inputs: [
+    { name: "id", type: "bytes32", indexed: true },
+    { name: "sender", type: "address", indexed: true },
+    { name: "amount0", type: "int128", indexed: false },
+    { name: "amount1", type: "int128", indexed: false },
+    { name: "sqrtPriceX96", type: "uint160", indexed: false },
+    { name: "liquidity", type: "uint128", indexed: false },
+    { name: "tick", type: "int24", indexed: false },
+    { name: "fee", type: "uint24", indexed: false },
+  ],
+};
+
+/** Which Swap a pool emits, where to ask for it, and whether its amounts are the pool's side or the trader's. */
+export function swapShape(pool: MarketPool): { event: EventAbi; topics: (string | null)[]; traderSide: boolean; sqrt: boolean } | null {
+  if (pool.kind === "v4") {
+    // Without the id there is no way to tell this pool's swaps from every
+    // other pool in the singleton, and reading them all would be worse than
+    // reading none.
+    if (!pool.poolId) return null;
+    return { event: V4_SWAP, topics: [pool.poolId.toLowerCase()], traderSide: true, sqrt: true };
+  }
+  if (pool.kind === "v3") return { event: V3_SWAP, topics: [], traderSide: false, sqrt: true };
+  if (pool.kind === "v2" || pool.kind === "solidly") return { event: V2_SWAP, topics: [], traderSide: false, sqrt: false };
+  return null;
+}
+
 const Q96 = 1n << 96n;
 
 export interface PricePoint {
@@ -116,15 +155,15 @@ export async function readPriceSeries(rpc: RpcClient, pool: MarketPool, options:
     swaps: 0,
     unread: null,
   };
-  const event = pool.kind === "v3" || pool.kind === "v4" ? V3_SWAP : pool.kind === "v2" || pool.kind === "solidly" ? V2_SWAP : null;
-  if (!event) return { ...base, unread: `a ${pool.kind} pool's swaps are not read here` };
+  const shape = swapShape(pool);
+  if (!shape) return { ...base, unread: pool.kind === "v4" ? "a V4 pool without its id cannot be told apart from the rest of the PoolManager" : `a ${pool.kind} pool's swaps are not read here` };
 
   const one = 10n ** BigInt(options.tokenDecimals);
   let logs;
   try {
     const tape = await readTapeAdaptive(
       rpc,
-      { address: pool.address.toLowerCase(), events: [event], fromBlock: options.fromBlock, toBlock: options.toBlock },
+      { address: pool.address.toLowerCase(), events: [shape.event], topics: shape.topics, fromBlock: options.fromBlock, toBlock: options.toBlock },
       { minChunk: 1, startChunk: options.chunkSize ?? 2_000, maxChunk: 20_000 },
     );
     logs = tape.logs;
@@ -134,12 +173,13 @@ export async function readPriceSeries(rpc: RpcClient, pool: MarketPool, options:
 
   const points: PricePoint[] = [];
   for (const log of logs) {
-    if (event === V3_SWAP) {
+    if (shape.sqrt) {
       const price = priceFromSqrt(log.args.sqrtPriceX96 as bigint, pool.tokenIsToken0, one);
       if (price === null || price === 0n) continue;
-      // amount0 is signed and positive when token0 went INTO the pool.
+      // V3: positive is what went INTO the pool. V4: negative is what the
+      // trader paid, which is the same direction with the other sign.
       const amount = (pool.tokenIsToken0 ? log.args.amount0 : log.args.amount1) as bigint;
-      points.push({ block: log.blockNumber, price, sell: amount > 0n });
+      points.push({ block: log.blockNumber, price, sell: shape.traderSide ? amount < 0n : amount > 0n });
       continue;
     }
     const a0In = log.args.amount0In as bigint;

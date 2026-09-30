@@ -74,19 +74,52 @@ export interface MarketFacts {
   quoteDecimals: number;
 }
 
+/**
+ * The graduated pool of a launchpad token, as the market code understands a pool.
+ *
+ * The open-door pool search is never run for a launch — the factory already
+ * says where it trades — so without this every graduated launch had no pool
+ * on the slip at all, and the tape under it said "BOUNCER found no pool",
+ * which was simply untrue.
+ */
+export function launchPool(slip: DoorSlip): MarketPool | null {
+  const p = slip.exit?.venue === "pool" ? slip.exit.pool : undefined;
+  if (!p) return null;
+  return {
+    dex: p.hooks === "0x0000000000000000000000000000000000000000" ? "Uniswap V4" : "Uniswap V4 (hooked)",
+    kind: "v4",
+    address: p.manager,
+    poolId: p.poolId,
+    hooks: p.hooks,
+    // uint24 hundredths of a basis point.
+    feeBps: Number(p.feePpm) / 100,
+    tokenIsToken0: p.tokenIsCurrency0,
+    // One contract holds every V4 pool's funds; a balance of it is not this pool.
+    tokenReserve: null,
+    quoteReserve: null,
+  };
+}
+
 export function marketFacts(slip: DoorSlip): MarketFacts {
   const o = slip.open;
   const meta = slip.id.meta;
   const quote = slip.rules?.quote ?? slip.chain.native;
   const decimals = meta?.decimals ?? 18;
-  const pool = deepest(o?.pools);
-  const spot = pool ? spotPrice(pool, decimals) : null;
+  const found = deepest(o?.pools);
+  const pool = found ?? launchPool(slip);
+  // A launch is priced where it trades: on the curve before graduation, on
+  // its V4 pool after. The exit door already read both, at this block, with
+  // the launchpad's own arithmetic. Its spot is per whole 18-decimal token,
+  // so it is only used when the token really has 18.
+  const exit = slip.exit && slip.exit.venue !== "closed" && slip.exit.spot > 0n && decimals === 18 ? slip.exit : null;
+  const spot = found ? spotPrice(found, decimals) : exit ? exit.spot : null;
+  const where = found ? "from the pool" : exit?.venue === "curve" ? "from the curve" : exit ? "from the V4 pool" : "";
   const facts: Fact[] = [];
 
   facts.push(
     spot !== null
-      ? { label: "Price", value: formatUnits(spot, quote.decimals, 10).replace(/0+$/, "").replace(/\.$/, ""), note: `${quote.symbol} per token · from the pool`, source: "chain" }
-      : { label: "Price", value: null, note: quote.symbol, source: "chain", why: o?.pools === null ? "the pool read did not finish" : "no pool could be priced" },
+      ? { label: "Price", value: formatUnits(spot, quote.decimals, 10).replace(/0+$/, "").replace(/\.$/, ""), note: `${quote.symbol} per token · ${where}`, source: "chain" }
+      : { label: "Price", value: null, note: quote.symbol, source: "chain", why: slip.exit?.venue === "closed" ? "swept, and the pool does not exist yet" : o?.pools === null ? "the pool read did not finish" : "no pool could be priced" },
   );
 
   const supply = meta?.totalSupply ?? null;
@@ -96,9 +129,22 @@ export function marketFacts(slip: DoorSlip): MarketFacts {
       : { label: "Market cap", value: null, note: "price × supply", source: "derived", why: spot === null ? "no price to multiply" : "the supply could not be read" },
   );
 
-  const liquid = pool?.quoteReserve ?? null;
+  // On a curve the depth is the real quote the curve holds — not the pricing
+  // reserve, which carries a virtual amount nobody can sell into.
+  const fill = !found && exit?.venue === "curve" ? slip.rules?.fill ?? null : null;
+  const liquid = found?.quoteReserve ?? fill?.real ?? null;
   facts.push(
-    liquid !== null
+    fill && liquid !== null
+      ? {
+          label: "Liquidity",
+          value: `${formatUnits(liquid, quote.decimals, 2)} ${quote.symbol}`,
+          note: `real, in the curve · ${(fill.bps / 100).toFixed(0)}% to graduation`,
+          source: "chain",
+          warn: liquid < 10n ** BigInt(quote.decimals),
+        }
+      : !found && exit?.venue === "pool"
+        ? { label: "Liquidity", value: null, note: quote.symbol, source: "chain", why: "a V4 pool keeps its funds in the PoolManager with every other pool, so its depth is not a balance anyone can read" }
+        : liquid !== null
       ? {
           label: "Liquidity",
           value: `${formatUnits(liquid, quote.decimals, 2)} ${quote.symbol}`,

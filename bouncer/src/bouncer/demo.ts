@@ -13,6 +13,7 @@ import { CHAINS } from "../chain/chains.js";
 import { CURVE_EVENTS, ERC20_EVENTS, FACTORY_EVENTS, PONS_V1_FACTORY, PONS_V2_FACTORY, ROBINHOOD_CHAIN_ID, ZERO_ADDRESS } from "../chain/pons.js";
 import { RpcClient } from "../chain/rpc.js";
 import { addressTopic } from "../chain/tape.js";
+import { V4_SWAP } from "../chain/priceSeries.js";
 
 export interface DemoToken {
   token: string;
@@ -173,22 +174,105 @@ function factoryLogs(from: number, to: number) {
   return logs;
 }
 
+/**
+ * Tokens each demo curve trade moved, walked along the curve's own
+ * constant-product path.
+ *
+ * Every demo trade used to move exactly a million tokens whatever it paid, so
+ * a price line drawn from the trades swung ninety percent on a token whose
+ * curve had barely moved — a fixture lying, and the chart faithfully drawing
+ * the lie. This replays the trades in block order against one invariant that
+ * ends on the same reserves getReserves() reports, so every trade's price is
+ * the price the curve would have given it and the line rises the way a curve
+ * being bought does.
+ */
+function demoCurvePath(t: DemoToken): { buys: bigint[]; sells: bigint[] } {
+  const endQuote = t.real + 9n * 10n ** 17n;
+  const endTokens = t.tokenReserve > 0n ? t.tokenReserve : 2n * 10n ** 26n;
+  const k = endQuote * endTokens;
+  const events = [
+    ...t.buys.map((b, i) => ({ at: b[0], quote: b[2], buy: true, i })),
+    ...t.sells.map((x, i) => ({ at: x[0], quote: x[2], buy: false, i })),
+  ].sort((a, b) => a.at - b.at || (a.buy === b.buy ? a.i - b.i : a.buy ? -1 : 1));
+  const net = events.reduce((sum, e) => sum + (e.buy ? e.quote : -e.quote), 0n);
+  // Start wherever the fixture's own trades would have to start from to end
+  // on the reserves the curve reports now, and never below the virtual floor.
+  let quote = endQuote - net > 9n * 10n ** 17n ? endQuote - net : 9n * 10n ** 17n;
+  const buys: bigint[] = [];
+  const sells: bigint[] = [];
+  for (const e of events) {
+    const before = k / quote;
+    if (e.buy) {
+      quote += e.quote;
+      buys[e.i] = before - k / quote;
+    } else {
+      const next = quote - e.quote > 10n ** 15n ? quote - e.quote : 10n ** 15n;
+      sells[e.i] = k / next - before;
+      quote = next;
+    }
+  }
+  return { buys, sells };
+}
+
 function curveLogs(t: DemoToken, from: number, to: number) {
+  const path = demoCurvePath(t);
   const buy = eventTopic(CURVE_EVENTS.CurveBuy);
   const sell = eventTopic(CURVE_EVENTS.CurveSell);
   const logs: unknown[] = [];
   let index = 0;
-  for (const [offset, who, quoteIn, doorBps] of t.buys) {
+  for (const [n, [offset, who, quoteIn, doorBps]] of t.buys.entries()) {
     const b = t.launched + offset;
     if (b < from || b > to) continue;
     const fee = quoteIn / 100n;
     const tax = (quoteIn * (t.taxBps + BigInt(doorBps ?? 0))) / 10_000n;
-    logs.push({ address: t.curve, topics: [buy, addressTopic(who), addressTopic(who)], data: `0x${encodeWord("uint256", quoteIn)}${encodeWord("uint256", 10n ** 24n)}${encodeWord("uint256", fee)}${encodeWord("uint256", tax)}`, blockNumber: `0x${b.toString(16)}`, transactionHash: `0xdemo${t.symbol}${b}`, logIndex: `0x${(index++).toString(16)}` });
+    logs.push({ address: t.curve, topics: [buy, addressTopic(who), addressTopic(who)], data: `0x${encodeWord("uint256", quoteIn)}${encodeWord("uint256", path.buys[n])}${encodeWord("uint256", fee)}${encodeWord("uint256", tax)}`, blockNumber: `0x${b.toString(16)}`, transactionHash: `0xdemo${t.symbol}${b}`, logIndex: `0x${(index++).toString(16)}` });
   }
-  for (const [offset, who, quoteOut] of t.sells) {
+  for (const [n, [offset, who, quoteOut]] of t.sells.entries()) {
     const b = t.launched + offset;
     if (b < from || b > to) continue;
-    logs.push({ address: t.curve, topics: [sell, addressTopic(who), addressTopic(who)], data: `0x${encodeWord("uint256", 10n ** 24n)}${encodeWord("uint256", quoteOut)}${encodeWord("uint256", quoteOut / 100n)}${encodeWord("uint256", 0n)}`, blockNumber: `0x${b.toString(16)}`, transactionHash: `0xdemo${t.symbol}${b}s`, logIndex: `0x${(index++).toString(16)}` });
+    logs.push({ address: t.curve, topics: [sell, addressTopic(who), addressTopic(who)], data: `0x${encodeWord("uint256", path.sells[n])}${encodeWord("uint256", quoteOut)}${encodeWord("uint256", quoteOut / 100n)}${encodeWord("uint256", 0n)}`, blockNumber: `0x${b.toString(16)}`, transactionHash: `0xdemo${t.symbol}${b}s`, logIndex: `0x${(index++).toString(16)}` });
+  }
+  return logs;
+}
+
+/** The router every demo V4 swap goes through: on V4 the only address a swap names is its caller. */
+export const DEMO_ROUTER = "0x0000000000000000000000000000000000e0e0e0";
+
+/**
+ * Trading on the graduated demo pools, so a graduated launch on the demo board
+ * has a tape and a price line like a real one. Twelve swaps a pool, spread
+ * from graduation to the head, buys and sells alternating with the odd large
+ * sell — in V4's own convention, where the amounts are the TRADER's side.
+ */
+function poolManagerLogs(from: number, to: number) {
+  const logs: unknown[] = [];
+  for (const t of Object.values(DEMO.tokens)) {
+    if (!t.graduated) continue;
+    const { poolId, tokenIsCurrency0 } = poolIdFor(t.token, ZERO_ADDRESS, 10_000n, 200n, DEMO_HOOK);
+    const tokenPool = t.supplyToPool ?? 0n;
+    const [amount0, amount1] = tokenIsCurrency0 ? [tokenPool, t.raised] : [t.raised, tokenPool];
+    const sqrtPriceX96 = isqrt((amount1 * 2n ** 192n) / amount0);
+    const span = Math.max(12, HEAD - t.graduated);
+    for (let n = 0; n < 12; n++) {
+      const b = t.graduated + 1 + Math.floor((span * n) / 12);
+      if (b < from || b > to) continue;
+      const sell = n % 3 === 2;
+      const quote = (sell ? 60n + BigInt(n) * 7n : 20n + BigInt(n) * 3n) * 10n ** 15n;
+      const tokens = (quote * tokenPool) / t.raised;
+      // Trader's side: what they paid in is negative, what they took out positive.
+      const tokenLeg = sell ? -tokens : tokens;
+      const quoteLeg = sell ? quote : -quote;
+      const [a0, a1] = tokenIsCurrency0 ? [tokenLeg, quoteLeg] : [quoteLeg, tokenLeg];
+      const signed = (v: bigint) => (v < 0n ? ((1n << 256n) + v).toString(16) : v.toString(16)).padStart(64, "0");
+      logs.push({
+        address: DEMO_POOL_MANAGER,
+        topics: [eventTopic(V4_SWAP), poolId, addressTopic(DEMO_ROUTER)],
+        data: `0x${signed(a0)}${signed(a1)}${encodeWord("uint256", sqrtPriceX96)}${encodeWord("uint256", 1n)}${encodeWord("uint256", 0n)}${encodeWord("uint256", 10_000n)}`,
+        blockNumber: `0x${b.toString(16)}`,
+        transactionHash: `0xdemo${t.symbol.toLowerCase()}swap${b}`,
+        logIndex: "0x0",
+      });
+    }
   }
   return logs;
 }
@@ -242,7 +326,9 @@ export function demoFetch(): typeof fetch {
               ? factoryLogs(from, to)
               : address === DEMO_PLAIN.token
                 ? plainTokenLogs(from, to)
-                : byCurve.has(address)
+                : address === DEMO_POOL_MANAGER
+                  ? poolManagerLogs(from, to)
+                  : byCurve.has(address)
                   ? curveLogs(byCurve.get(address)!, from, to)
                   : byToken.has(address)
                     ? tokenLogs(byToken.get(address)!, from, to)

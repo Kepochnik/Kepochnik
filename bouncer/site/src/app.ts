@@ -43,7 +43,7 @@ import { feedBlocker, readFeed, type FeedRow } from "../../src/bouncer/feed.js";
 import { doorAnswers, splAnswers, SHORT_QUESTION, type Answer } from "../../src/bouncer/answers.js";
 import { marketFacts, shortAge, type Fact } from "../../src/bouncer/marketFacts.js";
 import type { MarketPool } from "../../src/chain/market.js";
-import { readPriceSeries, seriesChangeBps, seriesRange, type PriceSeries } from "../../src/chain/priceSeries.js";
+import { seriesChangeBps, seriesRange, thin, type PricePoint, type PriceSeries } from "../../src/chain/priceSeries.js";
 import { doorWatch, readLag, splWatch, type WatchOffer, type WatchPlan } from "../../src/bouncer/watchPlan.js";
 import { readTradeReceipt, type TradeReceipt } from "../../src/bouncer/txReceipt.js";
 import { formatBps, formatDuration, formatUnits, isoUtc, shortAddress } from "../../src/format.js";
@@ -71,6 +71,13 @@ const ADDR = /^0x[0-9a-fA-F]{40}$/;
  */
 const SANDBOXED = /(^|\.)claude\.ai$|claudeusercontent|anthropic/.test(location.hostname);
 const HOSTED = "https://kepochnik.github.io/bouncer/";
+/**
+ * The Chrome popup is this same app. It is there to answer one question
+ * about the token on the page behind it, so the column of launches — a log
+ * walk every fifteen seconds — never starts in it, whatever was remembered
+ * from the website.
+ */
+const IN_POPUP = location.protocol === "chrome-extension:" || document.querySelector('script[src="popup-init.js"]') !== null;
 /** Set this to your deployed bouncer-proxy URL to make it the default for everyone who opens the site. */
 const DEFAULT_PROXY = "https://bouncer-proxy.tarasenkosanja12.workers.dev";
 
@@ -1647,55 +1654,32 @@ function doorBlock(opts: {
 }
 
 /**
- * The price line, cached per token for this tab.
+ * The price line, drawn from the tape's own trades.
  *
- * The slip is redrawn on every stage and again whenever a row opens, and the
- * walk behind this costs seconds — so it runs once per address and the
- * renders read the answer out of here.
+ * It used to be a second walk over the same pool's Swap log, run once and
+ * frozen: the tape under it moved every fifteen seconds and the line above it
+ * never did, and a token still on its curve — which is every token on the
+ * board of fresh launches — had no line at all, because the walk only knew
+ * pools. One read now feeds both. The line grows when the tape does, it
+ * exists wherever the tape does, and each point is the price that trade
+ * actually paid, so the line and the rows under it cannot disagree.
  */
-const SERIES = new Map<string, PriceSeries>();
-
-/** The key carries the window: the same token over an hour and over a day are two different lines. */
-function seriesKey(address: string): string {
-  return `${address.toLowerCase()}@${frame}`;
-}
-
-function seriesFor(address: string): PriceSeries | null {
-  return SERIES.get(seriesKey(address)) ?? null;
-}
-
-/**
- * Walks the pool's swaps and paints the panel in place.
- *
- * In place, not by re-rendering the slip: a reader who has opened a question
- * should not have it close because a chart arrived.
- */
-async function fillChart(slip: DoorSlip, m: ReturnType<typeof marketFacts>): Promise<void> {
-  const key = seriesKey(slip.subject);
-  if (!m.pool || SERIES.has(key)) return;
-  // The window the toggle is on, so the line and the tape under it describe
-  // the same stretch of the token.
-  const back = frameBlocks();
-  const asked = frame;
-  try {
-    const series = await readPriceSeries(rpcFor(true), m.pool, {
-      fromBlock: Math.max(0, slip.at.block - back),
-      toBlock: slip.at.block,
-      tokenDecimals: slip.id.meta?.decimals ?? 18,
-      chunkSize: mode === "demo" ? 100_000 : undefined,
-    });
-    SERIES.set(key, series);
-    // The reader may have moved the toggle while this was in flight, and a
-    // line drawn for a window nobody is looking at is a wrong chart.
-    const box = asked === frame ? document.getElementById("chart") : null;
-    if (box) box.outerHTML = chartPanel(series, m.quoteSymbol, m.quoteDecimals, m.spot);
-  } catch (error) {
-    SERIES.set(key, { points: [], venue: m.pool.dex, poolAddress: m.pool.address, fromBlock: 0, toBlock: 0, swaps: 0, unread: plainReason(error instanceof Error ? error.message : String(error)) });
-    const box = asked === frame ? document.getElementById("chart") : null;
-    if (box) box.outerHTML = chartPanel(SERIES.get(key)!, m.quoteSymbol, m.quoteDecimals, m.spot);
+function tapeSeries(): PriceSeries | null {
+  const t = tape;
+  if (!t) return null;
+  if (t.opening) return null;
+  if (!t.points.length && t.failing) {
+    return { points: [], venue: t.sub, poolAddress: "", fromBlock: t.from, toBlock: t.head ?? t.from, swaps: 0, unread: t.failing };
   }
+  return { points: thin(t.points, 120), venue: t.sub, poolAddress: "", fromBlock: t.from, toBlock: t.head ?? t.from, swaps: t.points.length, unread: null };
 }
 
+/** Repaints the price panel in place, from whatever the tape holds now. */
+function paintChart(): void {
+  const box = document.getElementById("chart");
+  if (!box || !shown) return;
+  box.outerHTML = chartPanel(tapeSeries(), shown.m.quoteSymbol, shown.m.quoteDecimals, shown.m.spot, "why" in shown.picked ? shown.picked.why : true);
+}
 
 // -------------------------------------------------------------- timeframe
 
@@ -1739,11 +1723,7 @@ function setFrame(next: Frame): void {
   }
   if (!shown) return;
   const { slip, m, picked } = shown;
-  if (m.pool) {
-    const box = document.getElementById("chart");
-    if (box) box.outerHTML = chartPanel(seriesFor(slip.subject), m.quoteSymbol, m.quoteDecimals, m.spot, true);
-    void fillChart(slip, m);
-  }
+  // The line is drawn from the tape, so restarting the tape redraws both.
   if (!("why" in picked)) startTape(slip, picked, m);
 }
 
@@ -1843,13 +1823,24 @@ function setFeed(on: boolean, remember = true): void {
   feedBox.hidden = !on;
   deck.classList.toggle("two", on);
   document.querySelector("main")?.classList.toggle("wide", on);
-  if (!on) { stopFeed(); feedBox.innerHTML = ""; return; }
+  if (!on) {
+    stopFeed();
+    feedBox.innerHTML = "";
+    if (out.querySelector(".pickone")) out.innerHTML = "";
+    return;
+  }
+  // Only when nothing is being read: a route in flight has cleared #out and
+  // is about to fill it, and a "pick a launch" card over a check that is
+  // already running would be the page contradicting itself.
+  if (!location.hash && !out.innerHTML.trim()) out.innerHTML = pickOne();
   startFeed();
 }
 
 /** Restarts the column: a different chain is a different set of launches. */
 function refreshFeed(): void {
   if (!feedOn) return;
+  // The hint names the chain's launchpad, or says there is none.
+  if (out.querySelector(".pickone")) out.innerHTML = pickOne();
   startFeed();
 }
 
@@ -1953,7 +1944,12 @@ function paintFeed(): void {
       ? `<div class="feed-empty"><b>Nothing matches "${esc(FEED_FILTERS.find((x) => x.key === feedFilter)!.label)}"</b>${f.rows.length} launch${f.rows.length === 1 ? "" : "es"} in the window, none of them ${esc(FEED_FILTERS.find((x) => x.key === feedFilter)!.hint.replace(/^the |^every /, ""))}.</div>`
     : `<div class="feed-empty">${f.opening
         ? "<b>Reading the factory…</b>walking back from the head for the launches that just happened"
-        : `<b>No launch in the window</b>nothing was launched between block ${f.from ?? "?"} and ${f.head ?? "?"}. The column keeps looking.`}</div>`;
+        : f.head === null
+          // Never read is not the same as nothing launched. A column that
+          // says "no launch" because the endpoint refused it is telling a
+          // reader the chain is quiet when it has no idea.
+          ? "<b>Could not read the launches</b>the chain did not answer, so this says nothing about whether anything launched. The column keeps trying every fifteen seconds."
+          : `<b>No launch in the window</b>nothing was launched between block ${f.from ?? "?"} and ${f.head}. The column keeps looking.`}</div>`;
 
   feedBox.innerHTML = `<div class="feed-head">
       <h2>New launches</h2>
@@ -1971,6 +1967,17 @@ function paintFeed(): void {
     )}</div>`;
   const rows = feedBox.querySelector<HTMLElement>(".feed-rows");
   if (rows && at > 0) rows.scrollTop = at;
+}
+
+/** The right-hand pane before a launch is picked: what to do, not an empty hole. */
+function pickOne(): string {
+  const blocked = feedBlocker(chain());
+  return `<div class="pickone">
+    <b>${blocked ? "Paste a token to check it" : "Pick a launch to check it"}</b>
+    <p>${blocked
+      ? "There is no launchpad column on this chain, so paste any token address above — BOUNCER reads the chain itself and answers the five questions you would ask before buying."
+      : "Every launch in the column opens here with its verdict, its figures and a live tape of who is buying and who is selling. Or paste any token address above."}</p>
+  </div>`;
 }
 
 function feedRow(r: FeedRow, here: string | null): string {
@@ -2030,6 +2037,8 @@ interface TapeView {
   fresh: Set<string>;
   /** True before the first round has come back. */
   opening: boolean;
+  /** Every trade in the window as a price point, oldest first — the line above the tape. */
+  points: PricePoint[];
 }
 
 let tape: TapeView | null = null;
@@ -2077,7 +2086,11 @@ function tapeBody(): string {
   const net = t.boughtQuote - t.soldQuote;
   const since = Math.max(0, Math.round((Date.now() - t.lastAt) / 1000));
 
-  const flow = `<div class="flow">
+  // Zero bought and zero sold is a claim about the chain. Before any round
+  // has read it, the honest figure is none at all.
+  const flow = t.head === null
+    ? `<div class="flow"><div class="flow-keys"><span class="flow-win">${esc(FRAME_WORD[frame])}</span><span class="net">${t.opening ? "reading…" : "not read yet"}</span></div></div>`
+    : `<div class="flow">
     <div class="flow-keys">
       <span class="flow-win">${esc(FRAME_WORD[frame])}</span>
       <span class="in">bought <b>${esc(amount(t.boughtQuote))}</b></span>
@@ -2089,18 +2102,22 @@ function tapeBody(): string {
 
   const body = t.trades.length
     ? `<div class="tape-rows"><table class="trades">
-        <thead><tr><th>ago</th><th>side</th><th>${esc(sym)}</th><th class="c-tok">tokens</th><th>of supply</th><th>${t.source.kind === "curve" ? "trader" : "to"}</th><th class="c-blk">block</th></tr></thead>
+        <thead><tr><th>ago</th><th>side</th><th>${esc(sym)}</th><th class="c-tok">tokens</th><th>of supply</th><th>${t.source.kind === "curve" ? "trader" : t.source.pool.kind === "v4" ? "via" : "to"}</th><th class="c-blk">block</th></tr></thead>
         <tbody>${t.trades.map((x) => tradeRow(x, t)).join("")}</tbody>
       </table></div>`
     : `<div class="tape-empty">${t.opening
         ? "<b>Reading the trades…</b>the first round is walking the log"
-        : `<b>Nothing traded in the window</b>no buy and no sell between block ${t.from} and ${t.head ?? "?"}`}</div>`;
+        : t.head === null
+          ? "<b>Could not read the trades</b>the chain did not answer, so this is not a quiet token — it is an unread one. The tape keeps trying."
+          : `<b>Nothing traded in the window</b>no buy and no sell between block ${t.from} and ${t.head}`}</div>`;
 
   return `${flow}${body}
     <div class="tape-note">${esc(
       t.source.kind === "curve"
         ? `Read from the curve's own CurveBuy and CurveSell, which name the trader. Ages are worked out from this chain's block rate; the block beside each row is the exact figure. Window opens at block ${t.from}${t.head ? `, read up to ${t.head}` : ""}. Last look ${since} s ago.`
-        : `Read from the pool's Swap log. The address is where the tokens went, which is a router at least as often as a person. Ages are worked out from this chain's block rate; the block beside each row is the exact figure. Window opens at block ${t.from}${t.head ? `, read up to ${t.head}` : ""}. Last look ${since} s ago.`,
+        : t.source.pool.kind === "v4"
+          ? `Read from the PoolManager's Swap log for this pool's id. A V4 swap names only the contract that called the pool — almost always a router — so the address says how it traded, not who. Ages are worked out from this chain's block rate; the block beside each row is the exact figure. Window opens at block ${t.from}${t.head ? `, read up to ${t.head}` : ""}. Last look ${since} s ago.`
+          : `Read from the pool's Swap log. The address is where the tokens went, which is a router at least as often as a person. Ages are worked out from this chain's block rate; the block beside each row is the exact figure. Window opens at block ${t.from}${t.head ? `, read up to ${t.head}` : ""}. Last look ${since} s ago.`,
     )}</div>`;
 }
 
@@ -2189,6 +2206,7 @@ function paintTape(): void {
   box.outerHTML = tapePanel();
   const after = document.getElementById("tape")?.querySelector<HTMLElement>(".tape-rows");
   if (after && at > 0) after.scrollTop = at;
+  paintChart();
 }
 
 /**
@@ -2224,6 +2242,7 @@ function startTape(slip: DoorSlip, picked: { source: TradeSource; sub: string },
     failing: null,
     fresh: new Set(),
     opening: true,
+    points: [],
   };
   // The panel resets to the new window at once, rather than showing the old
   // one's rows and figures under the new one's heading until the first round
@@ -2245,7 +2264,9 @@ function startTape(slip: DoorSlip, picked: { source: TradeSource; sub: string },
           toBlock: head,
           supply: t.supply,
           tokenDecimals: t.tokenDecimals,
-          limit: 200,
+          // Every trade in the round, not a page of them: the rows keep the
+          // newest hundred and twenty, the line needs the whole window.
+          limit: 20_000,
           chunkSize: mode === "demo" ? 100_000 : undefined,
         });
         // A refused walk comes back as a reason, not a throw, so it has to be
@@ -2263,6 +2284,10 @@ function startTape(slip: DoorSlip, picked: { source: TradeSource; sub: string },
           t.soldQuote += round.soldQuote;
           t.fresh = new Set(round.trades.map((x) => `${x.tx}:${x.logIndex}`));
           t.trades = [...round.trades, ...t.trades].slice(0, 120);
+          for (let n = round.trades.length - 1; n >= 0; n--) {
+            const x = round.trades[n];
+            if (x.price !== null && x.price > 0n) t.points.push({ block: x.block, price: x.price, sell: x.side === "sell" });
+          }
         }
       } else {
         t.head = head;
@@ -2391,17 +2416,17 @@ function findingsLog(notes: DoorNote[]): string {
  * real points would hide exactly the thing worth seeing on a token nobody is
  * trading.
  */
-function chartPanel(series: PriceSeries | null, quoteSymbol: string, quoteDecimals: number, spot: bigint | null, pending = true): string {
-  const head = `<div class="chart-head"><span class="cap-l">Price · from the pool&#39;s swaps</span>${frameTabs()}`;
+function chartPanel(series: PriceSeries | null, quoteSymbol: string, quoteDecimals: number, spot: bigint | null, pending: true | string = true): string {
+  const head = `<div class="chart-head"><span class="cap-l" title="Drawn from this token's own trades: each point is what one trade paid per token">Price</span>${frameTabs()}`;
   if (!series) {
     // "Reading…" forever is what a token with no pool used to show, because
     // the walk that would have replaced this line is never started for one.
     // A panel that waits for something nobody asked for is the page telling
     // you it is broken.
-    return `<div class="chartbox" id="chart">${head}</div><p class="chart-no">${pending ? "Reading the pool&#39;s swap log…" : "There is no pool to read a price line from."}</p></div>`;
+    return `<div class="chartbox" id="chart">${head}</div><p class="chart-no">${pending === true ? "Reading the trades…" : esc(pending)}</p></div>`;
   }
   if (series.unread || series.points.length < 2) {
-    const why = series.unread ?? (series.swaps === 0 ? "no swap in the window this read: nobody traded it" : "one swap in the window, which is not a line");
+    const why = series.unread ?? (series.swaps === 0 ? `no trade in ${FRAME_WORD[frame]}: nobody bought or sold it` : `one trade in ${FRAME_WORD[frame]}, which is not a line`);
     return `<div class="chartbox" id="chart">${head}</div><p class="chart-no">${esc(why)}</p></div>`;
   }
   const range = seriesRange(series)!;
@@ -2421,12 +2446,15 @@ function chartPanel(series: PriceSeries | null, quoteSymbol: string, quoteDecima
   const stroke = tone === "down" ? "var(--stop)" : tone === "up" ? "var(--ok)" : "var(--dim)";
   return `<div class="chartbox" id="chart">
     ${head}${move}</div>
-    <svg class="chart" viewBox="0 0 ${w} ${h}" role="img" aria-label="Price over the window read, from the pool's own swaps">
+    <svg class="chart" viewBox="0 0 ${w} ${h}" role="img" aria-label="Price over the window, from its own trades">
       <polyline points="${points}" fill="none" stroke="${stroke}" stroke-width="1.8" stroke-linejoin="round"/>
     </svg>
     <div class="chart-foot">
-      <span>${series.swaps} swap${series.swaps === 1 ? "" : "s"} · ${esc(series.venue)}</span>
-      <span>${spot === null ? "" : `${formatUnits(spot, quoteDecimals, 10).replace(/0+$/, "").replace(/\.$/, "")} ${esc(quoteSymbol)}`}</span>
+      <span>${series.swaps} trade${series.swaps === 1 ? "" : "s"} · ${esc(series.venue)}</span>
+      <span title="What the most recent trade paid per token. The price in the figures below is the one read at the pinned block.">${(() => {
+        const last = series.points[series.points.length - 1]?.price ?? spot;
+        return last === null ? "" : `last ${formatUnits(last, quoteDecimals, 10).replace(/0+$/, "").replace(/\.$/, "")} ${esc(quoteSymbol)}`;
+      })()}</span>
     </div>
   </div>`;
 }
@@ -3533,8 +3561,11 @@ function renderSlip(slip: DoorSlip, opts: { stage?: Stage; source?: Source } = {
   // The chart is a fourth read, started after the slip is on screen and
   // painted in place when it lands. It walks a log, which is the one thing
   // here measured in seconds, and nothing above it should wait for that.
-  const chart = chartPanel(seriesFor(slip.subject), m.quoteSymbol, m.quoteDecimals, m.spot, Boolean(m.pool));
   const picked = tradeSourceFor(slip, m);
+  // Drawn empty here and filled by the tape's first round.
+  // The same reason the tape gives, when there is no tape: one explanation,
+  // not a vague one here and a precise one four hundred pixels further down.
+  const chart = chartPanel(null, m.quoteSymbol, m.quoteDecimals, m.spot, "why" in picked ? picked.why : true);
 
   out.innerHTML = `<div class="slip">
     ${doorBlock({
@@ -3564,8 +3595,6 @@ function renderSlip(slip: DoorSlip, opts: { stage?: Stage; source?: Source } = {
     ${buyStrip(mode === "demo" ? "" : slip.chain.key, slip.subject, Boolean(slip.id.meta) && slip.open?.transferFunction !== false, verdictOf(slip.notes, "done", coverage).kind)}
   </div>`;
 
-  // Start the swap walk once, on the complete slip, and repaint just the panel.
-  if (stage0 === "done" && m.pool) void fillChart(slip, m);
   // The tape opens itself. It is the answer to "why does this page not move",
   // and a live panel behind a button is a panel nobody presses.
   shown = { slip, m, picked };
@@ -4117,14 +4146,15 @@ function boot(): void {
     // by asking which address.
     q.focus();
   }
-  // Restored, not defaulted on: the column is a log walk every fifteen
-  // seconds against somebody else's public endpoint, and a reader who has
-  // not asked for it should not be spending it.
+  // The board is the front page: the column of launches is on unless this
+  // reader turned it off. The site used to open on an empty box and wait to
+  // be asked — a document waiting for a question — when the question most
+  // people arrive with is "what just launched, and is it safe".
   //
   // After the route, not before: routing settles the chain and the mode, and
   // opening the column first meant walking one chain's factory and then
   // immediately throwing it away to walk another's.
-  if (storage("bouncer.feed") === "1") setFeed(true, false);
+  if (!IN_POPUP && storage("bouncer.feed") !== "0") setFeed(true, false);
 }
 
 boot();

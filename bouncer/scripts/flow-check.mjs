@@ -139,6 +139,12 @@ async function waitForVerdict(page, ms = 40_000) {
  * already a stated contract with speed-check. Waiting for it to clear is
  * waiting for the render the reader actually keeps.
  */
+/** The column is on by default now; this opens it only if a remembered choice turned it off. */
+async function openFeed(page) {
+  const pressed = await page.$eval("#feed-toggle", (el) => el.getAttribute("aria-pressed"));
+  if (pressed !== "true") await page.click("#feed-toggle");
+}
+
 async function waitForDone(page, ms = 40_000) {
   await waitForVerdict(page, ms);
   await page.waitForFunction(() => document.querySelector(".verdict") && !document.querySelector("[data-pending]"), null, { timeout: ms });
@@ -737,7 +743,7 @@ await walk("the column of launches opens a token without losing itself", async (
   // board you sit in front of and a list of links.
   await page.goto(`${url}#/demo/0x00000000000000000000000000000000000f2e54`, { waitUntil: "load" });
   await waitForDone(page);
-  await page.click("#feed-toggle");
+  await openFeed(page);
   await page.waitForFunction(() => document.querySelectorAll("#feed .fr").length > 0, null, { timeout: 30_000 });
 
   const first = await page.$eval("#feed .fr .fr-sym", (el) => el.textContent.trim());
@@ -783,7 +789,7 @@ await walk("one window governs the line and the tape, and they cannot disagree",
 await walk("the column's filters narrow what is shown and say how many of how many", async (page) => {
   await page.goto(`${url}#/demo/0x00000000000000000000000000000000000f2e54`, { waitUntil: "load" });
   await waitForDone(page);
-  await page.click("#feed-toggle");
+  await openFeed(page);
   await page.waitForFunction(() => document.querySelectorAll("#feed .fr").length > 1, null, { timeout: 30_000 });
 
   const all = await page.$$eval("#feed .fr", (els) => els.length);
@@ -804,10 +810,60 @@ await walk("the column's filters narrow what is shown and say how many of how ma
 await walk("a chain with no launchpad says why there is no column", async (page) => {
   await page.goto(`${url}#/t/0x532f27101965dd16442e59d40670faf5ebb142e4?chain=base`, { waitUntil: "load" });
   await page.waitForTimeout(1_200);
-  await page.click("#feed-toggle");
+  await openFeed(page);
   await page.waitForFunction(() => document.querySelector("#feed .feed-empty"), null, { timeout: 15_000 });
   const why = await page.$eval("#feed .feed-empty", (el) => el.textContent.replace(/\s+/g, " ").trim());
   if (!/launchpad/i.test(why)) throw new Error(`the column on a chain with no launchpad does not say why: "${why}"`);
+});
+await walk("the front page is the board, and turning it off is remembered", async (page) => {
+  // The site used to open on an empty box and wait to be asked. The first
+  // thing a new reader sees now is what just launched, and what to do next.
+  await page.goto(`${url}#/board?chain=demo`, { waitUntil: "load" }).catch(() => {});
+  await page.evaluate(() => { try { localStorage.clear(); localStorage.setItem("bouncer.mode", "demo"); } catch { /* fine */ } });
+  await page.goto(url, { waitUntil: "load" });
+  await page.waitForTimeout(600);
+  const on = await page.$eval("#feed", (el) => !el.hidden);
+  if (!on) throw new Error("a first visit opened on an empty box, not the board");
+  const hint = await page.$eval(".pickone", (el) => el.textContent.replace(/\s+/g, " ").trim()).catch(() => null);
+  if (!hint) throw new Error("the right-hand pane is an empty hole until something is picked");
+
+  // Here the chain cannot be reached at all, which is the case that matters:
+  // a column that cannot read the factory must not say nothing launched.
+  if (!live) {
+    await page.waitForFunction(() => /stalled/i.test(document.querySelector("#feed .tape-live")?.textContent ?? ""), null, { timeout: 30_000 });
+    const said = await page.$eval("#feed .feed-empty", (el) => el.textContent.replace(/\s+/g, " ").trim());
+    if (/No launch in the window/i.test(said)) throw new Error(`an unreachable factory was reported as a quiet one: "${said}"`);
+  }
+
+  // Off is a choice, and a choice is remembered.
+  await page.click("#feed-toggle");
+  if (await page.$(".pickone")) throw new Error("turning the column off left its hint behind");
+  await page.reload({ waitUntil: "load" });
+  await page.waitForTimeout(600);
+  const back = await page.$eval("#feed", (el) => !el.hidden);
+  if (back) throw new Error("the column came back after the reader turned it off");
+});
+await walk("a graduated launch has a tape and a price line, read off its V4 pool", async (page) => {
+  // V3's Swap asked of a V4 PoolManager matches nothing, so every graduated
+  // launch used to read "nobody traded it" — and before that, "no pool".
+  await page.goto(`${url}#/demo/0x00c0ffee0000000000000000000000000000600d`, { waitUntil: "load" });
+  await waitForDone(page);
+  await page.waitForFunction(() => document.querySelector("#tape .tape-note"), null, { timeout: 30_000 });
+  const rows = await page.$$eval("#tape table.trades tbody tr", (els) => els.length);
+  if (!rows) throw new Error("a graduated launch with swaps on its pool showed an empty tape");
+  const head = await page.$$eval("#tape table.trades th", (els) => els.map((e) => e.textContent.trim()));
+  if (!head.includes("via")) throw new Error(`a V4 tape claims to know more than the router it was given: ${JSON.stringify(head)}`);
+  if (!(await page.$("#chart svg"))) throw new Error("a graduated launch with trades has no price line");
+});
+await walk("a token on its curve has a price, a market cap and a live line", async (page) => {
+  await page.goto(`${url}#/demo/0x00000000000000000000000000000000000000a7`, { waitUntil: "load" });
+  await waitForDone(page);
+  await page.waitForFunction(() => document.querySelector("#chart svg"), null, { timeout: 30_000 });
+  const facts = await page.$$eval(".fact", (els) => els.map((e) => e.textContent.replace(/\s+/g, " ").trim()));
+  for (const label of ["Price", "Market cap", "Liquidity"]) {
+    const f = facts.find((x) => x.toLowerCase().startsWith(label.toLowerCase()));
+    if (!f || /not read/.test(f)) throw new Error(`a token on its curve still shows ${label} as "${f}"`);
+  }
 });
 await walk("Solana says why it cannot watch instead of hiding the section", async (page) => {
   await page.goto(`${url}#/t/So11111111111111111111111111111111111111112?chain=solana`, { waitUntil: "load" });

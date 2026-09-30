@@ -10,7 +10,7 @@ import { test } from "node:test";
 import { eventTopic } from "../src/chain/abi.js";
 import type { MarketPool } from "../src/chain/market.js";
 import { CURVE_EVENTS } from "../src/chain/pons.js";
-import { V2_SWAP, V3_SWAP } from "../src/chain/priceSeries.js";
+import { readPriceSeries, V2_SWAP, V3_SWAP, V4_SWAP } from "../src/chain/priceSeries.js";
 import type { RpcClient } from "../src/chain/rpc.js";
 import { addressTopic } from "../src/chain/tape.js";
 import { readTrades } from "../src/bouncer/trades.js";
@@ -71,13 +71,36 @@ function v2Swap(block: number, to: string, a0In: bigint, a1In: bigint, a0Out: bi
   };
 }
 
-function stub(logs: unknown[], fail?: string): RpcClient {
+const MANAGER = "0x00000000000000000000000000000000000000f4";
+const POOL_ID = `0x${"ab".repeat(32)}`;
+const OTHER_ID = `0x${"cd".repeat(32)}`;
+const ROUTER = "0x00000000000000000000000000000000000000e7";
+
+/** V4 amounts are the trader's side: negative is what the trader paid into the pool. */
+function v4Swap(block: number, id: string, amount0: bigint, amount1: bigint) {
   return {
-    getLogs: async () => {
+    address: MANAGER,
+    topics: [eventTopic(V4_SWAP), id, addressTopic(ROUTER)],
+    data: `0x${i(amount0)}${i(amount1)}${u(1n << 96n)}${u(1n)}${u(0n)}${u(3000n)}`,
+    blockNumber: `0x${block.toString(16)}`,
+    transactionHash: `0x${block.toString(16).padStart(64, "0")}`,
+    logIndex: "0x0",
+  };
+}
+
+/** Serves logs the way a node does: only the ones whose topics match the filter. */
+function stub(logs: unknown[], fail?: string): RpcClient & { filters: unknown[] } {
+  const filters: unknown[] = [];
+  return {
+    filters,
+    getLogs: async (filter: { topics?: (string | string[] | null)[] }) => {
       if (fail) throw new Error(fail);
-      return logs;
+      filters.push(filter);
+      return (logs as { topics: string[] }[]).filter((log) =>
+        (filter.topics ?? []).every((want, n) => want === null || want === undefined || (Array.isArray(want) ? want.includes(log.topics[n]) : want === log.topics[n])),
+      );
     },
-  } as unknown as RpcClient;
+  } as unknown as RpcClient & { filters: unknown[] };
 }
 
 const pool = (kind: MarketPool["kind"], tokenIsToken0 = true): MarketPool => ({
@@ -163,4 +186,52 @@ test("the limit cuts the tape but the counts still describe the whole window", a
   assert.equal(tape.boughtQuote, 10n * E18);
   // Newest kept, not the first three.
   assert.deepEqual(tape.trades.map((t) => t.block), [19, 18, 17]);
+});
+
+const v4pool = (tokenIsToken0 = true): MarketPool => ({
+  dex: "Uniswap V4",
+  kind: "v4",
+  address: MANAGER,
+  feeBps: 30,
+  tokenIsToken0,
+  tokenReserve: null,
+  quoteReserve: null,
+  poolId: POOL_ID,
+});
+
+test("a V4 swap is read off the PoolManager by pool id, not by V3's signature", async () => {
+  // The bug this replaced: V3's Swap asked of the PoolManager matches no log
+  // at all, and a graduated launch read as a token nobody had ever traded.
+  const rpc = stub([v4Swap(10, POOL_ID, 1_000n * E18, -E18), v4Swap(11, OTHER_ID, -5n * E18, 9n * E18)]);
+  const tape = await readTrades(rpc, { kind: "pool", pool: v4pool() }, window);
+  assert.equal(tape.unread, null);
+  assert.equal(tape.trades.length, 1, "a swap in another pool of the same manager leaked onto this tape");
+  assert.equal(tape.trades[0].tokens, 1_000n * E18);
+});
+
+test("a V4 amount is the trader's side, so a positive token leg is a BUY", async () => {
+  // Trader received 1,000 tokens (positive) and paid 1 ETH (negative).
+  const bought = await readTrades(stub([v4Swap(10, POOL_ID, 1_000n * E18, -E18)]), { kind: "pool", pool: v4pool(true) }, window);
+  assert.equal(bought.trades[0].side, "buy");
+  // Trader paid 1,000 tokens in and received 1 ETH out.
+  const sold = await readTrades(stub([v4Swap(10, POOL_ID, -1_000n * E18, E18)]), { kind: "pool", pool: v4pool(true) }, window);
+  assert.equal(sold.trades[0].side, "sell");
+  // On V4 the only address is the caller, a router at least as often as not.
+  assert.equal(sold.trades[0].wallet, ROUTER);
+  assert.equal(sold.trades[0].walletExact, false);
+});
+
+test("the price line reads V4 with the same sign rule as the tape", async () => {
+  const series = await readPriceSeries(stub([v4Swap(10, POOL_ID, -1_000n * E18, E18), v4Swap(12, POOL_ID, 500n * E18, -E18)]), v4pool(true), { fromBlock: 0, toBlock: 100, tokenDecimals: 18 });
+  assert.equal(series.unread, null);
+  assert.equal(series.swaps, 2);
+  assert.deepEqual(series.points.map((p) => p.sell), [true, false]);
+});
+
+test("a V4 pool with no id is refused rather than read as the whole manager", async () => {
+  const anonymous: MarketPool = { ...v4pool(true), poolId: undefined };
+  const tape = await readTrades(stub([v4Swap(10, POOL_ID, E18, -E18)]), { kind: "pool", pool: anonymous }, window);
+  assert.match(tape.unread ?? "", /without its id/);
+  const series = await readPriceSeries(stub([]), anonymous, { fromBlock: 0, toBlock: 100, tokenDecimals: 18 });
+  assert.match(series.unread ?? "", /without its id/);
 });
