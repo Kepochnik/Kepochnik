@@ -60,7 +60,10 @@ export type Stamp = "ON THE LIST" | "NOT A LAUNCH" | "NOT ON THE LIST";
  * And what is shown says which check was run rather than which club the
  * token failed to get into.
  */
-export function stampLabel(stamp: Stamp, launchpad: string | null): string {
+export function stampLabel(stamp: Stamp, launchpad: string | null, v1 = false): string {
+  // A Pons V1 token is on the list — of the V1 factory. Stamping it with the
+  // chain's current launchpad named a mechanism the same page says it lacks.
+  if (stamp === "ON THE LIST" && v1) return "PONS V1 LAUNCH";
   if (stamp === "ON THE LIST") return launchpad ? `${launchpad.toUpperCase()} LAUNCH` : "ON THE LIST";
   if (stamp === "NOT ON THE LIST") return "NOT ON THE LIST";
   // Where there is a launchpad, "not one of its launches" is worth
@@ -232,7 +235,7 @@ export async function readDoor(rpc: RpcClient, input: string, options: DoorOptio
     slip.skipped.push({
       section: "launch record",
       reason: chain.launchpad
-        ? `the ${chain.launchpad} factory address is not published for ${chain.name} yet; pass --factory 0x… to check launches here`
+        ? `the ${chain.launchpad} factory address is not published for ${chain.name} yet; give its address (Settings → Launchpad factory on the site, --factory in the CLI) to check launches here`
         : `no launchpad BOUNCER knows runs on ${chain.name}, so there is no launch record to look for; every address here is checked as an ordinary token`,
     });
   }
@@ -388,12 +391,12 @@ export function doorNotes(slip: DoorSlip): DoorNote[] {
     if (c.status === "open") {
       notes.push({ level: "watch", code: "cover-open", text: `The door tax is still on for ${c.secondsLeft} s: buying now hands up to ${formatBps(c.terms.startBps)} of your money to the creator on top of the fees. Wait for it to end.` });
     } else if (c.status === "closed") {
-      const taxed = c.observed.filter((b) => !b.creatorWallet && b.chargeBps > 0);
-      const highest = taxed.length ? Math.max(...taxed.map((b) => b.chargeBps)) : 0;
+      const taxed = c.observed.filter((b) => b.doorBps > 0);
+      const highest = taxed.length ? Math.max(...taxed.map((b) => b.doorBps)) : 0;
       notes.push({
         level: "info",
         code: "cover-closed",
-        text: `The door tax ended ${formatDuration(Math.max(0, c.head.timestamp - c.windowEndsAt))} ago. ${c.observed.length} buy${c.observed.length === 1 ? "" : "s"} landed in the first ${c.terms.seconds} s${taxed.length ? `; the highest paid ${(highest / 100).toFixed(1)}% at the door` : ""}.`,
+        text: `The door tax ended ${formatDuration(Math.max(0, c.head.timestamp - c.windowEndsAt))} ago. ${c.observed.length} buy${c.observed.length === 1 ? "" : "s"} landed in the first ${c.terms.seconds} s${taxed.length ? `; ${taxed.length === 1 ? "one" : taxed.length} paid door tax, the highest ${(highest / 100).toFixed(1)}% of the buy` : "; none paid door tax"}.`,
       });
     }
     if (c.termsChangedSinceLaunch) notes.push({ level: "watch", code: "terms-retuned", text: "The factory changed its door-tax settings after this launch; this token keeps the settings it launched under, which are not the ones shown." });
@@ -422,7 +425,7 @@ export function doorNotes(slip: DoorSlip): DoorNote[] {
   if (crew) {
     if (crew.largestCrewShareBps >= 2_500) notes.push({ level: "watch", code: "one-crew", text: `${crew.crews[0].wallets.length} of the first buyers got their money from the same address (${shortAddress(crew.crews[0].funder)}) and together bought ${(crew.largestCrewShareBps / 100).toFixed(0)}% of everything.` });
     if (crew.fundedByCreator.length) notes.push({ level: "watch", code: "crew-creator", text: `${crew.fundedByCreator.length} of the first buyers got their ${q.symbol} from the creator's wallets right before buying.` });
-    if (!crew.crews.length && crew.checked >= 5 && !crew.fundedByCreator.length) notes.push({ level: "info", code: "crew-clean", text: `${crew.checked} first buyers checked, no shared funder.` });
+    if (!crew.crews.length && crew.checked >= 5 && !crew.fundedByCreator.length && crew.unresolved === 0) notes.push({ level: "info", code: "crew-clean", text: `${crew.checked} first buyers checked, no shared funder.` });
   }
 
   const l = slip.lookalikes;
@@ -1006,7 +1009,7 @@ export function doorReceipt(slip: DoorSlip): Receipt {
         { label: "door", value: coverChargeLine(c) },
         ...c.observed.slice(0, 8).map((b, i) => ({
           label: `buy ${i + 1}`,
-          value: `${b.secondsAfterLaunch.toFixed(1)} s · ${shortAddress(b.buyer)} · ${amt(b.quoteIn)} · paid ${(b.chargeBps / 100).toFixed(1)}%`,
+          value: `${b.secondsAfterLaunch.toFixed(1)} s · ${shortAddress(b.buyer)} · ${amt(b.quoteIn)} · ${b.creatorWallet ? "creator, exempt" : b.doorBps > 0 ? `door tax ${(b.doorBps / 100).toFixed(1)}%` : "no door tax"}`,
           note: b.creatorWallet ? "creator wallet, exempt" : undefined,
         })),
       ],

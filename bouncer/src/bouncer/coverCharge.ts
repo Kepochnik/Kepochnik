@@ -26,8 +26,17 @@ export interface ObservedBuy {
   quoteIn: bigint;
   fee: bigint;
   tax: bigint;
-  /** (fee + tax) / quoteIn in basis points: what the buy actually paid at the door. */
+  /** (fee + tax) / quoteIn in basis points: everything the buy paid, ordinary fees included. */
   chargeBps: number;
+  /**
+   * The door tax alone: the part of the tax above the curve's own creator
+   * rate, in basis points of the buy. This is what the door took. Counting the
+   * protocol fee and the creator's ordinary rate in it — as the page used to —
+   * reported every buy as "paid at the door", an exempt creator included, and
+   * gave the same buy a different figure here and on the leaderboard, which
+   * has always subtracted the creator rate.
+   */
+  doorBps: number;
   /** True when the buyer is the deployer or the creator fee recipient (exempt by construction). */
   creatorWallet: boolean;
 }
@@ -114,6 +123,7 @@ export async function readCoverCharge(rpc: RpcClient, launch: LaunchedToken, opt
       fee,
       tax,
       chargeBps: quoteIn === 0n ? 0 : Number(((fee + tax) * 10_000n) / quoteIn),
+      doorBps: quoteIn === 0n || creatorWallets.has(buyer) ? 0 : Math.max(0, Number((tax * 10_000n) / quoteIn) - Number(launch.creatorTaxBps)),
       creatorWallet: creatorWallets.has(buyer),
     });
   }
@@ -142,7 +152,7 @@ function blockRate(a: BlockHeader, b: BlockHeader): number {
 export function coverChargeLine(c: CoverCharge): string {
   if (c.status === "disabled") return "disabled at the factory when this launch was created";
   if (c.status === "open") return `open · ${c.secondsLeft} s left · up to ${Number(c.terms.startBps) / 100}% on a buy right now`;
-  const taxed = c.observed.filter((b) => !b.creatorWallet);
-  const paid = taxed.length ? ` · ${taxed.length} paid at the door, highest ${(Math.max(...taxed.map((b) => b.chargeBps)) / 100).toFixed(1)}%` : "";
+  const taxed = c.observed.filter((b) => b.doorBps > 0);
+  const paid = taxed.length ? ` · ${taxed.length} paid at the door, highest ${(Math.max(...taxed.map((b) => b.doorBps)) / 100).toFixed(1)}%` : " · none paid at the door";
   return `closed · ${c.observed.length} buy${c.observed.length === 1 ? "" : "s"} inside the ${c.terms.seconds} s window${paid}`;
 }

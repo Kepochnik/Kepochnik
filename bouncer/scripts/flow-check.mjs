@@ -782,7 +782,7 @@ await walk("one window governs the line and the tape, and they cannot disagree",
 
   const opensAt = () => page.$eval("#tape .tape-note", (el) => Number(el.textContent.match(/Window opens at block (\d+)/)?.[1] ?? 0));
   const narrow = await opensAt();
-  await page.click('.tokbar .frame[data-frame="24h"]');
+  await page.click('#chart .frame[data-frame="24h"]');
   await page.waitForFunction(() => document.querySelector("#tape .flow-win")?.textContent.includes("24 hours"), null, { timeout: 30_000 });
 
   const after = await lit();
@@ -864,7 +864,10 @@ await walk("a token on its curve has a price, a market cap and a live line", asy
   await waitForDone(page);
   await page.waitForFunction(() => document.querySelector("#chart svg"), null, { timeout: 30_000 });
   const facts = await page.$$eval(".fact", (els) => els.map((e) => e.textContent.replace(/\s+/g, " ").trim()));
-  for (const label of ["Price", "Market cap", "Liquidity"]) {
+  // The price lives in the token bar now, beside the ticker, not in the rail.
+  const price = await page.$eval(".tp-v", (el) => el.textContent.replace(/\s+/g, " ").trim()).catch(() => null);
+  if (!price || /no price|not read|—/.test(price)) throw new Error(`a token on its curve still shows its price as "${price}"`);
+  for (const label of ["Market cap", "Liquidity"]) {
     const f = facts.find((x) => x.toLowerCase().startsWith(label.toLowerCase()));
     if (!f || /not read|—/.test(f)) throw new Error(`a token on its curve still shows ${label} as "${f}"`);
   }

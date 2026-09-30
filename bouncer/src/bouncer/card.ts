@@ -35,6 +35,12 @@ export interface CardOptions {
   mascotSvg: string;
   /** Where a reader can run the same check themselves. Printed as the call to action. */
   checkUrl?: string;
+  /**
+   * Made from the invented demo chain. The card says so across its face: a
+   * PNG pasted on a timeline has no page around it to carry the DEMO strip,
+   * and a verdict on a made-up token must never pass for a real one.
+   */
+  demo?: boolean;
 }
 
 /** The page's palette, so a shared card and the page it came from are the same object. */
@@ -169,7 +175,7 @@ export function doorCard(slip: DoorSlip, options: CardOptions): string {
       name: meta ? clip(meta.name, 34) : slip.known ? "known contract" : "no name on chain",
       lead: options.lead,
       address: slip.subject,
-      stamp: stampLabel(slip.stamp, slip.chain.launchpad),
+      stamp: stampLabel(slip.stamp, slip.chain.launchpad, Boolean(slip.id.v1)),
       notes: slip.notes,
       facts: facts(slip),
       coverage: doorCoverage(slip),
@@ -319,7 +325,7 @@ function renderCard(model: CardModel, options: CardOptions): string {
   <text x="56" y="${ROWS.bar - 15}" font-size="15" font-weight="700" letter-spacing="5" fill="${c.text}">BOUNCER</text>
   <line x1="168" y1="2" x2="168" y2="${ROWS.bar}" stroke="${c.line}"/>
   <text x="186" y="${ROWS.bar - 15}" font-size="14" fill="${c.dim}">read-only · no key · no signer</text>
-  <text x="${R}" y="${ROWS.bar - 15}" text-anchor="end" font-size="14" fill="${c.dim}">${esc(model.chain)} · ${esc(model.at)}${model.timestamp ? ` · ${esc(isoUtc(model.timestamp))}` : ""}</text>
+  <text x="${R}" y="${ROWS.bar - 15}" text-anchor="end" font-size="14" fill="${c.dim}">${options.demo ? "DEMO CHAIN · invented" : esc(model.chain)} · ${esc(model.at)}${model.timestamp ? ` · ${esc(isoUtc(model.timestamp))}` : ""}</text>
   ${line(ROWS.bar)}
 
   <text x="${L}" y="${ROWS.subject - 22}" font-size="26" font-weight="700" letter-spacing="1.5" fill="${c.text}">${esc(model.ticker)}</text>
@@ -347,7 +353,11 @@ function renderCard(model: CardModel, options: CardOptions): string {
   ${line(ROWS.foot)}
 
   <text x="${L}" y="${ROWS.foot + 44}" font-size="15" fill="${c.brass}">${esc(options.checkUrl ?? options.repoUrl)}</text>
-  <text x="${R}" y="${ROWS.foot + 44}" text-anchor="end" font-size="15" fill="${c.dim}">check it yourself before you buy</text>
+  <text x="${R}" y="${ROWS.foot + 44}" text-anchor="end" font-size="15" fill="${c.dim}">${options.demo ? "an invented example, not a real token" : "check it yourself before you buy"}</text>
+  ${options.demo ? `<g transform="rotate(-14 600 315)" opacity="0.94">
+    <rect x="-120" y="283" width="1440" height="64" fill="${c.watch}"/>
+    <text x="600" y="327" text-anchor="middle" font-size="30" font-weight="700" letter-spacing="9" fill="${c.ink}">DEMO · INVENTED DATA · NOT A REAL TOKEN</text>
+  </g>` : ""}
 </svg>
 `;
 }

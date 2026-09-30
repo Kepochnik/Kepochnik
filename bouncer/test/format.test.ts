@@ -28,6 +28,7 @@ test("dollar totals are compact, three significant figures", () => {
   assert.equal(formatUsd(12_400), "$12.4K");
   assert.equal(formatUsd(950), "$950");
   assert.equal(formatUsd(9.5), "$9.50");
+  assert.equal(formatUsd(99.21), "$99");
   assert.equal(formatUsd(1_234_000_000), "$1.23B");
   assert.equal(formatUsd(0.004), "$<0.01");
 });
@@ -45,6 +46,7 @@ test("a coin amount is short and never loses a small value to zero", () => {
   assert.equal(formatCoin(E18 * 42n / 10_000n, 18), "0.0042");
   assert.equal(formatCoin(12_345n * E18, 18), "12.3K");
   assert.equal(formatCoin(1_234n * E18, 18), "1,234");
+  assert.equal(formatCoin(1_000_000_000n * E18, 18), "1B");
 });
 
 test("market cap reads $X (Y ETH), and without a price it is the coin alone — never an invented dollar", () => {
@@ -60,4 +62,39 @@ test("the coin's dollar price is the explorer's, and a missing one is null rathe
   assert.equal(await at({ coin_price: "2480.37" }).coinPriceUsd(), 2480.37);
   assert.equal(await at({ coin_price: null }).coinPriceUsd(), null);
   assert.equal(await at({ coin_price: "0" }).coinPriceUsd(), null);
+});
+
+import { humanUtc } from "../src/format.js";
+
+test("a moment on the page is a date a person reads, not an ISO string", () => {
+  assert.equal(humanUtc(Date.UTC(2026, 8, 15, 0, 0) / 1000), "15 Sep 2026, 00:00 UTC");
+  assert.equal(humanUtc(Date.UTC(2026, 0, 3, 14, 7) / 1000), "3 Jan 2026, 14:07 UTC");
+});
+
+test("plural: a count with its noun", async () => {
+  const { plural } = await import("../src/format.js");
+  assert.equal(plural(1, "buy"), "1 buy");
+  assert.equal(plural(3, "buy"), "3 buys");
+  assert.equal(plural(1, "wallet has", "wallets have"), "1 wallet has");
+  assert.equal(plural(1200, "sell"), "1,200 sells");
+});
+
+test("compact money keeps whole-number zeros and carries across units", async () => {
+  const { formatUsd, formatCoin, formatUsdPrice } = await import("../src/format.js");
+  assert.equal(formatUsd(120_000), "$120K");
+  assert.equal(formatUsd(200_000), "$200K");
+  assert.equal(formatUsd(100_000_000), "$100M");
+  assert.equal(formatUsd(999_600), "$1M");
+  assert.equal(formatUsd(999.6), "$1K");
+  assert.equal(formatUsd(9.996), "$10");
+  assert.equal(formatUsd(950), "$950");
+  assert.equal(formatUsd(-857), "−$857");
+  assert.equal(formatCoin(200_000n * 10n ** 18n, 18), "200K");
+  assert.equal(formatCoin(10n ** 18n * 120n, 18), "120");
+  assert.equal(formatCoin(-(10n ** 18n) * 3n / 10n, 18), "−0.3");
+  assert.equal(formatUsdPrice(0.1), "$0.1");
+  assert.equal(formatUsdPrice(0.0999999), "$0.1");
+  assert.equal(formatUsdPrice(0.99999), "$1");
+  assert.equal(formatUsdPrice(0.0001), "$0.0001");
+  assert.equal(formatUsdPrice(0.00000540), "$0.0₅54");
 });

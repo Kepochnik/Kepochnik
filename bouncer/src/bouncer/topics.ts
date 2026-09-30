@@ -110,10 +110,12 @@ const TOPIC_OF: Record<string, Topic> = {
   "sol-liquidity-held": "keep",
   "sol-liquidity-partly-free": "keep",
   "terms-retuned": "keep",
+  // The door tax is the creator taking a cut of a BUY. Filed under selling it
+  // filled "can you sell it right now?" with an answer about buying.
+  "cover-closed": "keep",
+  "cover-open": "keep",
 
   // ---- can you sell it right now
-  "cover-closed": "sell",
-  "cover-open": "sell",
   "frozen-by-default": "sell",
   "high-tax": "sell",
   "interest-bearing": "sell",

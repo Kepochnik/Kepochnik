@@ -79,7 +79,7 @@
   --tnum:tabular-nums;
 
   --r-sm:6px; --r:10px; --r-lg:14px; --r-xl:20px;
-  --max:940px;
+  --max:1320px;
   --shadow:0 1px 2px rgba(0,0,0,.4), 0 8px 24px -12px rgba(0,0,0,.6);
   --lip:inset 0 1px 0 rgba(255,255,255,.045);
   --ring:0 0 0 3px rgba(232,184,75,.28);
@@ -103,6 +103,8 @@ body{
 h1,h2,h3{margin:0;font-weight:600;letter-spacing:-.02em}
 p{margin:0}
 a{color:var(--brand);text-decoration:none}
+.tbl a,.kv a,.whylist a,.list a,.venues a{color:var(--text);text-decoration:underline;text-decoration-color:var(--line-3);text-underline-offset:3px}
+.tbl a:hover,.kv a:hover,.list a:hover{text-decoration-color:currentColor}
 a:hover{text-decoration:underline}
 code,.mono{font-family:var(--mono);font-size:.92em;letter-spacing:0;font-variant-ligatures:none;font-variant-numeric:var(--tnum)}
 :focus-visible{outline:none;box-shadow:var(--ring);border-radius:var(--r-sm)}
@@ -145,6 +147,10 @@ button.ext[aria-pressed="true"]{color:var(--brand-2);border-color:var(--brand);b
 
 /* ---------------------------------------------------------------- the door */
 .hero{padding:48px 0 24px;max-width:620px}
+/* Once an answer is on the page, the invitation goes on every route, not
+   only when the column is on: the page's top no longer depends on a toggle. */
+.answered .hero{display:none}
+.answered .door{padding-top:18px}
 .hero h1{font-size:34px;line-height:1.1;letter-spacing:-.035em;font-weight:650}
 .hero p{margin-top:14px;color:var(--muted);font-size:16px;line-height:1.55}
 .hero p b{color:var(--text);font-weight:500}
@@ -200,7 +206,7 @@ button.ext[aria-pressed="true"]{color:var(--brand-2);border-color:var(--brand);b
 
 /* Once an answer is on the page the invitation is furniture: it shrinks to
    a line so a second check starts where the answer is. */
-body.board .hbar{max-width:1380px}
+
 body.board .hero{display:none}
 body.board .door{padding-top:18px}
 body.board .door input,body.board .btn{min-height:42px}
@@ -227,7 +233,8 @@ body.board .deck{margin-top:14px}
    and a class on screen with no rule is indistinguishable from one that lost
    its rule, so it says here that it is a hook and not a style. */
 .head{}
-.doorway{display:grid;grid-template-columns:340px minmax(0,1fr);grid-template-rows:auto auto 1fr;
+.doorway{display:grid;grid-template-columns:340px minmax(0,1fr);
+  background:linear-gradient(90deg,var(--surface-2) 340px,var(--surface) 340px) !important;grid-template-rows:auto auto 1fr;
   grid-template-areas:"bar bar" "door chart" "door list";background:var(--surface);
   border:1px solid var(--line);border-radius:var(--r-lg) var(--r-lg) 0 0;overflow:hidden;
   box-shadow:0 1px 2px rgba(0,0,0,.5),0 24px 48px -28px rgba(0,0,0,.8),var(--lip)}
@@ -245,19 +252,40 @@ body.board .deck{margin-top:14px}
    The first line anybody reads, so it carries the verdict's tone as a wash. */
 .tokbar{grid-area:bar;display:flex;align-items:center;flex-wrap:wrap;gap:14px 28px;padding:18px 24px;
   border-bottom:1px solid var(--line);background:linear-gradient(180deg,var(--tone-wash),transparent 160%)}
+.tokid{display:flex;align-items:center;gap:14px;min-width:0;flex:1 1 320px}
+.tokav{flex:none;display:grid;place-items:center;width:48px;height:48px;border-radius:14px;
+  background:linear-gradient(135deg,hsl(var(--h1) 70% 58%),hsl(var(--h2) 72% 42%));
+  color:#fff;font:750 21px var(--sans);text-shadow:0 1px 2px rgba(0,0,0,.35);
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.3),0 6px 18px -10px hsl(var(--h1) 70% 50%)}
 .tokline{display:flex;align-items:baseline;flex-wrap:wrap;gap:4px 12px}
+.tokacts{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+.stage{display:inline-flex;align-items:center;gap:8px;align-self:center;min-height:23px;padding:0 10px;border-radius:999px;
+  border:1px solid var(--line-2);color:var(--muted);font:600 10px var(--sans);letter-spacing:.08em;text-transform:uppercase}
+.stage-bar{display:block;width:44px;height:4px;border-radius:999px;background:var(--surface-3);overflow:hidden}
+.stage-bar i{display:block;height:100%;border-radius:999px;background:linear-gradient(90deg,#a8832f,var(--brand))}
+.stage.curve{color:var(--muted)}
+.stage.grad{color:var(--ok);border-color:var(--ok-edge);background:var(--ok-bg)}
+.stage.swept{color:var(--warn);border-color:var(--warn-edge);background:var(--warn-bg)}
+.tokact{display:inline-flex;align-items:center;gap:7px;min-height:28px;padding:0 10px;border-radius:8px;
+  background:var(--surface-3);border:1px solid var(--line);color:var(--muted);font:500 12px var(--sans);cursor:pointer;
+  text-decoration:none;transition:color .12s ease,border-color .12s ease,background .12s ease}
+.tokact:hover{color:var(--text);border-color:var(--line-2);text-decoration:none}
+.tokact .mono{font-size:12px;color:var(--text)}
+.tokact-i{color:var(--dimmer)}
 .tokprice{margin-left:auto;text-align:right;min-width:0}
 /* The hero figure: sans, proportional digits, exactly one per view. */
 .tp-v{font:650 30px/1.1 var(--sans);letter-spacing:-.025em;color:var(--text);white-space:nowrap}
+.tp-v.none{font:500 16px var(--sans);color:var(--dim);letter-spacing:0}
 .tp-v small{margin-left:7px;font:500 13px var(--sans);letter-spacing:0;color:var(--dim)}
 .tp-s{display:flex;justify-content:flex-end;align-items:baseline;gap:10px;margin-top:5px;font-size:12px;color:var(--dimmer)}
 .tp-s .move{font:600 12.5px var(--mono)}
+.tp-coin{font:500 12px var(--mono);color:var(--dim)}
 .tokbar .frames{align-self:center}
 
 /* the bouncer's side */
-.doorman{grid-area:door;border-right:1px solid var(--line);background:var(--surface-2);display:flex;flex-direction:column;min-width:0;
+.doorman{grid-area:door;align-self:start;position:sticky;top:64px;max-height:calc(100vh - 76px);overflow-y:auto;overscroll-behavior:contain;scrollbar-width:thin;border-right:1px solid var(--line);background:var(--surface-2);display:flex;flex-direction:column;min-width:0;
   box-shadow:inset -1px 0 0 rgba(255,255,255,.02)}
-.stand{display:flex;align-items:center;gap:16px;padding:20px 22px;text-align:left;border-bottom:1px solid var(--line);position:relative}
+.stand{display:flex;align-items:flex-start;gap:16px;padding:20px 22px;text-align:left;border-bottom:1px solid var(--line);position:relative}
 .stand::before{content:"";position:absolute;inset:0;pointer-events:none;
   background:radial-gradient(360px 200px at 50% -40px, var(--tone-wash), transparent 72%)}
 .mascot{width:64px;height:64px;flex:none;image-rendering:pixelated;position:relative}
@@ -271,14 +299,13 @@ body.board .deck{margin-top:14px}
 .lead{position:relative;margin-top:11px;color:var(--muted);font-size:13px;line-height:1.55;text-align:left}
 .lead .vpend{display:block;margin-top:6px;color:var(--dim);font-size:12px}
 
-.who2{min-width:0;flex:1 1 300px}
+.who2{min-width:0;flex:1 1 auto}
 .cap-l{font:600 10px var(--sans);letter-spacing:.1em;color:var(--dimmer);text-transform:uppercase}
 .sym{font-size:26px;font-weight:700;letter-spacing:-.03em;line-height:1.15}
 .name{color:var(--dim);font-size:14px}
-.vaddr{display:block;max-width:100%;text-align:left;margin-top:7px;padding:0;background:none;border:0;
-  font-family:var(--mono);font-size:11.5px;color:var(--dimmer);word-break:break-all;cursor:copy}
+.vaddr{cursor:copy}
 .vaddr:hover{color:var(--muted)}
-.stamp{display:inline-flex;align-items:center;align-self:center;min-height:23px;padding:0 10px;border-radius:999px;
+.stamp{white-space:nowrap;flex:none;display:inline-flex;align-items:center;align-self:center;min-height:23px;padding:0 10px;border-radius:999px;
   font:600 10px var(--sans);letter-spacing:.08em;text-transform:uppercase;border:1px solid var(--line-2);color:var(--dim)}
 .stamp.flat{/* deliberately the default: not a launch is a fact, not a warning */}
 .stamp.yes{background:var(--ok-bg);color:var(--ok);border-color:var(--ok-edge)}
@@ -316,7 +343,7 @@ body.board .deck{margin-top:14px}
 .chart-foot{display:flex;justify-content:space-between;gap:10px;margin-top:10px;font-size:11px;color:var(--dimmer)}
 /* Empty is shorter than reading: a line that is on its way holds the space
    it will fill, a line that does not exist does not take 250px to say so. */
-.chart-empty{display:grid;place-items:center;height:140px;margin-top:14px;padding:20px;border:1px dashed var(--line-2);
+.chart-empty{display:grid;place-items:center;min-height:140px;margin-top:14px;padding:20px;border:1px dashed var(--line-2);
   border-radius:10px;color:var(--dim);font-size:13px;line-height:1.55;text-align:center}
 .chart-empty.busy{height:250px;background:linear-gradient(100deg,transparent 30%,rgba(255,255,255,.035) 50%,transparent 70%) 0 0/250% 100%;
   animation:shimmer 1.6s linear infinite}
@@ -329,9 +356,15 @@ body.board .deck{margin-top:14px}
 .fact{min-width:0}
 .fact-l{font:600 10px var(--sans);letter-spacing:.1em;color:var(--dimmer);text-transform:uppercase}
 .fact-v{font-family:var(--mono);font-variant-numeric:var(--tnum);font-size:15px;margin-top:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.fact-miss{grid-column:1/-1;padding-top:10px;border-top:1px dashed var(--line-2);color:var(--dimmer);font-size:11.5px;line-height:1.55}
+.fact-miss b{color:var(--dim);font-weight:600;margin-right:4px}
+.fact-miss span{color:var(--dimmer)}
+.fact-coin{display:block;margin-top:1px;font-size:11.5px;color:var(--dim);overflow:hidden;text-overflow:ellipsis}
 .fact-v.warn{color:var(--warn)}
 .fact-v.none{color:var(--dim)}
-.fact-n{font-size:10.5px;color:var(--dimmer);margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* The note under a figure wraps to two lines rather than ending in "…": the
+   reason a figure is missing is the part most worth reading in full. */
+.fact-n{font-size:10.5px;line-height:1.4;color:var(--dimmer);margin-top:3px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
 
 .venues{padding:15px 22px;border-top:1px solid var(--line)}
 .venue{display:flex;justify-content:space-between;gap:10px;align-items:baseline;padding:6px 0;font-size:12px;color:var(--dim)}
@@ -360,9 +393,11 @@ body.board .deck{margin-top:14px}
 .qq{color:var(--dimmer);font:600 10px var(--sans);letter-spacing:.1em;text-transform:uppercase}
 .qv{font-size:15px;line-height:1.45;color:var(--text)}
 .qv.warn{color:var(--warn)} .qv.stop{color:var(--stop)} .qv.unknown{color:var(--dim)}
-.qfig{flex:none;align-self:center;font-family:var(--mono);font-variant-numeric:var(--tnum);font-size:14px;color:var(--dim);white-space:nowrap}
+.qfig{flex:none;align-self:center;font:500 13px var(--sans);color:var(--dim);white-space:nowrap}
+.qfig.n{font:500 13.5px var(--mono);font-variant-numeric:var(--tnum)}
 .qfig.warn{color:var(--warn)} .qfig.stop{color:var(--stop)} .qfig.ok{color:var(--muted)}
-.qn{display:inline-flex;align-items:center;justify-content:center;min-width:18px;height:18px;padding:0 5px;flex:none;
+.qn span{font-weight:800}
+.qn{display:inline-flex;align-items:center;justify-content:center;gap:3px;min-width:18px;height:18px;padding:0 6px;margin-left:4px;flex:none;
   align-self:center;border-radius:999px;font:600 10.5px var(--sans);background:var(--surface-3);color:var(--dim)}
 .qn.warn{background:var(--warn-bg);color:var(--warn)}
 .qn.stop{background:var(--stop-bg);color:var(--stop)}
@@ -411,7 +446,7 @@ body.board .deck{margin-top:14px}
 /* the actions strip under the door */
 .vfoot{display:flex;align-items:center;gap:8px 12px;flex-wrap:wrap;padding:11px 22px;background:var(--surface-2);
   border:1px solid var(--line);border-top:0;border-radius:0 0 var(--r-lg) var(--r-lg);margin-top:-12px}
-.vat{color:var(--dimmer);font-size:12px}
+.vat{color:var(--dimmer);font-size:12px;font-family:var(--mono)}
 .vacts{margin-left:auto;display:flex;gap:6px;flex-wrap:wrap}
 .ghost{min-height:32px;padding:0 11px;background:transparent;color:var(--muted);border:1px solid var(--line-2);
   border-radius:var(--r-sm);font:500 12.5px var(--sans);cursor:pointer;
@@ -443,17 +478,19 @@ body.board .deck{margin-top:14px}
 .cap b{color:var(--muted);font-weight:600;letter-spacing:.02em;text-transform:none;font-size:12px}
 .tbl{margin-top:12px;overflow-x:auto;border:1px solid var(--line);border-radius:var(--r)}
 table.buys{width:100%;border-collapse:collapse;font-size:12.5px;font-variant-numeric:var(--tnum)}
-table.buys th{text-align:left;padding:9px 13px;background:var(--surface-2);color:var(--dimmer);
+table.buys th{white-space:nowrap;text-align:left;padding:9px 13px;background:var(--surface-2);color:var(--dimmer);
   font:600 10px var(--sans);letter-spacing:.09em;text-transform:uppercase;white-space:nowrap;border-bottom:1px solid var(--line)}
 table.buys td{padding:9px 13px;border-top:1px solid var(--line);color:var(--muted);white-space:nowrap}
-table.buys td:last-child,table.buys th:last-child{width:100%;white-space:normal}
+table.buys td:last-child{width:100%;white-space:normal}
+table.buys .num{text-align:right;font-family:var(--mono);font-size:12px;font-variant-numeric:var(--tnum)}
 table.buys tr:first-child td{border-top:0}
 .flag{display:inline-flex;align-items:center;min-height:19px;padding:0 7px;border-radius:999px;font:600 10px var(--sans);
   letter-spacing:.05em;text-transform:uppercase;background:var(--surface-3);color:var(--dim);border:1px solid var(--line)}
+.flag.name{text-transform:none;letter-spacing:0;font-weight:550}
 .flag.ok{background:var(--ok-bg);color:var(--ok);border-color:var(--ok-edge)}
 .flag.bad{background:var(--stop-bg);color:var(--stop);border-color:var(--stop-edge)}
 .rules{margin:16px 0 0;padding-left:20px;color:var(--muted);font-size:13.5px;display:grid;gap:6px}
-.exit-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:1px;margin-top:14px;
+.exit-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:1px;margin-top:14px;
   background:var(--line);border:1px solid var(--line);border-radius:var(--r);overflow:hidden}
 .exit-grid>div{background:var(--surface-2);padding:13px 15px;display:grid;gap:3px}
 .exit-grid span{color:var(--dimmer);font-size:11px;letter-spacing:.04em;text-transform:uppercase}
@@ -493,11 +530,23 @@ table.buys tr:first-child td{border-top:0}
 /* what could not be read, listed */
 .covhead{display:flex;gap:10px;align-items:baseline;font-size:13.5px}
 .whychecks{list-style:none;margin:14px 0 0;padding:0;display:grid;gap:1px;background:var(--line);border:1px solid var(--line);border-radius:var(--r);overflow:hidden}
-.whycheck{display:grid;grid-template-columns:auto 1fr;gap:3px 12px;align-items:baseline;padding:10px 13px;background:var(--surface-2);font-size:13px;color:var(--muted)}
+.whycheck{display:grid;grid-template-columns:104px 1fr;gap:3px 12px;align-items:baseline;padding:10px 13px;background:var(--surface-2);font-size:13px;color:var(--muted)}
 .whycheck small{display:block;color:var(--dimmer);font-size:12px;margin-top:2px}
 .wcs{font:600 10px var(--sans);letter-spacing:.07em;text-transform:uppercase;color:var(--dim)}
 .wcs-read{color:var(--ok)} .wcs-unread{color:var(--warn)} .wcs-unsupported{color:var(--dim)} .wcs-na{color:var(--dimmer)}
 .whylead{color:var(--muted);font-size:13.5px;line-height:1.55;margin-top:14px}
+.howlead{color:var(--muted);font-size:13.5px;line-height:1.55;margin-top:14px}
+.howlead b{color:var(--text)}
+/* The findings behind the word, under the word: one line each, loudest
+   first, each a button that opens its question. */
+.keyf{padding:4px 22px 16px;border-bottom:1px solid var(--line)}
+.keyf .whylead{margin-top:0;font-size:12px;color:var(--dim)}
+.keyf .whylist{list-style:none;margin:8px 0 0;padding:0;display:grid;gap:4px}
+.keyf-row{display:grid;grid-template-columns:auto 1fr;gap:10px;align-items:baseline;width:100%;padding:7px 9px;margin:0 -9px;
+  background:none;border:0;border-radius:8px;color:var(--muted);font:400 12.5px/1.5 var(--sans);text-align:left;cursor:pointer}
+.keyf-row:hover{background:var(--surface-3);color:var(--text)}
+.keyf-row .whylvl{margin-right:0;min-width:52px}
+.keyf-t{min-width:0}
 .whylead b{color:var(--text)}
 .whylist{margin:12px 0 0;padding-left:20px;color:var(--muted);font-size:13px;display:grid;gap:7px}
 .whylist code{color:var(--dimmer);font-size:11.5px;margin-left:6px}
@@ -509,8 +558,8 @@ table.buys tr:first-child td{border-top:0}
    between a board and a list of links. */
 .deck{display:grid;gap:16px;align-items:start}
 .deck.two{grid-template-columns:318px minmax(0,1fr)}
-.wrap.wide{max-width:1380px}
-.feed{position:sticky;top:14px;max-height:calc(100vh - 28px);display:flex;flex-direction:column;
+
+.feed{position:sticky;top:72px;max-height:calc(100vh - 86px);display:flex;flex-direction:column;
   border:1px solid var(--line);border-radius:var(--r-lg);background:var(--surface);
   box-shadow:var(--shadow),var(--lip);overflow:hidden}
 .feed[hidden]{display:none}
@@ -518,7 +567,7 @@ table.buys tr:first-child td{border-top:0}
   background:var(--surface-2)}
 .feed-head h2{margin:0;font:600 10px var(--sans);letter-spacing:.1em;text-transform:uppercase;color:var(--dim)}
 .feed-head .tape-live{margin-left:auto}
-.feed-filters{display:flex;gap:4px;flex-wrap:wrap;padding:8px 14px;border-bottom:1px solid var(--line)}
+.feed-filters{display:flex;gap:4px;flex-wrap:nowrap;overflow-x:auto;scrollbar-width:none;padding:8px 12px;border-bottom:1px solid var(--line)}
 .fchip{min-height:24px;padding:0 8px;background:var(--surface-3);border:1px solid var(--line);border-radius:999px;
   cursor:pointer;color:var(--dim);font:500 11px var(--sans);transition:color .12s ease,background .12s ease,border-color .12s ease}
 .fchip:hover{color:var(--text);border-color:var(--line-2)}
@@ -540,6 +589,7 @@ table.buys tr:first-child td{border-top:0}
 .fr-fill{grid-column:1;align-self:center;height:4px;margin-top:5px;border-radius:999px;background:var(--surface-3);overflow:hidden}
 .fr-fill i{display:block;height:100%;border-radius:999px;background:linear-gradient(90deg,#a8832f,var(--brand));transition:width .6s ease}
 .fr-fill.near i{background:linear-gradient(90deg,#1f9e62,var(--ok))}
+.fr-fill.hold{visibility:hidden}
 .fr-pct{grid-column:2;justify-self:end;margin-top:5px;font:500 10.5px var(--mono);color:var(--dimmer)}
 .ftag{font:600 9px var(--sans);letter-spacing:.06em;text-transform:uppercase;padding:2px 5px;border-radius:4px;
   border:1px solid var(--line-2);color:var(--dim);white-space:nowrap}
@@ -565,6 +615,7 @@ table.buys tr:first-child td{border-top:0}
 .vmini{justify-self:start;padding:3px 8px;border:1.5px solid currentColor;border-radius:6px;font:800 11px var(--sans);letter-spacing:.07em}
 .vmini.stop{color:var(--stop)} .vmini.watch{color:var(--warn)} .vmini.clear{color:var(--ok)} .vmini.unknown{color:var(--dim)}
 .pickone .pick-keys{margin-top:24px;font-size:12px;color:var(--dimmer)}
+@media (hover:none){.pickone .pick-keys{display:none}}
 kbd{display:inline-flex;align-items:center;justify-content:center;min-width:20px;height:20px;padding:0 5px;margin:0 2px;
   border:1px solid var(--line-2);border-bottom-width:2px;border-radius:5px;background:var(--surface-2);
   font:500 11px var(--mono);color:var(--muted)}
@@ -579,7 +630,10 @@ kbd{display:inline-flex;align-items:center;justify-content:center;min-width:20px
      matters most. You arrived here by tapping a launch; the list can wait. */
   .feed{position:static;max-height:330px;order:2}
   #out{order:1}
-  .wrap.wide{max-width:var(--max)}
+  /* With no report open there is no answer to keep above the fold: the
+     column IS the page, and the card that says "pick a launch in the column"
+     sat 2,500px above the column it meant. */
+  .deck:has(#out > .pickone) .feed{order:0}
 }
 
 /* --------------------------------------------------------------- window */
@@ -619,6 +673,9 @@ kbd{display:inline-flex;align-items:center;justify-content:center;min-width:20px
 .tape-live .dot{width:5px;height:5px;border-radius:50%;background:var(--ok);animation:pulse 1.1s ease-in-out infinite}
 .tape-live.stalled{color:var(--warn);border-color:var(--warn-edge);background:var(--warn-bg)}
 .tape-live.stalled .dot{background:var(--warn);animation:none}
+.tape-live.demo{color:var(--muted);border-color:var(--line-2);background:var(--surface-3)}
+.tape-live.demo .dot{background:var(--muted)}
+.feed-chain{color:var(--dim);font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
 .tape-when{margin-left:auto;color:var(--dimmer);font-size:11.5px;font-variant-numeric:var(--tnum)}
 
 /* Bought against sold over the window: the one figure worth five seconds. */
@@ -640,6 +697,8 @@ table.trades th{position:sticky;top:0;z-index:1;text-align:left;padding:8px 20px
   color:var(--dimmer);font:600 9.5px var(--sans);letter-spacing:.09em;text-transform:uppercase;
   border-bottom:1px solid var(--line);white-space:nowrap}
 table.trades td{padding:8px 20px;border-top:1px solid var(--line);color:var(--muted);white-space:nowrap}
+table.trades td.t-num,table.trades td.t-share,table.trades th.c-num{text-align:right}
+table.trades td.t-num{color:var(--text)}
 table.trades tr:first-child td{border-top:0}
 table.trades tr.fresh{animation:land .8s ease-out}
 @keyframes land{from{background:rgba(232,184,75,.11)}to{background:transparent}}
@@ -652,12 +711,22 @@ table.trades tr.t-sell td:first-child{box-shadow:inset 2px 0 0 var(--stop)}
 table.trades tbody tr:hover td{background:rgba(255,255,255,.025)}
 .t-num{font-family:var(--mono);color:var(--text)}
 .t-w{font-family:var(--mono);font-size:11.5px;color:var(--dim)}
-.t-w.flagged{color:var(--warn)}
-.t-share{color:var(--dim)}
+a.t-w,table.trades .c-blk a{color:var(--muted);text-decoration:none}
+a.t-w:hover,table.trades .c-blk a:hover{color:var(--text);text-decoration:underline;text-underline-offset:3px}
+.t-share{color:var(--dim);font-family:var(--mono);font-size:12px}
 .t-share.big{color:var(--warn);font-weight:550}
 .t-ago{font-family:var(--mono);font-size:11.5px;color:var(--dimmer);white-space:nowrap}
 .tape-empty{padding:26px 20px;color:var(--dim);font-size:13.5px;text-align:center}
 .tape-empty b{display:block;color:var(--muted);font-weight:550;margin-bottom:3px}
+.realone{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:8px 14px;margin-top:14px;padding:13px 16px;
+  border:1px solid var(--line-2);border-radius:var(--r);background:var(--surface-2);color:var(--muted);font-size:13.5px;line-height:1.5;text-decoration:none}
+.realone b{color:var(--text);font-weight:600}
+.realone-go{color:var(--brand);font-weight:600;white-space:nowrap}
+.realone:hover{border-color:var(--line-3);text-decoration:none}
+.realone:hover .realone-go{text-decoration:underline;text-underline-offset:3px}
+.widen{display:flex;flex-wrap:wrap;justify-content:center;gap:8px;margin-top:12px}
+.widen .ghost{min-height:34px;padding:0 14px}
+@media (max-width:720px){.widen .ghost{min-height:44px}}
 .tape-note{padding:10px 20px;border-top:1px solid var(--line);color:var(--dimmer);font-size:11.5px;background:var(--surface-2)}
 
 /* ---------------------------------------------------------------- more */
@@ -667,14 +736,15 @@ table.trades tbody tr:hover td{background:rgba(255,255,255,.025)}
 .sec>summary{display:flex;align-items:center;gap:12px;padding:14px 22px;cursor:pointer;list-style:none;min-height:52px}
 .sec>summary::-webkit-details-marker{display:none}
 .sec>summary:hover{background:var(--surface-2)}
-.sec>summary h2{font-size:14px;font-weight:550;color:var(--muted)}
+.sec>summary h2{flex:1;font-size:14px;font-weight:550;color:var(--muted)}
 .sec>summary:hover h2{color:var(--text)}
 .sec>summary .what{margin-left:auto;color:var(--dimmer);font-size:12.5px;text-align:right}
 .sec>summary .chev{margin-left:0}
 .sec>.body{padding:2px 22px 22px;border-top:1px solid var(--line)}
+.sec>.body>.what{margin-top:12px;color:var(--dim);font-size:12.5px;line-height:1.5}
 
 /* the exit calculator */
-.calc{display:flex;gap:8px;flex-wrap:wrap;margin-top:16px}
+.calc{display:grid;gap:0;margin-top:16px}
 .calc input{flex:1 1 200px;min-width:0;min-height:42px;padding:0 13px;background:var(--bg);color:var(--text);
   border:1px solid var(--line-2);border-radius:var(--r-sm);font:400 14px var(--mono)}
 .calc-presets{display:flex;gap:6px;flex-wrap:wrap;margin-top:10px}
@@ -718,18 +788,53 @@ table.trades tbody tr:hover td{background:rgba(255,255,255,.025)}
 .card-wrap.open{display:block}
 .card-wrap svg{width:100%;height:auto;display:block;border-radius:var(--r)}
 
-.buy{display:flex;align-items:center;gap:14px;flex-wrap:wrap;padding:16px 20px;background:var(--surface);
-  border:1px solid var(--line);border-radius:var(--r-lg)}
-.buy-head{font-size:13.5px;color:var(--muted)}
-.buy-head b{color:var(--text);font-weight:550}
-.buy-links{margin-left:auto;display:flex;gap:7px;flex-wrap:wrap}
-.buy-link{display:inline-flex;align-items:center;gap:7px;min-height:36px;padding:0 13px;background:var(--surface-2);
-  border:1px solid var(--line-2);border-radius:var(--r-sm);color:var(--muted);font-size:13px}
-.buy-link:hover{color:var(--text);border-color:var(--line-3);text-decoration:none}
-.buy-name{font-weight:550}
-.buy-what{color:var(--dimmer);font-size:11.5px}
-.buy-disc{width:100%;color:var(--dimmer);font-size:11.5px;line-height:1.5}
-.buy-gap{color:var(--warn)}
+/* ------------------------------------------------------------------ buy
+   The one place a reader leaves for somewhere else, so it has to look like a
+   door and not a footnote: a card per venue, big enough for a thumb, its mark,
+   what it is for, and one bright action. Equal weight, fixed order. Under a
+   STOP every card greys out together — the strip may get quieter, never
+   louder — and the referral disclosure stays in plain sight under the cards. */
+.buy{padding:20px 22px 18px;background:var(--surface);border:1px solid var(--line);border-radius:var(--r-lg);
+  box-shadow:var(--shadow),var(--lip);position:relative;overflow:hidden}
+.buy::before{content:"";position:absolute;inset:0;pointer-events:none;
+  background:radial-gradient(640px 180px at 12% -60px,rgba(232,184,75,.08),transparent 70%)}
+.buy-head h2{position:relative;font:650 17px var(--sans);letter-spacing:-.02em;color:var(--text)}
+.buy-lead{position:relative;margin-top:6px;max-width:72ch;color:var(--dim);font-size:13px;line-height:1.55}
+.buy-links{position:relative;display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:10px;margin-top:16px}
+.buy-link{--v:var(--brand);--v2:var(--brand-2);display:grid;grid-template-columns:auto minmax(0,1fr) auto;align-items:center;gap:14px;
+  min-height:76px;padding:14px 14px 14px 16px;border-radius:14px;color:var(--text);text-decoration:none;
+  background:linear-gradient(180deg,rgba(255,255,255,.035),rgba(255,255,255,.01)),var(--surface-2);
+  border:1px solid var(--line-2);box-shadow:var(--lip);
+  transition:transform .16s ease,border-color .16s ease,box-shadow .16s ease,background .16s ease}
+.buy-link:hover{text-decoration:none;transform:translateY(-2px);border-color:color-mix(in srgb,var(--v) 55%,transparent);
+  box-shadow:0 12px 32px -14px color-mix(in srgb,var(--v) 55%,transparent),var(--lip)}
+.buy-link:active{transform:translateY(0)}
+.buy-link:focus-visible{box-shadow:var(--ring)}
+.buy-link.v-gmgn{--v:#3dd68c;--v2:#9af2c5}
+.buy-link.v-basedbot{--v:#5b8cff;--v2:#a9c1ff}
+.buy-mark{display:grid;place-items:center;width:44px;height:44px;border-radius:12px;
+  background:linear-gradient(145deg,var(--v2),var(--v));color:#0b0d10;font:800 19px var(--sans);
+  box-shadow:0 6px 18px -8px var(--v),inset 0 1px 0 rgba(255,255,255,.45)}
+.buy-text{display:grid;gap:2px;min-width:0}
+.buy-name{font:650 15.5px var(--sans);letter-spacing:-.01em}
+.buy-what{color:var(--dim);font-size:12.5px;line-height:1.4}
+.buy-go{display:inline-flex;align-items:center;gap:2px;min-height:40px;padding:0 15px;border-radius:10px;white-space:nowrap;
+  background:linear-gradient(180deg,var(--v2),var(--v));color:#0b0d10;font:650 13.5px var(--sans);
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.4),0 4px 14px -6px var(--v);transition:filter .16s ease}
+.buy-link:hover .buy-go{filter:brightness(1.08)}
+.buy-disc{position:relative;display:flex;align-items:baseline;gap:9px;margin-top:14px;color:var(--dimmer);font-size:11.5px;line-height:1.5}
+.buy-ref{flex:none;padding:1px 7px;border:1px solid var(--line-2);border-radius:999px;color:var(--dim);
+  font:600 9.5px var(--sans);letter-spacing:.08em;text-transform:uppercase}
+.buy-gap{position:relative;margin-top:8px;color:var(--warn);font-size:12px}
+@media (max-width:640px){.buy-disc{display:block;font-size:12px}.buy-ref{display:inline-block;margin:0 6px 4px 0;font-size:11px}}
+/* Under STOP: every card grey, the action a plain outline, no glow. */
+.buy-stop::before{background:radial-gradient(640px 180px at 12% -60px,rgba(255,98,87,.08),transparent 70%)}
+.buy-stop .buy-link{--v:var(--line-3);--v2:var(--line-3)}
+.buy-stop .buy-mark{background:var(--surface-3);color:var(--dim);box-shadow:none}
+.buy-stop .buy-go{background:none;color:var(--muted);border:1px solid var(--line-2);box-shadow:none}
+.buy-stop .buy-link:hover{transform:none;box-shadow:var(--lip)}
+.buy-hold .buy-go{background:none;color:var(--text);border:1px solid color-mix(in srgb,var(--v) 60%,transparent);box-shadow:none}
+.buy-none .buy-lead{margin-top:8px}
 
 /* the history list */
 .seen{margin-top:20px}
@@ -743,7 +848,7 @@ table.trades tbody tr:hover td{background:rgba(255,255,255,.025)}
 .seen-head .chev{margin-left:2px}
 body.board .seen{margin-top:12px}
 .seen-list{list-style:none;margin:10px 0 0;padding:0;display:grid;gap:6px}
-.seen-row a{display:grid;grid-template-columns:16px auto 1fr auto;gap:11px;align-items:center;padding:10px 13px;
+.seen-row a{display:grid;grid-template-columns:16px auto auto 1fr auto;gap:11px;align-items:center;padding:10px 13px;
   background:var(--surface);border:1px solid var(--line);border-radius:var(--r);color:var(--muted);font-size:13px}
 .seen-row a:hover{border-color:var(--line-2);text-decoration:none}
 .seen-mark{display:flex}
@@ -753,6 +858,7 @@ body.board .seen{margin-top:12px}
 .seen-was{color:var(--dim);font-size:12px}
 .seen-go{color:var(--brand);font-size:12px;white-space:nowrap}
 .seen-foot{margin-top:9px;color:var(--dimmer);font-size:11.5px;line-height:1.5}
+@media (max-width:560px){.seen-row a{grid-template-columns:16px auto 1fr auto}.seen-addr{display:none}}
 
 /* the ticker search results */
 .hits{list-style:none;margin:14px 0 0;padding:0;display:grid;gap:7px}
@@ -766,9 +872,19 @@ body.board .seen{margin-top:12px}
 .chain-hit{display:flex;align-items:center;gap:9px;padding:12px 15px;background:var(--surface);border:1px solid var(--line);border-radius:var(--r);margin-top:12px;font-size:13.5px}
 .chain-hit-where{margin-left:auto;color:var(--dim);font-size:12.5px}
 
-.error{padding:18px 20px;background:var(--stop-bg);border:1px solid var(--stop-edge);border-radius:var(--r-lg);margin-top:24px}
-.error strong{display:block;color:var(--stop);font-size:14.5px;margin-bottom:6px}
+.error{padding:18px 20px;background:var(--unknown-bg);border:1px solid var(--unknown-edge);border-radius:var(--r-lg);margin-top:24px}
+.error strong{display:block;color:var(--text);font-size:14.5px;margin-bottom:6px}
 .error p{color:var(--muted);font-size:13.5px;line-height:1.55}
+.error p+p{margin-top:8px}
+.err-acts{display:flex;flex-wrap:wrap;gap:8px;margin-top:14px}
+.err-acts .ghost{min-height:38px;padding:0 16px;display:inline-flex;align-items:center;text-decoration:none}
+.err-more{margin-top:14px}
+.err-more summary{cursor:pointer;color:var(--dim);font-size:12.5px;min-height:28px;display:inline-flex;align-items:center}
+.err-more summary:hover{color:var(--muted)}
+.qhint{margin-top:10px;color:var(--muted);font-size:13px;line-height:1.5}
+.qhint b{color:var(--warn);font-weight:600}
+.err-raw{font-size:12px;color:var(--dim);word-break:break-word;margin-top:6px}
+@media (max-width:720px){.err-acts .ghost{min-height:44px}.err-more summary{min-height:44px}}
 
 footer{margin-top:56px;padding-top:24px;border-top:1px solid var(--line);display:flex;gap:28px;flex-wrap:wrap;
   color:var(--dimmer);font-size:12px;line-height:1.6}
@@ -795,7 +911,8 @@ footer a:hover{color:var(--muted)}
 .who .at{color:var(--dimmer);font-size:12px;margin-top:3px}
 .stamp-row .stamp{margin-left:auto}
 .stamp.no{background:var(--stop-bg);color:var(--stop);border-color:var(--stop-edge)}
-.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:12px}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:12px;align-items:start}
+.exit-grid>div{align-content:start}
 section.sec{background:var(--surface);border:1px solid var(--line);border-radius:var(--r-lg);padding:20px 22px;min-width:0}
 section.sec.wide{grid-column:1/-1}
 section.sec>h2{font-size:14px;font-weight:600;color:var(--text)}
@@ -833,6 +950,20 @@ table.buys tr.exempt td:first-child{box-shadow:inset 2px 0 0 var(--line-3)}
 /* three that had rules under the old design and lost them */
 .qblurb{margin-top:12px;color:var(--muted);font-size:13.5px;line-height:1.6}
 .calc-row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+/* The planner's inputs carry their own labels: three boxes showing "100",
+   "0.1" and a clipped placeholder said nothing about what they were. */
+.plan-form{display:flex;flex-wrap:wrap;align-items:flex-end;gap:10px;margin-top:14px}
+.plan-form label{display:grid;gap:5px;font:600 10px var(--sans);letter-spacing:.08em;text-transform:uppercase;color:var(--dim)}
+.plan-form label span{text-transform:none;letter-spacing:0;font-weight:400;color:var(--dimmer)}
+.plan-form label.wide{flex:1 1 260px}
+.plan-form input{min-height:42px;width:140px;padding:0 12px;background:var(--bg);color:var(--text);border:1px solid var(--line-2);
+  border-radius:var(--r-sm);font:400 13px var(--mono);letter-spacing:0;text-transform:none}
+.plan-form label.wide input{width:100%}
+.plan-form input:focus{border-color:rgba(232,184,75,.5);box-shadow:var(--ring);outline:none}
+.plan-form .btn{min-height:42px}
+@media (max-width:720px){.plan-form .btn{min-height:44px}.keyf-row{min-height:44px;align-items:center}}
+.t-role{margin-left:4px;vertical-align:1px}
+.gloss-line{display:block;margin-top:2px;color:var(--dim);font-size:12px}
 .whylvl{font:600 9.5px var(--sans);letter-spacing:.09em;text-transform:uppercase;margin-right:8px}
 .whylvl.stop{color:var(--stop)} .whylvl.watch{color:var(--warn)} .whylvl.info{color:var(--dim)}
 
@@ -858,7 +989,9 @@ table.buys tr.exempt td:first-child{box-shadow:inset 2px 0 0 var(--line-3)}
   .head-top,.verdict,.vfoot,.q>summary,.qbody,.sec>summary,.sec>.body,.more-head{padding-left:16px;padding-right:16px}
   /* One column, and the bouncer stands BESIDE his stamp rather than above
      it: stacked, the mascot pushed the verdict 738px down a 844px screen. */
-  .doorway{grid-template-columns:1fr;grid-template-areas:"bar" "door" "chart" "list"}
+  .doorway{grid-template-columns:1fr;grid-template-areas:"bar" "door" "chart" "list";background:var(--surface)!important}
+  .doorman{position:static;max-height:none;overflow:visible;align-self:stretch}
+  .exit-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
   /* The token bar folds to two rows — who, then price beside the window —
      so the verdict under it starts on the first screen. */
   .tokbar{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:end;padding:12px 16px;gap:6px 12px}
@@ -869,6 +1002,9 @@ table.buys tr.exempt td:first-child{box-shadow:inset 2px 0 0 var(--line-3)}
   .tokbar .frames{align-self:end}
   .chart-plot,.chart-empty.busy{height:190px}
   .chart-plot{margin-right:64px}
+  .buy{padding:16px}
+  .buy-link{grid-template-columns:auto minmax(0,1fr)}
+  .buy-go{grid-column:1/-1;justify-content:center;min-height:44px}
   .doorway>.chartbox{padding-left:16px;padding-right:16px}
   .doorman{border-right:0;border-bottom:1px solid var(--line)}
   .stand{display:flex;align-items:center;gap:16px;text-align:left;padding:16px}
@@ -904,9 +1040,10 @@ table.buys tr.exempt td:first-child{box-shadow:inset 2px 0 0 var(--line-3)}
   footer{gap:18px}
   /* WCAG 2.2 target size: 44px for a control, 24px for a standalone link.
      The desktop sizes stay as they are — a finger is not the pointer there. */
-  .ghost,.btn,.chip,.picker-btn,.ext,.vaddr,.door input,.calc input,.row input,.settings input{min-height:44px}
+  .ghost,.btn,.chip,.picker-btn,.ext,.vaddr,.door input,.calc input,.row input,.settings input,.plan-form input{min-height:44px}
   .chip{padding:0 14px}
-  .vaddr{display:block;width:100%;margin-top:0;line-height:44px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .tokact{min-height:44px}
+  .tokav{width:40px;height:40px;font-size:18px;border-radius:12px}
   .link{min-height:44px;display:inline-flex;align-items:center}
   .morelinks a{min-height:24px;display:inline-flex;align-items:center}
   footer a{display:inline-flex;min-height:24px;align-items:center}
@@ -956,6 +1093,7 @@ table.buys tr.exempt td:first-child{box-shadow:inset 2px 0 0 var(--line-3)}
       <input id="q" name="q" placeholder="Paste a contract address — or type a ticker and BOUNCER will look for it" autocomplete="off" spellcheck="false" inputmode="text" aria-labelledby="door-label">
       <button class="btn" id="go" type="submit">Check it</button>
     </form>
+    <p class="qhint" id="qhint" role="alert" hidden></p>
     <div class="chips" id="chips"></div>
     <div class="source" id="source">
       <span class="pill" id="source-pill">Demo data</span>

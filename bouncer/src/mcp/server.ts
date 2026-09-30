@@ -159,7 +159,7 @@ export function createMcpServer(deps: McpDeps): { tools: ToolDef[]; handle: (mes
         const launchBlock = await findLaunchBlock(rpc, launch.token, head.number, deps.demo ? 400_000 : Math.round(7 * 86_400 * chain.blocksPerSecond), factory, deps.demo ? 100_000 : undefined);
         if (launchBlock === null) return { text: "launch older than the search window; the cover charge window is long closed", structured: { status: "closed", secondsLeft: 0 } };
         const c = await readCoverCharge(rpc, launch, { launchBlock, head, factory, chunkSize: deps.demo ? 100_000 : undefined });
-        const lines = [`status: ${c.status}`, `seconds left: ${c.secondsLeft}`, `terms: ${Number(c.terms.startBps) / 100}% in the launch second, 0 after ${c.terms.seconds} s${c.termsChangedSinceLaunch ? " (factory retuned since launch)" : ""}`, `launched: block ${c.launch.block}`, ...c.observed.map((b) => `buy at +${b.secondsAfterLaunch}s by ${b.buyer}: paid ${(b.chargeBps / 100).toFixed(1)}%${b.creatorWallet ? " (creator wallet, exempt)" : ""}`)];
+        const lines = [`status: ${c.status}`, `seconds left: ${c.secondsLeft}`, `terms: ${Number(c.terms.startBps) / 100}% in the launch second, 0 after ${c.terms.seconds} s${c.termsChangedSinceLaunch ? " (factory retuned since launch)" : ""}`, `launched: block ${c.launch.block}`, ...c.observed.map((b) => `buy at +${b.secondsAfterLaunch}s by ${b.buyer}: door tax ${(b.doorBps / 100).toFixed(1)}%, all fees ${(b.chargeBps / 100).toFixed(1)}%${b.creatorWallet ? " (creator wallet, exempt)" : ""}`)];
         return { text: lines.join("\n"), structured: JSON.parse(slipJson(c)) };
       },
     },

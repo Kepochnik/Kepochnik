@@ -590,6 +590,21 @@
       }
       return { holders, transfers, type: info.type ?? null, priceUsd: numberOrNull(info.exchange_rate ?? void 0), volume24hUsd: numberOrNull(info.volume_24h ?? void 0), marketCapUsd: numberOrNull(info.circulating_market_cap ?? void 0) };
     }
+    /**
+     * The explorer's dollar price for the chain's own coin, from /api/v2/stats.
+     *
+     * The one number on the page that is not read from the chain: the chain has
+     * no idea what an ether costs in dollars. It is used for exactly one thing —
+     * the dollar figure printed beside an amount of the coin — and the coin
+     * amount is always printed next to it, so the read number is never replaced
+     * by the converted one. Null when the explorer has no price, and then no
+     * dollar figure is printed at all.
+     */
+    async coinPriceUsd() {
+      const stats = await this.get("/api/v2/stats");
+      const price = numberOrNull(stats.coin_price ?? void 0);
+      return price !== null && price > 0 ? price : null;
+    }
     /** What the explorer knows about an address: contract or not, verified, who created it. */
     async addressInfo(address) {
       const body = await this.get(`/api/v2/addresses/${address}`);
@@ -694,9 +709,11 @@
     "sol-liquidity-held": "keep",
     "sol-liquidity-partly-free": "keep",
     "terms-retuned": "keep",
+    // The door tax is the creator taking a cut of a BUY. Filed under selling it
+    // filled "can you sell it right now?" with an answer about buying.
+    "cover-closed": "keep",
+    "cover-open": "keep",
     // ---- can you sell it right now
-    "cover-closed": "sell",
-    "cover-open": "sell",
     "frozen-by-default": "sell",
     "high-tax": "sell",
     "interest-bearing": "sell",
@@ -1030,6 +1047,7 @@
     solana: { gmgn: "sol" }
     // unverified
   };
+  var PROVEN = { robinhood: ["gmgn", "basedbot"] };
   function tradeVenues(chainKey, address) {
     const slugs = TRADE_SLUGS[chainKey];
     if (!slugs || !address) return [];
@@ -1209,6 +1227,11 @@
     const found = CHAINS[key.toLowerCase()];
     if (!found) throw new Error(`unknown chain ${key}; known: ${Object.keys(CHAINS).join(", ")}`);
     return found;
+  }
+  function explorerAddress(chain2, address) {
+    if (chain2.blockscout) return `${chain2.blockscout}/address/${address}`;
+    if (chain2.explorerUrl) return chain2.family === "solana" ? `${chain2.explorerUrl}/token/${address}` : `${chain2.explorerUrl}/address/${address}`;
+    return null;
   }
   function featureBlocker(chain2, feature) {
     switch (feature) {
@@ -1511,6 +1534,9 @@
     const amountInWithFee = amountIn * (10000n - feeBps);
     return amountInWithFee * reserveOut / (reserveIn * 10000n + amountInWithFee);
   }
+
+  // site/src/app.ts
+  init_abi();
 
   // src/chain/reader.ts
   init_abi();
@@ -3556,6 +3582,85 @@
     const count = String(zeros).split("").map((d) => SUBSCRIPT[Number(d)]).join("");
     return `0.0${count}${digits}`;
   }
+  function sig3(n) {
+    const digits = n >= 100 ? 0 : n >= 10 ? 1 : 2;
+    const text = n.toFixed(digits);
+    return text.includes(".") ? text.replace(/\.?0+$/, "") : text;
+  }
+  var STEPS = [
+    [1e9, "B"],
+    [1e6, "M"],
+    [1e3, "K"]
+  ];
+  function compact(n, from = 1e3) {
+    for (let i = 0; i < STEPS.length; i++) {
+      const [size, suffix] = STEPS[i];
+      if (n < size || n < from) continue;
+      const text = sig3(n / size);
+      if (Number(text) >= 1e3 && i > 0) return `${sig3(n / STEPS[i - 1][0])}${STEPS[i - 1][1]}`;
+      return `${text}${suffix}`;
+    }
+    return null;
+  }
+  var MINUS = "\u2212";
+  function formatUsd(value) {
+    if (!Number.isFinite(value)) return "";
+    const sign = value < 0 ? MINUS : "";
+    const n = Math.abs(value);
+    const whole = Math.round(n);
+    const big = compact(whole >= 1e3 ? Math.max(n, 1e3) : n);
+    if (big) return `${sign}$${big}`;
+    if (n >= 9.995) return `${sign}$${whole}`;
+    if (n >= 1) return `${sign}$${n.toFixed(2)}`;
+    if (n === 0) return "$0";
+    return `${sign}$${n.toFixed(2) === "0.00" ? "<0.01" : n.toFixed(2)}`;
+  }
+  function formatUsdPrice(value) {
+    if (!Number.isFinite(value) || value <= 0) return "$0";
+    if (value >= 1) {
+      if (value >= 1e3) return formatUsd(value);
+      const text = value.toFixed(value >= 100 ? 2 : 4);
+      return `$${text.replace(/\.?0+$/, "")}`;
+    }
+    const [mantissa, exponent] = value.toExponential(3).split("e");
+    const zeros = -Number(exponent) - 1;
+    const digits = mantissa.replace(".", "").replace(/0+$/, "") || "0";
+    if (zeros < 0) return `$${Number(mantissa).toString()}`;
+    if (zeros < 4) return `$0.${"0".repeat(zeros)}${digits}`;
+    const count = String(zeros).split("").map((d) => SUBSCRIPT[Number(d)]).join("");
+    return `$0.0${count}${digits}`;
+  }
+  function formatCoin(value, decimals) {
+    const n = Number(value) / 10 ** decimals;
+    if (!Number.isFinite(n)) return formatUnits(value, decimals, 2);
+    const sign = n < 0 ? MINUS : "";
+    const abs = Math.abs(n);
+    const big = compact(abs, 1e4);
+    if (big) return `${sign}${big}`;
+    if (abs >= 100) return `${sign}${Math.round(abs).toLocaleString("en-US")}`;
+    if (abs >= 1) return `${sign}${abs.toFixed(2).replace(/\.?0+$/, "")}`;
+    if (abs === 0) return "0";
+    const zeros = Math.floor(-Math.log10(abs));
+    return `${sign}${abs.toFixed(Math.min(decimals, zeros + 3)).replace(/0+$/, "").replace(/\.$/, "")}`;
+  }
+  function usdOf(amount, decimals, usdPerCoin) {
+    if (usdPerCoin === null || !Number.isFinite(usdPerCoin) || usdPerCoin <= 0) return null;
+    return Number(amount) / 10 ** decimals * usdPerCoin;
+  }
+  function formatMoney(amount, decimals, symbol, usdPerCoin) {
+    const usd2 = usdOf(amount, decimals, usdPerCoin);
+    const coin = `${formatCoin(amount, decimals)} ${symbol}`;
+    return usd2 === null ? coin : `${formatUsd(usd2)} (${coin})`;
+  }
+  var MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  function humanUtc(unix) {
+    const d = new Date(unix * 1e3);
+    const pad = (n) => String(n).padStart(2, "0");
+    return `${d.getUTCDate()} ${MONTHS[d.getUTCMonth()]} ${d.getUTCFullYear()}, ${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())} UTC`;
+  }
+  function plural(n, one, many = `${one}s`) {
+    return `${n.toLocaleString("en-US")} ${n === 1 ? one : many}`;
+  }
 
   // src/bouncer/door.ts
   init_abi();
@@ -3618,6 +3723,7 @@
         fee,
         tax,
         chargeBps: quoteIn === 0n ? 0 : Number((fee + tax) * 10000n / quoteIn),
+        doorBps: quoteIn === 0n || creatorWallets.has(buyer2) ? 0 : Math.max(0, Number(tax * 10000n / quoteIn) - Number(launch.creatorTaxBps)),
         creatorWallet: creatorWallets.has(buyer2)
       });
     }
@@ -3642,8 +3748,8 @@
   function coverChargeLine(c) {
     if (c.status === "disabled") return "disabled at the factory when this launch was created";
     if (c.status === "open") return `open \xB7 ${c.secondsLeft} s left \xB7 up to ${Number(c.terms.startBps) / 100}% on a buy right now`;
-    const taxed = c.observed.filter((b) => !b.creatorWallet);
-    const paid = taxed.length ? ` \xB7 ${taxed.length} paid at the door, highest ${(Math.max(...taxed.map((b) => b.chargeBps)) / 100).toFixed(1)}%` : "";
+    const taxed = c.observed.filter((b) => b.doorBps > 0);
+    const paid = taxed.length ? ` \xB7 ${taxed.length} paid at the door, highest ${(Math.max(...taxed.map((b) => b.doorBps)) / 100).toFixed(1)}%` : " \xB7 none paid at the door";
     return `closed \xB7 ${c.observed.length} buy${c.observed.length === 1 ? "" : "s"} inside the ${c.terms.seconds} s window${paid}`;
   }
 
@@ -3889,7 +3995,11 @@
     } else {
       out2.push(`On the curve this launch charged ${formatBps(r.creatorTaxBps)} creator tax on top of the protocol fee; the graduated pool charges ${Number(r.poolFeePpm) / 1e4}% per swap through the Pons hook.`);
     }
-    out2.push(`The creator tax is paid to ${r.creatorFeeRecipient}${r.creatorFeeRecipientChanges.length ? `, changed ${r.creatorFeeRecipientChanges.length}\xD7 since launch` : ", unchanged since launch"}. The creator can move it again at any time.`);
+    const lastMove = r.creatorFeeRecipientChanges[r.creatorFeeRecipientChanges.length - 1];
+    const moved = r.creatorFeeRecipientChanges.length;
+    out2.push(
+      `The creator tax is paid to ${shortAddress(r.creatorFeeRecipient)}${r.creatorFeeRecipient === launch.deployer.toLowerCase() ? " (the deployer)" : ""}${moved ? `, moved ${moved === 1 ? "once" : `${moved} times`} since launch` : ", unchanged since launch"}. The creator can move it again at any time.` + (lastMove && lastMove.to !== r.creatorFeeRecipient ? ` The factory record and the last change event disagree: the record says ${shortAddress(r.creatorFeeRecipient)}, the event says ${shortAddress(lastMove.to)}.` : "")
+    );
     out2.push(
       r.buybackEnabled ? "Buyback is on: a share of fees buys tokens back and locks them in a vault that vests them to the creator and the protocol over five years. Nothing is burned." : "Buyback is off: fees are split between the protocol and the creator, none is spent buying the token back."
     );
@@ -4398,7 +4508,11 @@
   }
   function oneCrewLine(c) {
     if (c.checked === 0) return "no buyers to check";
-    if (!c.crews.length) return `${c.checked} first buyers checked \xB7 no shared funder${c.unresolved ? ` \xB7 ${c.unresolved} unresolved` : ""}`;
+    if (!c.crews.length) {
+      const traced = c.checked - c.unresolved;
+      if (traced <= 0) return `${c.checked} first buyer${c.checked === 1 ? "" : "s"} checked \xB7 funding traced for none of them, so a shared funder cannot be ruled out`;
+      return `${c.checked} first buyer${c.checked === 1 ? "" : "s"} checked \xB7 no shared funder${c.unresolved ? ` among the ${traced} whose funding was traced (${c.unresolved} not traced)` : ""}`;
+    }
     const top = c.crews[0];
     return `${c.checked} first buyers checked \xB7 ${top.wallets.length} share a funder (${(top.shareBps / 100).toFixed(0)}% of the curve)${c.fundedByCreator.length ? ` \xB7 ${c.fundedByCreator.length} funded by the creator` : ""}`;
   }
@@ -5706,7 +5820,8 @@
   }
 
   // src/bouncer/door.ts
-  function stampLabel(stamp, launchpad) {
+  function stampLabel(stamp, launchpad, v1 = false) {
+    if (stamp === "ON THE LIST" && v1) return "PONS V1 LAUNCH";
     if (stamp === "ON THE LIST") return launchpad ? `${launchpad.toUpperCase()} LAUNCH` : "ON THE LIST";
     if (stamp === "NOT ON THE LIST") return "NOT ON THE LIST";
     return launchpad ? `NOT A ${launchpad.toUpperCase()} LAUNCH` : "ORDINARY TOKEN";
@@ -5769,7 +5884,7 @@
     if (!launchpadKnown) {
       slip.skipped.push({
         section: "launch record",
-        reason: chain2.launchpad ? `the ${chain2.launchpad} factory address is not published for ${chain2.name} yet; pass --factory 0x\u2026 to check launches here` : `no launchpad BOUNCER knows runs on ${chain2.name}, so there is no launch record to look for; every address here is checked as an ordinary token`
+        reason: chain2.launchpad ? `the ${chain2.launchpad} factory address is not published for ${chain2.name} yet; give its address (Settings \u2192 Launchpad factory on the site, --factory in the CLI) to check launches here` : `no launchpad BOUNCER knows runs on ${chain2.name}, so there is no launch record to look for; every address here is checked as an ordinary token`
       });
     }
     if (!id.launch && !id.token.code.empty) {
@@ -5888,12 +6003,12 @@
       if (c.status === "open") {
         notes.push({ level: "watch", code: "cover-open", text: `The door tax is still on for ${c.secondsLeft} s: buying now hands up to ${formatBps(c.terms.startBps)} of your money to the creator on top of the fees. Wait for it to end.` });
       } else if (c.status === "closed") {
-        const taxed = c.observed.filter((b) => !b.creatorWallet && b.chargeBps > 0);
-        const highest = taxed.length ? Math.max(...taxed.map((b) => b.chargeBps)) : 0;
+        const taxed = c.observed.filter((b) => b.doorBps > 0);
+        const highest = taxed.length ? Math.max(...taxed.map((b) => b.doorBps)) : 0;
         notes.push({
           level: "info",
           code: "cover-closed",
-          text: `The door tax ended ${formatDuration(Math.max(0, c.head.timestamp - c.windowEndsAt))} ago. ${c.observed.length} buy${c.observed.length === 1 ? "" : "s"} landed in the first ${c.terms.seconds} s${taxed.length ? `; the highest paid ${(highest / 100).toFixed(1)}% at the door` : ""}.`
+          text: `The door tax ended ${formatDuration(Math.max(0, c.head.timestamp - c.windowEndsAt))} ago. ${c.observed.length} buy${c.observed.length === 1 ? "" : "s"} landed in the first ${c.terms.seconds} s${taxed.length ? `; ${taxed.length === 1 ? "one" : taxed.length} paid door tax, the highest ${(highest / 100).toFixed(1)}% of the buy` : "; none paid door tax"}.`
         });
       }
       if (c.termsChangedSinceLaunch) notes.push({ level: "watch", code: "terms-retuned", text: "The factory changed its door-tax settings after this launch; this token keeps the settings it launched under, which are not the ones shown." });
@@ -5919,7 +6034,7 @@
     if (crew) {
       if (crew.largestCrewShareBps >= 2500) notes.push({ level: "watch", code: "one-crew", text: `${crew.crews[0].wallets.length} of the first buyers got their money from the same address (${shortAddress(crew.crews[0].funder)}) and together bought ${(crew.largestCrewShareBps / 100).toFixed(0)}% of everything.` });
       if (crew.fundedByCreator.length) notes.push({ level: "watch", code: "crew-creator", text: `${crew.fundedByCreator.length} of the first buyers got their ${q2.symbol} from the creator's wallets right before buying.` });
-      if (!crew.crews.length && crew.checked >= 5 && !crew.fundedByCreator.length) notes.push({ level: "info", code: "crew-clean", text: `${crew.checked} first buyers checked, no shared funder.` });
+      if (!crew.crews.length && crew.checked >= 5 && !crew.fundedByCreator.length && crew.unresolved === 0) notes.push({ level: "info", code: "crew-clean", text: `${crew.checked} first buyers checked, no shared funder.` });
     }
     const l = slip.lookalikes;
     if (l) {
@@ -6353,7 +6468,7 @@
         name: meta ? clip(meta.name, 34) : slip.known ? "known contract" : "no name on chain",
         lead: options.lead,
         address: slip.subject,
-        stamp: stampLabel(slip.stamp, slip.chain.launchpad),
+        stamp: stampLabel(slip.stamp, slip.chain.launchpad, Boolean(slip.id.v1)),
         notes: slip.notes,
         facts: facts(slip),
         coverage: doorCoverage(slip)
@@ -6450,7 +6565,7 @@
   <text x="56" y="${ROWS.bar - 15}" font-size="15" font-weight="700" letter-spacing="5" fill="${c.text}">BOUNCER</text>
   <line x1="168" y1="2" x2="168" y2="${ROWS.bar}" stroke="${c.line}"/>
   <text x="186" y="${ROWS.bar - 15}" font-size="14" fill="${c.dim}">read-only \xB7 no key \xB7 no signer</text>
-  <text x="${R}" y="${ROWS.bar - 15}" text-anchor="end" font-size="14" fill="${c.dim}">${esc(model.chain)} \xB7 ${esc(model.at)}${model.timestamp ? ` \xB7 ${esc(isoUtc(model.timestamp))}` : ""}</text>
+  <text x="${R}" y="${ROWS.bar - 15}" text-anchor="end" font-size="14" fill="${c.dim}">${options.demo ? "DEMO CHAIN \xB7 invented" : esc(model.chain)} \xB7 ${esc(model.at)}${model.timestamp ? ` \xB7 ${esc(isoUtc(model.timestamp))}` : ""}</text>
   ${line(ROWS.bar)}
 
   <text x="${L}" y="${ROWS.subject - 22}" font-size="26" font-weight="700" letter-spacing="1.5" fill="${c.text}">${esc(model.ticker)}</text>
@@ -6478,7 +6593,11 @@
   ${line(ROWS.foot)}
 
   <text x="${L}" y="${ROWS.foot + 44}" font-size="15" fill="${c.brass}">${esc(options.checkUrl ?? options.repoUrl)}</text>
-  <text x="${R}" y="${ROWS.foot + 44}" text-anchor="end" font-size="15" fill="${c.dim}">check it yourself before you buy</text>
+  <text x="${R}" y="${ROWS.foot + 44}" text-anchor="end" font-size="15" fill="${c.dim}">${options.demo ? "an invented example, not a real token" : "check it yourself before you buy"}</text>
+  ${options.demo ? `<g transform="rotate(-14 600 315)" opacity="0.94">
+    <rect x="-120" y="283" width="1440" height="64" fill="${c.watch}"/>
+    <text x="600" y="327" text-anchor="middle" font-size="30" font-weight="700" letter-spacing="9" fill="${c.ink}">DEMO \xB7 INVENTED DATA \xB7 NOT A REAL TOKEN</text>
+  </g>` : ""}
 </svg>
 `;
   }
@@ -6923,17 +7042,19 @@
   }
   function launchedRecord(t) {
     const phase = t.graduated ? 2n : t.swept ? 1n : 0n;
+    const recipient = t.recipientMoves?.length ? t.recipientMoves[t.recipientMoves.length - 1][1] : t.deployer;
+    const buyback = t.buybackFlips?.length ? t.buybackFlips[t.buybackFlips.length - 1][1] : true;
     return [
       encodeWord("address", t.token),
       encodeWord("address", t.curve),
       encodeWord("address", t.deployer),
-      encodeWord("address", t.deployer),
+      encodeWord("address", recipient),
       encodeWord("address", ZERO_ADDRESS),
       encodeWord("uint256", DEMO.threshold),
       encodeWord("uint24", 10000n),
       encodeWord("int24", 200n),
       encodeWord("uint16", t.taxBps),
-      encodeWord("bool", true),
+      encodeWord("bool", buyback),
       encodeWord("uint8", phase),
       encodeWord("uint256", t.graduated ? t.raised : 0n),
       encodeWord("uint256", t.graduated ? t.supplyToPool ?? 0n : 0n),
@@ -7281,6 +7402,7 @@
         const items = funded.has(who) ? [{ hash: `0xdemofund${who.slice(-4)}`, value: (10n ** 18n).toString(), block_number: fresh.launched - 400, from: { hash: DEMO_FUNDER }, to: { hash: who } }] : [];
         return json({ items, next_page_params: null });
       }
+      if (url.pathname === "/api/v2/stats") return json({ coin_price: "2480.37" });
       if (url.pathname === "/api/v2/search") {
         const q2 = (url.searchParams.get("q") ?? "").toUpperCase();
         const items = tokens.filter((t) => t.symbol.toUpperCase() === q2).map((t) => ({ type: "token", address: t.token, name: t.name, symbol: t.symbol }));
@@ -7364,6 +7486,67 @@
   // src/bouncer/mascot.ts
   var MASCOT_SVG_INNER = `<rect x="11" y="1" width="10" height="1" fill="#3e3e4c"/><rect x="9" y="2" width="14" height="1" fill="#3e3e4c"/><rect x="8" y="3" width="16" height="1" fill="#3e3e4c"/><rect x="7" y="4" width="18" height="1" fill="#3e3e4c"/><rect x="6" y="5" width="5" height="1" fill="#3e3e4c"/><rect x="11" y="5" width="10" height="1" fill="#757584"/><rect x="21" y="5" width="5" height="1" fill="#3e3e4c"/><rect x="6" y="6" width="4" height="1" fill="#3e3e4c"/><rect x="10" y="6" width="12" height="1" fill="#757584"/><rect x="22" y="6" width="4" height="1" fill="#3e3e4c"/><rect x="5" y="7" width="4" height="1" fill="#3e3e4c"/><rect x="9" y="7" width="14" height="1" fill="#0a0a0e"/><rect x="23" y="7" width="4" height="1" fill="#3e3e4c"/><rect x="5" y="8" width="4" height="1" fill="#3e3e4c"/><rect x="9" y="8" width="14" height="1" fill="#0a0a0e"/><rect x="23" y="8" width="4" height="1" fill="#3e3e4c"/><rect x="27" y="8" width="1" height="1" fill="#d4a017"/><rect x="5" y="9" width="4" height="1" fill="#3e3e4c"/><rect x="9" y="9" width="1" height="1" fill="#757584"/><rect x="10" y="9" width="12" height="1" fill="#0a0a0e"/><rect x="22" y="9" width="1" height="1" fill="#757584"/><rect x="23" y="9" width="4" height="1" fill="#3e3e4c"/><rect x="27" y="9" width="1" height="1" fill="#d4a017"/><rect x="5" y="10" width="4" height="1" fill="#3e3e4c"/><rect x="9" y="10" width="14" height="1" fill="#757584"/><rect x="23" y="10" width="4" height="1" fill="#3e3e4c"/><rect x="28" y="10" width="1" height="1" fill="#d4a017"/><rect x="5" y="11" width="4" height="1" fill="#3e3e4c"/><rect x="9" y="11" width="4" height="1" fill="#757584"/><rect x="13" y="11" width="2" height="1" fill="#1c1c22"/><rect x="15" y="11" width="2" height="1" fill="#757584"/><rect x="17" y="11" width="2" height="1" fill="#1c1c22"/><rect x="19" y="11" width="4" height="1" fill="#757584"/><rect x="23" y="11" width="4" height="1" fill="#3e3e4c"/><rect x="28" y="11" width="1" height="1" fill="#d4a017"/><rect x="6" y="12" width="3" height="1" fill="#3e3e4c"/><rect x="9" y="12" width="14" height="1" fill="#757584"/><rect x="23" y="12" width="3" height="1" fill="#3e3e4c"/><rect x="28" y="12" width="1" height="1" fill="#d4a017"/><rect x="6" y="13" width="4" height="1" fill="#3e3e4c"/><rect x="10" y="13" width="12" height="1" fill="#757584"/><rect x="22" y="13" width="4" height="1" fill="#3e3e4c"/><rect x="7" y="14" width="4" height="1" fill="#3e3e4c"/><rect x="11" y="14" width="10" height="1" fill="#757584"/><rect x="21" y="14" width="4" height="1" fill="#3e3e4c"/><rect x="8" y="15" width="16" height="1" fill="#3e3e4c"/><rect x="4" y="16" width="24" height="1" fill="#3e3e4c"/><rect x="2" y="17" width="9" height="1" fill="#3e3e4c"/><rect x="11" y="17" width="12" height="1" fill="#111117"/><rect x="23" y="17" width="8" height="1" fill="#3e3e4c"/><rect x="1" y="18" width="10" height="1" fill="#3e3e4c"/><rect x="11" y="18" width="12" height="1" fill="#111117"/><rect x="23" y="18" width="9" height="1" fill="#3e3e4c"/><rect x="1" y="19" width="10" height="1" fill="#3e3e4c"/><rect x="11" y="19" width="5" height="1" fill="#111117"/><rect x="16" y="19" width="2" height="1" fill="#c8102e"/><rect x="18" y="19" width="5" height="1" fill="#111117"/><rect x="23" y="19" width="9" height="1" fill="#3e3e4c"/><rect x="1" y="20" width="5" height="1" fill="#3e3e4c"/><rect x="7" y="20" width="19" height="1" fill="#3e3e4c"/><rect x="27" y="20" width="5" height="1" fill="#3e3e4c"/><rect x="1" y="21" width="5" height="1" fill="#3e3e4c"/><rect x="7" y="21" width="19" height="1" fill="#3e3e4c"/><rect x="27" y="21" width="5" height="1" fill="#3e3e4c"/><rect x="1" y="22" width="5" height="1" fill="#3e3e4c"/><rect x="7" y="22" width="2" height="1" fill="#3e3e4c"/><rect x="9" y="22" width="4" height="1" fill="#757584"/><rect x="13" y="22" width="8" height="1" fill="#3e3e4c"/><rect x="21" y="22" width="4" height="1" fill="#757584"/><rect x="25" y="22" width="1" height="1" fill="#3e3e4c"/><rect x="27" y="22" width="5" height="1" fill="#3e3e4c"/><rect x="1" y="23" width="5" height="1" fill="#3e3e4c"/><rect x="7" y="23" width="2" height="1" fill="#3e3e4c"/><rect x="9" y="23" width="5" height="1" fill="#757584"/><rect x="14" y="23" width="6" height="1" fill="#3e3e4c"/><rect x="20" y="23" width="5" height="1" fill="#757584"/><rect x="25" y="23" width="1" height="1" fill="#3e3e4c"/><rect x="27" y="23" width="5" height="1" fill="#3e3e4c"/><rect x="1" y="24" width="5" height="1" fill="#3e3e4c"/><rect x="7" y="24" width="19" height="1" fill="#3e3e4c"/><rect x="27" y="24" width="5" height="1" fill="#3e3e4c"/><rect x="1" y="25" width="5" height="1" fill="#3e3e4c"/><rect x="8" y="25" width="17" height="1" fill="#3e3e4c"/><rect x="27" y="25" width="5" height="1" fill="#3e3e4c"/><rect x="1" y="26" width="5" height="1" fill="#3e3e4c"/><rect x="10" y="26" width="12" height="1" fill="#111117"/><rect x="27" y="26" width="5" height="1" fill="#3e3e4c"/><rect x="1" y="27" width="5" height="1" fill="#757584"/><rect x="10" y="27" width="12" height="1" fill="#111117"/><rect x="27" y="27" width="5" height="1" fill="#757584"/><rect x="1" y="28" width="5" height="1" fill="#757584"/><rect x="10" y="28" width="12" height="1" fill="#111117"/><rect x="27" y="28" width="5" height="1" fill="#757584"/><rect x="11" y="29" width="5" height="1" fill="#3e3e4c"/><rect x="17" y="29" width="5" height="1" fill="#3e3e4c"/><rect x="11" y="30" width="5" height="1" fill="#3e3e4c"/><rect x="17" y="30" width="5" height="1" fill="#3e3e4c"/><rect x="10" y="31" width="6" height="1" fill="#111117"/><rect x="17" y="31" width="6" height="1" fill="#111117"/>`;
 
+  // src/bouncer/pageSubject.ts
+  var THIRD_PARTY_HOSTS = {
+    "basescan.org": "base",
+    "bscscan.com": "bnb",
+    "solscan.io": "solana",
+    "solana.fm": "solana",
+    // Arc mainnet has no factory in the table, so a bare arcscan.app link is
+    // read on the testnet BOUNCER can actually answer for rather than on a
+    // chain where every read would come back empty.
+    "arcscan.app": "arc-testnet",
+    "ponsfamily.com": "robinhood"
+  };
+  var MULTI_CHAIN_HOSTS = ["dexscreener.com", "gmgn.ai"];
+  var PATH_SEGMENTS = {
+    base: "base",
+    bsc: "bnb",
+    bnb: "bnb",
+    solana: "solana",
+    sol: "solana",
+    robinhood: "robinhood",
+    arc: "arc-testnet"
+  };
+  function tokenPageHosts() {
+    const out2 = {};
+    for (const chain2 of Object.values(CHAINS)) {
+      for (const url of [chain2.blockscout, chain2.explorerUrl]) {
+        if (!url) continue;
+        try {
+          out2[new URL(url).hostname.replace(/^www\./, "")] = chain2.key;
+        } catch {
+        }
+      }
+    }
+    for (const [host, key] of Object.entries(THIRD_PARTY_HOSTS)) out2[host] ??= key;
+    return out2;
+  }
+  var EVM = /0x[0-9a-fA-F]{40}/;
+  var SOLANA = /\/(?:token|account|address|mint)\/([1-9A-HJ-NP-Za-km-z]{32,44})/;
+  function pageSubject(url) {
+    let host;
+    let segments;
+    try {
+      const parsed = new URL(url);
+      if (parsed.protocol !== "https:" && parsed.protocol !== "http:") return null;
+      host = parsed.hostname.replace(/^www\./, "");
+      segments = parsed.pathname.split("/").filter(Boolean);
+    } catch {
+      return null;
+    }
+    let chain2 = tokenPageHosts()[host] ?? null;
+    if (!chain2 && MULTI_CHAIN_HOSTS.includes(host)) chain2 = PATH_SEGMENTS[(segments[0] ?? "").toLowerCase()] ?? null;
+    if (!chain2) return null;
+    const family = CHAINS[chain2]?.family ?? "evm";
+    if (family === "solana") {
+      const mint = SOLANA.exec(url)?.[1];
+      return mint ? { chain: chain2, address: mint, kind: "solana" } : null;
+    }
+    const address = EVM.exec(url)?.[0];
+    return address ? { chain: chain2, address: address.toLowerCase(), kind: "evm" } : null;
+  }
+
   // src/bouncer/planner.ts
   init_abi();
   async function readLaunchPlan(rpc, options) {
@@ -7389,12 +7572,12 @@
     const [hook] = decodeOutputs(FACTORY_FUNCTIONS.memeHook, r[5]);
     let phantomQuote = phantomNative;
     let graduationThreshold = thresholdNative;
-    let quote = { symbol: options.nativeSymbol, decimals: 18 };
+    let quote = { symbol: options.nativeSymbol, decimals: 18, native: true };
     if (!native) {
       const [p, t] = decodeOutputs(FACTORY_FUNCTIONS.pairTokenEconomics, r[6]);
       phantomQuote = p;
       graduationThreshold = t;
-      quote = await readTokenMeta(rpc, pairToken, options.block);
+      quote = { ...await readTokenMeta(rpc, pairToken, options.block), native: false };
     }
     let hookFeeBps = 0n;
     let protocolFeeShareBps = 0n;
@@ -7994,6 +8177,10 @@
     if (!o) {
       const r = slip.rules;
       if (!r) return plain("keep", "Not read", "unknown", "the house rules read did not run", mine);
+      const c = slip.cover;
+      if (c?.status === "open") {
+        return plain("keep", `Yes, on a buy \u2014 the door tax is on for ${c.secondsLeft} more seconds`, "warn", `a buy right now pays up to ${formatBps(c.terms.startBps)} of its money to the creator, falling to nothing over ${c.terms.seconds} s. Selling is not taxed by it.`, mine, `${c.secondsLeft}s`);
+      }
       const moved = r.creatorFeeRecipientChanges.length;
       const flips = r.buybackChanges.length;
       const did = [
@@ -8025,14 +8212,21 @@
     const o = slip.open;
     if (!o && slip.rules) {
       const r = slip.rules;
-      const c = slip.cover;
-      if (c?.status === "open") {
-        return plain("sell", `Wait \u2014 the door tax is on for ${c.secondsLeft} more seconds`, "warn", `a buy in the launch second pays up to ${formatBps(c.terms.startBps)} to the creator; it decays to nothing over ${c.terms.seconds} s`, mine, `${c.secondsLeft}s`);
+      const e = slip.exit;
+      if (e?.venue === "closed" || r.phase === 1 /* Swept */) {
+        return plain("sell", "Not right now \u2014 the curve is closed and the pool does not exist yet", toneOf(mine, "warn"), "the launch was swept; nothing trades until the factory seeds the pool", mine, "closed");
       }
-      return plain("sell", `Yes \u2014 the curve takes sells at any size`, toneOf(mine), `every trade pays ${formatBps(r.totalTradeBps)}, of which ${formatBps(r.creatorTaxBps)} goes to the creator`, mine, formatBps(r.totalTradeBps));
+      if (e?.venue === "pool") {
+        const total = e.feeBps + e.creatorTaxBps;
+        return plain("sell", "Yes \u2014 the Uniswap pool takes sells at any size", toneOf(mine), `a sale pays ${formatBps(total)}: ${formatBps(e.feeBps)} pool fee and ${formatBps(e.creatorTaxBps)} creator tax on the ETH side`, mine, formatBps(total));
+      }
+      return plain("sell", "Yes \u2014 the curve takes sells at any size", toneOf(mine), `a sale pays ${formatBps(r.totalTradeBps)}: ${formatBps(r.curveFeeBps)} protocol fee and ${formatBps(r.creatorTaxBps)} creator tax`, mine, formatBps(r.totalTradeBps));
     }
     const probes = o ? sellProbes(o) : [];
     const ran = probes.filter((p) => p.status !== "unread");
+    if (o?.surfaceFrom === "implementation-unreadable") {
+      return plain("sell", "Unknown \u2014 the code that runs could not be read", "unknown", "this is a proxy and the implementation it points at would not load, so no sale was simulated", mine, "unreadable");
+    }
     if (o && !o.transferFunction) {
       return plain("sell", "No transfer function is in the code", toneOf(mine, "unknown"), "so no sale could be simulated; whatever this contract is, it is not a plain ERC-20", mine);
     }
@@ -8059,34 +8253,34 @@
       bar: bar2
     };
   }
-  function exitAnswer(slip, notes) {
+  function exitAnswer(slip, notes, quoteUsd = null) {
     const mine = notesFor(notes, "exit");
     const e = slip.exit;
     if (e && e.quotes.length) {
       const q2 = e.quotes.find((x) => x.shareBps === 1e3) ?? e.quotes[0];
       const quote = slip.rules?.quote ?? slip.chain.native;
-      const amount = `${formatUnits(q2.net, quote.decimals, 4)} ${quote.symbol}`;
+      const amount = formatMoney(q2.net, quote.decimals, quote.symbol, quoteUsd);
       return plain(
         "exit",
         `Selling ${shareOfSupply(q2.shareBps)} of the supply pays ${amount}`,
         toneOf(mine),
-        `that is ${(q2.shareBps / 100).toFixed(0)}% of a reference position of 1% of the supply, sold on the ${e.venue} after fees at this block \u2014 ${(q2.realisedBps / 100).toFixed(1)}% of what the quoted price says it is worth. The gap is what your own sale does to the price.`,
+        `sold on the ${e.venue} after fees at this block, that is ${(q2.realisedBps / 100).toFixed(1)}% of what the quoted price says it is worth; the gap is what your own sale does to the price. Sized as ${(q2.shareBps / 100).toFixed(0)}% of a reference position of 1% of the supply.`,
         mine,
-        amount
+        `${(q2.realisedBps / 100).toFixed(1)}% kept`
       );
     }
     const m = slip.open?.market;
     if (m?.best && m.quotes.length) {
       const q2 = m.quotes[0];
       const quote = slip.chain.native;
-      const amount = `${formatUnits(q2.out, quote.decimals, 4)} ${quote.symbol}`;
+      const amount = formatMoney(q2.out, quote.decimals, quote.symbol, quoteUsd);
       return plain(
         "exit",
         `Selling ${shareOfSupply(q2.shareBps)} of the supply pays ${amount}`,
         toneOf(mine),
-        `that is ${(q2.shareBps / 100).toFixed(0)}% of a reference position of 1% of the supply, priced against the ${m.best.dex} pool's own reserves at this block \u2014 ${(q2.realisedBps / 100).toFixed(1)}% of the quoted price. The token's own transfer tax, if it has one, is not included.`,
+        `priced against the ${m.best.dex} pool's own reserves at this block, that is ${(q2.realisedBps / 100).toFixed(1)}% of the quoted price. The token's own transfer tax, if it has one, is not included. Sized as ${(q2.shareBps / 100).toFixed(0)}% of a reference position of 1% of the supply.`,
         mine,
-        amount
+        `${(q2.realisedBps / 100).toFixed(1)}% kept`
       );
     }
     if (slip.open?.pools === null) {
@@ -8128,17 +8322,17 @@
     if (room && room.buys > 0) {
       return plain(
         "room",
-        room.devShareBps >= 2e3 ? `The creator's own wallets funded ${(room.devShareBps / 100).toFixed(0)}% of every buy` : `${room.buyers} wallets have bought since launch`,
+        room.devShareBps >= 2e3 ? `The creator's own wallets funded ${(room.devShareBps / 100).toFixed(0)}% of every buy` : `${plural(room.buyers, "wallet has", "wallets have")} bought since launch`,
         toneOf(mine),
-        `${room.buys} buys and ${room.sells} sells on the curve so far`,
+        `${plural(room.buys, "buy")} and ${plural(room.sells, "sell")} on the curve so far`,
         mine,
-        `${room.buyers} buyers`
+        plural(room.buyers, "buyer")
       );
     }
     return plain("room", "Not read \u2014 the holder list did not answer", "unknown", "who holds the supply is one of the two questions that decide whether you can get out, and it is open", mine);
   }
-  function doorAnswers(slip) {
-    return [idAnswer(slip, slip.notes), keepAnswer(slip, slip.notes), sellAnswer(slip, slip.notes), exitAnswer(slip, slip.notes), roomAnswer(slip, slip.notes)];
+  function doorAnswers(slip, options = {}) {
+    return [idAnswer(slip, slip.notes), keepAnswer(slip, slip.notes), sellAnswer(slip, slip.notes), exitAnswer(slip, slip.notes, options.quoteUsd ?? null), roomAnswer(slip, slip.notes)];
   }
   function splAnswers(slip) {
     const notes = slip.notes;
@@ -8218,12 +8412,15 @@
     return whole.toLocaleString("en-US");
   }
   function shortAge(seconds) {
-    if (seconds < 90) return `${Math.max(0, Math.round(seconds))} s`;
-    const m = Math.round(seconds / 60);
-    if (m < 60) return `${m} m`;
-    const h = Math.floor(seconds / 3600);
-    if (h < 48) return `${h} h ${Math.round((seconds - h * 3600) / 60)} m`;
-    return `${Math.floor(seconds / 86400)} d`;
+    const t = Math.max(0, Math.floor(seconds));
+    if (t < 60) return `${t}s`;
+    if (t < 3600) return `${Math.floor(t / 60)}m`;
+    if (t < 172800) {
+      const h = Math.floor(t / 3600);
+      const m = Math.floor(t % 3600 / 60);
+      return m ? `${h}h ${m}m` : `${h}h`;
+    }
+    return `${Math.floor(t / 86400)}d`;
   }
   function deepest(pools) {
     if (!pools || !pools.length) return null;
@@ -8246,7 +8443,8 @@
       quoteReserve: null
     };
   }
-  function marketFacts(slip) {
+  function marketFacts(slip, options = {}) {
+    const quoteUsd = options.quoteUsd !== void 0 && options.quoteUsd !== null && options.quoteUsd > 0 ? options.quoteUsd : null;
     const o = slip.open;
     const meta = slip.id.meta;
     const quote = slip.rules?.quote ?? slip.chain.native;
@@ -8257,57 +8455,61 @@
     const spot = found ? spotPrice(found, decimals) : exit ? exit.spot : null;
     const where = found ? "from the pool" : exit?.venue === "curve" ? "from the curve" : exit ? "from the V4 pool" : "";
     const facts2 = [];
+    const v1 = slip.id.v1;
+    const v1Why = v1 ? `its Pons V1 pool (paired with ${formatMoney(v1.status.pairedPrincipal, v1.quote.decimals, v1.quote.symbol, quoteUsd)}) is not priced here` : "";
     facts2.push(
-      spot !== null ? { label: "Price", value: formatPrice(spot, quote.decimals), note: `${quote.symbol} per token \xB7 ${where}`, source: "chain" } : { label: "Price", value: null, note: quote.symbol, source: "chain", why: slip.exit?.venue === "closed" ? "swept, and the pool does not exist yet" : o?.pools === null ? "the pool read did not finish" : "no pool could be priced" }
+      spot !== null ? quoteUsd !== null ? { label: "Price", value: formatUsdPrice(Number(spot) / 10 ** quote.decimals * quoteUsd), note: `${formatPrice(spot, quote.decimals)} ${quote.symbol} \xB7 ${where}`, source: "chain" } : { label: "Price", value: formatPrice(spot, quote.decimals), note: `${quote.symbol} per token \xB7 ${where}`, source: "chain" } : { label: "Price", value: null, note: quote.symbol, source: "chain", why: slip.exit?.venue === "closed" ? "swept, and the pool does not exist yet" : o?.pools === null ? "the pool read did not finish" : slip.id.v1 ? v1Why : "no pool could be priced" }
     );
     const supply = meta?.totalSupply ?? null;
     facts2.push(
-      spot !== null && supply ? { label: "Market cap", value: `${formatUnits(spot * supply / 10n ** BigInt(decimals), quote.decimals, 2)} ${quote.symbol}`, note: "price \xD7 supply", source: "derived" } : { label: "Market cap", value: null, note: "price \xD7 supply", source: "derived", why: spot === null ? "no price to multiply" : "the supply could not be read" }
+      spot !== null && supply ? { label: "Market cap", value: formatMoney(spot * supply / 10n ** BigInt(decimals), quote.decimals, quote.symbol, quoteUsd), note: "price \xD7 supply", source: "derived" } : { label: "Market cap", value: null, note: "price \xD7 supply", source: "derived", why: spot === null ? "no price to multiply" : "the supply could not be read" }
     );
     const fill = !found && exit?.venue === "curve" ? slip.rules?.fill ?? null : null;
     const liquid = found?.quoteReserve ?? fill?.real ?? null;
     facts2.push(
       fill && liquid !== null ? {
         label: "Liquidity",
-        value: `${formatUnits(liquid, quote.decimals, 2)} ${quote.symbol}`,
+        value: formatMoney(liquid, quote.decimals, quote.symbol, quoteUsd),
         note: `real, in the curve \xB7 ${(fill.bps / 100).toFixed(0)}% to graduation`,
         source: "chain",
         warn: liquid < 10n ** BigInt(quote.decimals)
       } : !found && exit?.venue === "pool" ? { label: "Liquidity", value: null, note: quote.symbol, source: "chain", why: "a V4 pool keeps its funds in the PoolManager with every other pool, so its depth is not a balance anyone can read" } : liquid !== null ? {
         label: "Liquidity",
-        value: `${formatUnits(liquid, quote.decimals, 2)} ${quote.symbol}`,
+        value: formatMoney(liquid, quote.decimals, quote.symbol, quoteUsd),
         note: (o?.pools ?? []).length > 1 ? `deepest of ${(o?.pools ?? []).length} pools` : "one pool",
         source: "chain",
         // A pool holding less than the price of a decent sale is not a
         // market, and the figure should say so before somebody buys into it.
         warn: liquid < 10n ** BigInt(quote.decimals)
-      } : { label: "Liquidity", value: null, note: quote.symbol, source: "chain", why: o?.pools === null ? "the pool read did not finish" : "no pool was found" }
+      } : { label: "Liquidity", value: null, note: quote.symbol, source: "chain", why: o?.pools === null ? "the pool read did not finish" : slip.id.v1 ? v1Why : "no pool was found" }
     );
     facts2.push(
-      supply ? { label: "Supply", value: grouped(supply, decimals), note: `${decimals} decimals`, source: "chain" } : { label: "Supply", value: null, note: "tokens", source: "chain", why: "totalSupply did not answer" }
+      supply ? { label: "Supply", value: formatCoin(supply, decimals), note: `${grouped(supply, decimals)} \xB7 ${decimals} decimals`, source: "chain" } : { label: "Supply", value: null, note: "tokens", source: "chain", why: "totalSupply did not answer" }
     );
     const holders = o?.holders?.count ?? null;
+    const room = !o ? slip.room : null;
     facts2.push(
-      holders !== null ? { label: "Holders", value: holders.toLocaleString("en-US"), note: o?.holders?.transfers ? `${o.holders.transfers.toLocaleString("en-US")} transfers` : "from the explorer", source: "explorer" } : { label: "Holders", value: null, note: "wallets", source: "explorer", why: "the explorer's holder list did not answer" }
+      holders !== null ? { label: "Holders", value: holders.toLocaleString("en-US"), note: o?.holders?.transfers ? `${o.holders.transfers.toLocaleString("en-US")} transfers` : "from the explorer", source: "explorer" } : room ? { label: "Buyers", value: room.buyers.toLocaleString("en-US"), note: `${room.buys} buy${room.buys === 1 ? "" : "s"}, ${room.sells} sell${room.sells === 1 ? "" : "s"} on the curve \xB7 not a holder list`, source: "chain" } : { label: "Holders", value: null, note: "wallets", source: "explorer", why: o ? "the explorer's holder list did not answer" : "not read for a launch" }
     );
-    const born = o?.deployer?.createdAt ?? null;
+    const launchedAt = !o ? slip.cover?.launch.timestamp ?? null : null;
+    const born = o?.deployer?.createdAt ?? launchedAt;
     const age = born === null ? null : Math.max(0, slip.at.timestamp - born);
     facts2.push(
       age !== null ? {
         label: "Age",
         value: shortAge(age),
-        note: o?.activity?.lastTransferAt ? `last transfer ${shortAge(Math.max(0, slip.at.timestamp - o.activity.lastTransferAt))} ago` : "since deployment",
+        note: o?.activity?.lastTransferAt ? `last transfer ${shortAge(Math.max(0, slip.at.timestamp - o.activity.lastTransferAt))} ago` : launchedAt !== null ? `launched at block ${slip.cover.launch.block}` : "since deployment",
         source: "chain",
         // Under a day old is the single most reliable predictor of the kind
         // of token this tool exists for.
         warn: age < 86400
-      } : { label: "Age", value: null, note: "since deployment", source: "chain", why: "the deployment could not be dated" }
+      } : { label: "Age", value: null, note: "since deployment", source: "chain", why: o ? "the deployment could not be dated" : "the launch block's time was not read" }
     );
     const v = o?.explorer?.volume24hUsd ?? null;
     facts2.push(
-      v !== null ? { label: "Volume 24h", value: `$${Math.round(v).toLocaleString("en-US")}`, note: "the explorer's feed", source: "explorer" } : { label: "Volume 24h", value: null, note: "the explorer's feed", source: "explorer", why: o?.explorer ? "the explorer does not report volume for this token" : "the explorer could not be read" }
+      v !== null ? { label: "Volume 24h", value: formatUsd(v), note: "the explorer's feed", source: "explorer" } : { label: "Volume 24h", value: null, note: "the explorer's feed", source: "explorer", why: !o ? "read from the tape below once it opens" : o.explorer ? "the explorer does not report volume for this token" : "the explorer could not be read" }
     );
-    return { facts: facts2, pool, spot, quoteSymbol: quote.symbol, quoteDecimals: quote.decimals };
+    return { facts: facts2, pool, spot, quoteSymbol: quote.symbol, quoteDecimals: quote.decimals, quoteUsd };
   }
 
   // src/bouncer/watchPlan.ts
@@ -8428,6 +8630,15 @@
       const tax = decoded.args.tax;
       const creatorTaxPart = launch ? quote * launch.creatorTaxBps / 10000n : tax;
       const coverChargePart = tax > creatorTaxPart ? tax - creatorTaxPart : 0n;
+      let symbol = null;
+      if (launch) {
+        try {
+          const [symbolRaw] = await rpc.callBatch([{ to: launch.token, data: encodeCall(ERC20_FUNCTIONS.symbol, []) }], block);
+          symbol = decodeOutputs(ERC20_FUNCTIONS.symbol, symbolRaw)[0].trim() || null;
+        } catch {
+          symbol = null;
+        }
+      }
       let marginalPriceAfter = null;
       try {
         const [reservesRaw] = await rpc.callBatch([{ to: curve, data: encodeCall(CURVE_FUNCTIONS.getReserves, []) }], block);
@@ -8442,6 +8653,7 @@
         kind: isBuy ? "buy" : "sell",
         curve,
         launch,
+        symbol,
         wallet: String(isBuy ? decoded.args.buyer : decoded.args.seller).toLowerCase(),
         quote,
         tokens,
@@ -8477,6 +8689,7 @@
   var factoryInput = $("factory");
   var chainSelect = $("chain");
   var settings = $("settings");
+  var qhint = $("qhint");
   var sourcePill = $("source-pill");
   var sourceText = $("source-text");
   var settingsToggle = $("settings-toggle");
@@ -8545,6 +8758,7 @@
     chainSelect.value = key;
     repaintPicker?.();
     paintSelectedChain();
+    if (mode === "live") setMode("live", true);
   }
   function chainMark(key) {
     if (key === "auto") return `<svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="5.6" fill="none" stroke="currentColor" stroke-width="1.4" stroke-dasharray="2.6 2.2"/></svg>`;
@@ -8682,7 +8896,8 @@
   function renderSeen() {
     const host = document.getElementById("seen");
     if (!host) return;
-    const rows = loadHistory().filter((s) => mode === "demo" ? s.chain === "demo" : s.chain !== "demo").slice(0, 8);
+    const open = openToken();
+    const rows = loadHistory().filter((s) => mode === "demo" ? s.chain === "demo" : s.chain !== "demo").filter((s) => s.address.toLowerCase() !== open).slice(0, 8);
     if (!rows.length) {
       host.innerHTML = "";
       return;
@@ -8757,10 +8972,25 @@
       showToast(text);
     }
   });
+  document.addEventListener("click", (event) => {
+    const el = event.target;
+    if (el?.closest("[data-retry]")) {
+      route();
+      return;
+    }
+    if (el?.closest("[data-settings]")) {
+      settings.classList.add("open");
+      settingsToggle.setAttribute("aria-expanded", "true");
+      settings.scrollIntoView({ block: "nearest", behavior: "smooth" });
+      settings.querySelector("input")?.focus({ preventScroll: true });
+    }
+  });
+  var toastTimer = null;
   function showToast(text) {
     toast.textContent = text;
-    toast.classList.add("show");
-    setTimeout(() => toast.classList.remove("show"), 1600);
+    toast.classList.add("on");
+    if (toastTimer) clearTimeout(toastTimer);
+    toastTimer = window.setTimeout(() => toast.classList.remove("on"), 1600);
   }
   function busy(text) {
     go.disabled = true;
@@ -8779,7 +9009,23 @@
     const message = error instanceof Error ? error.message : String(error);
     const network = /fetch|network|failed|CORS|load|abort/i.test(message) && mode === "live";
     status.textContent = "";
-    out.innerHTML = `<div class="error"><strong>Could not read the chain.</strong><p>${esc2(message)}</p>${SANDBOXED ? `<p>This is the claude.ai preview: the sandbox blocks every request a page makes, so no RPC can be reached from here, whatever its settings. Real tokens work on the <a href="${HOSTED}">hosted site</a>, in the <a href="https://github.com/Kepochnik/bouncer#browser-extension">Chrome extension</a> (it can call any RPC), or in the CLI: <code>npx bouncer door ${esc2(input)} --chain ${esc2(chain().key)}</code>.</p>` : network ? `<p>The browser could not reach the RPC. Public endpoints often refuse requests from websites. Three ways out: deploy the read-only <a href="https://github.com/Kepochnik/bouncer/tree/main/proxy">proxy</a> (3 minutes, free) and paste its URL under Settings \u2192 Proxy URL; the <a href="https://github.com/Kepochnik/bouncer#browser-extension">Chrome extension</a> (it can call any RPC); or the CLI: <code>npx bouncer door ${esc2(input)} --chain ${esc2(chain().key)}</code>. Demo mode works offline.</p>` : ""}</div>`;
+    const where = mode === "demo" ? "the demo chain" : chainOrNull()?.name ?? "the chain";
+    const reason = SANDBOXED ? "This preview on claude.ai blocks every request a page makes, so no chain can be reached from here." : network ? `${esc2(where)}'s public endpoints did not answer this website. They often refuse browsers, and it usually passes.` : esc2(message);
+    const cli = `<code>npx bouncer door ${esc2(input)} --chain ${esc2(chain().key)}</code>`;
+    const more = SANDBOXED ? `Real tokens work on the <a href="${HOSTED}">hosted site</a>, in the <a href="https://github.com/Kepochnik/bouncer#browser-extension">Chrome extension</a> (it can call any RPC), or in the CLI: ${cli}.` : `Other ways in: your own RPC or the read-only <a href="https://github.com/Kepochnik/bouncer/tree/main/proxy">proxy</a> (3 minutes, free) under Settings; the <a href="https://github.com/Kepochnik/bouncer#browser-extension">Chrome extension</a>, which can call any RPC; or the CLI: ${cli}.`;
+    out.innerHTML = `<div class="error">
+    <strong>Couldn't read ${esc2(where)}</strong>
+    <p>${reason} Nothing was concluded about the token.</p>
+    <div class="err-acts">
+      <button class="ghost primary" type="button" data-retry>Try again</button>
+      ${mode === "demo" ? "" : `<a class="ghost" href="#/demo/${DEMO.tokens.fresh.token}">Open the demo</a>`}
+      ${SANDBOXED ? "" : `<button class="ghost" type="button" data-settings>Settings</button>`}
+    </div>
+    <details class="err-more"><summary>What failed, and other ways in</summary>
+      <p class="mono err-raw">${esc2(message)}</p>
+      <p>${more}</p>
+    </details>
+  </div>`;
   }
   function refuseFeature(feature, title) {
     const c = mode === "demo" ? CHAINS.robinhood : chainOrNull();
@@ -8819,6 +9065,13 @@
     status.textContent = "";
     if (!hits.length) {
       const asked_ = asked.filter((c) => !found.unsearched.some((u) => u.chain.key === c.key));
+      if (!asked_.length) {
+        out.innerHTML = `<div class="error"><strong>Couldn't search for "${esc2(query)}": no explorer answered.</strong>
+        <p>${esc2(found.unsearched.map((u) => `${u.chain.name} (${u.reason})`).join("; "))}.</p>
+        <p>Paste the contract address instead \u2014 that reads the chain directly and needs no explorer.</p>
+        <div class="err-acts"><button class="btn" type="button" data-retry>Try again</button></div></div>`;
+        return;
+      }
       out.innerHTML = `<div class="error"><strong>Nothing called "${esc2(query)}" on the chains BOUNCER could search.</strong>
       <p>${asked_.length ? `Searched and found nothing: ${esc2(asked_.map((c) => c.name).join(", "))}.` : ""}
       ${found.unsearched.length ? `<b>Not searched, so it could still be on one of these:</b> ${esc2(found.unsearched.map((u) => `${u.chain.name} (${u.reason})`).join("; "))}.` : ""}
@@ -9025,8 +9278,15 @@
       const launch = await new PonsReader(rpc, factory).launchedToken(token, head);
       const launchBlock = await findLaunchBlock(rpc, launch.token, head, mode === "demo" ? 4e5 : Math.round(30 * 86400 * chain().blocksPerSecond), factoryOrFail(), mode === "demo" ? 1e5 : void 0);
       const p = await readPosition(rpc, launch, wallet, launchBlock ?? 0, head, factoryOrFail(), mode === "demo" ? 1e5 : void 0);
+      let symbol = null;
+      try {
+        const [raw] = await rpc.callBatch([{ to: launch.token, data: encodeCall(ERC20_FUNCTIONS.symbol, []) }], head);
+        symbol = decodeOutputs(ERC20_FUNCTIONS.symbol, raw)[0].trim() || null;
+      } catch {
+      }
+      const quote = await quoteOfLaunch(rpc, launch.pairToken, head);
       done(`block ${head}`);
-      renderPosition(p, head);
+      renderPosition(p, head, symbol, quote);
     } catch (error) {
       failed(error, token);
     } finally {
@@ -9038,9 +9298,11 @@
     if (!hash.startsWith("0x")) return bad("Paste a transaction hash.");
     busy("decoding the trade\u2026");
     try {
-      const receipts = await readTradeReceipt(rpcFor(), hash, factoryOrFail());
+      const rpc = rpcFor();
+      const receipts = await readTradeReceipt(rpc, hash, factoryOrFail());
+      const quotes = await Promise.all(receipts.map((r) => r.launch ? quoteOfLaunch(rpc, r.launch.pairToken, r.block) : Promise.resolve({ ...chain().native, native: true })));
       done(`block ${receipts[0].block}`);
-      out.innerHTML = `<div class="slip">${receipts.map(receiptSection).join("")}</div>`;
+      out.innerHTML = `<div class="slip">${receipts.map((r, i) => receiptSection(r, quotes[i])).join("")}</div>`;
     } catch (error) {
       failed(error, hash);
     } finally {
@@ -9077,7 +9339,7 @@
     try {
       const rpc = rpcFor();
       const head = await rpc.getBlock("latest");
-      const fromBlock = mode === "demo" ? Math.max(0, head.number - 3e5) : await findBlockByTimestamp(rpc, head.timestamp - hours * 3600, head.number);
+      const fromBlock = mode === "demo" ? Math.max(0, head.number - Math.round(hours * 3600 * chain().blocksPerSecond)) : await findBlockByTimestamp(rpc, head.timestamp - hours * 3600, head.number);
       const b = await readBoard(rpc, { fromBlock, toBlock: head.number, factory: factoryFor(), top: 10, chunkSize: mode === "demo" ? 1e5 : void 0 });
       done(`blocks ${b.window.fromBlock}\u2013${b.window.toBlock} \xB7 ${b.chunks} log reads`);
       renderBoard(b, hours);
@@ -9089,26 +9351,44 @@
   }
   function renderBoard(b, hours) {
     const qd = chain().native;
-    const amt = (v) => `${formatUnits(v, qd.decimals)} ${esc2(qd.symbol)}`;
+    const amt = (v) => esc2(formatMoney(v, qd.decimals, qd.symbol, quoteUsdNow(true)));
     const link = (a) => `<a href="#/${mode === "demo" ? "demo" : "t"}/${a}${routeChain()}">${shortAddress(a)}</a>`;
     const dev = (a) => `<a href="#/dev/${a}${routeChain()}">${shortAddress(a)}</a>`;
+    const windows = [1, 6, 24].map((h) => `<a class="frame${h === hours ? " on" : ""}" href="#/board?hours=${h}&chain=${mode === "demo" ? "demo" : chain().key}" aria-current="${h === hours ? "true" : "false"}">${h}h</a>`).join("");
+    const none = (text) => `<p class="qdetail">${text}</p>`;
     out.innerHTML = `<div class="slip">
-    <div class="stamp-row"><div class="who"><div class="sym">THE BOARD</div><div class="name">${esc2(chain().name)} \xB7 last ${hours} h \xB7 blocks ${b.window.fromBlock}\u2013${b.window.toBlock}</div></div>
-      <div class="stamp">${b.launches} LAUNCHES</div></div>
+    <div class="stamp-row"><div class="who"><div class="cap-l">Leaderboard</div><div class="sym">Tonight on ${esc2(chain().name)}</div><div class="name">last ${hours} h \xB7 blocks ${b.window.fromBlock.toLocaleString("en-US")}\u2013${b.window.toBlock.toLocaleString("en-US")}</div></div>
+      <div class="frames" role="group" aria-label="Window">${windows}</div></div>
     <div class="grid">
       <section class="sec"><h2>Tonight</h2><div class="exit-grid">
         <div><span>launches</span><b class="num">${b.launches}</b></div>
         <div><span>graduations</span><b class="num">${b.graduations}</b></div>
         <div><span>deployers</span><b class="num">${b.deployers}</b></div>
-        <div><span>cover collected</span><b class="num">${formatUnits(b.coverTotal, qd.decimals, 3)}</b><span>${esc2(qd.symbol)} \xB7 ${b.taxedBuys} buys</span></div>
-      </div><p style="margin:0;color:var(--dim);font-size:12px">Cover charge = the part of a buy's tax above the curve's own creator rate, as the curve's CurveBuy event reports it. Counts, not scores.</p></section>
-      <section class="sec"><h2>Deployers</h2>${b.topDeployers.length ? `<div class="tbl"><table class="buys"><thead><tr><th>deployer</th><th>launched</th><th>graduated</th><th>swept, no pool</th></tr></thead><tbody>${b.topDeployers.map((r) => `<tr><td>${dev(r.deployer)}</td><td>${r.launched}</td><td>${r.graduated}</td><td>${Math.max(0, r.swept - r.graduated)}</td></tr>`).join("")}</tbody></table></div>` : `<p style="color:var(--muted);margin:0">No launches in the window.</p>`}
+        <div><span>door tax paid</span><b class="num">${amt(b.coverTotal)}</b><span>${b.taxedBuys} buy${b.taxedBuys === 1 ? "" : "s"}</span></div>
+      </div><p class="qdetail">Door tax = the part of a buy's tax above the curve's own creator rate, as the curve's CurveBuy event reports it. Counts, not scores.</p></section>
+      <section class="sec"><h2>Deployers</h2>${b.topDeployers.length ? `<div class="tbl"><table class="buys"><thead><tr><th>deployer</th><th class="num">launched</th><th class="num">graduated</th><th class="num">swept</th></tr></thead><tbody>${b.topDeployers.map((r) => `<tr><td>${dev(r.deployer)}</td><td class="num">${r.launched}</td><td class="num">${r.graduated}</td><td class="num">${Math.max(0, r.swept - r.graduated)}</td></tr>`).join("")}</tbody></table></div>` : none("No launches in the window.")}
         ${b.serial.length ? `<h2 style="margin-top:14px">Serial, no graduation</h2><div class="tbl"><table class="buys"><tbody>${b.serial.map((r) => `<tr><td>${dev(r.deployer)}</td><td>${r.launched} launched, none graduated</td></tr>`).join("")}</tbody></table></div>` : ""}</section>
-      <section class="sec"><h2>Cover charge by curve</h2>${b.topCurves.length ? `<div class="tbl"><table class="buys"><thead><tr><th>token</th><th>collected</th><th>buys</th><th>highest</th><th>creator tax</th></tr></thead><tbody>${b.topCurves.map((r) => `<tr><td>${link(r.token ?? r.curve)}</td><td>${amt(r.coverCollected)}</td><td>${r.taxedBuys}</td><td>${(r.highestBps / 100).toFixed(1)}%</td><td>${formatBps(r.creatorTaxBps)}</td></tr>`).join("")}</tbody></table></div>` : `<p style="color:var(--muted);margin:0">No buy in the window paid above the creator rate.</p>`}</section>
-      <section class="sec"><h2>Cover charge by wallet</h2>${b.topPayers.length ? `<div class="tbl"><table class="buys"><thead><tr><th>wallet</th><th>paid at the door</th><th>buys</th></tr></thead><tbody>${b.topPayers.map((r) => `<tr><td>${shortAddress(r.wallet)}</td><td>${amt(r.coverPaid)}</td><td>${r.buys}</td></tr>`).join("")}</tbody></table></div>` : `<p style="color:var(--muted);margin:0">Nobody paid at the door in the window.</p>`}</section>
+      <section class="sec"><h2>Door tax by token</h2>${b.topCurves.length ? `<div class="tbl"><table class="buys"><thead><tr><th>token</th><th class="num">collected</th><th class="num">buys</th><th class="num">highest</th><th class="num">creator tax</th></tr></thead><tbody>${b.topCurves.map((r) => `<tr><td>${link(r.token ?? r.curve)}</td><td class="num">${amt(r.coverCollected)}</td><td class="num">${r.taxedBuys}</td><td class="num">${(r.highestBps / 100).toFixed(1)}%</td><td class="num">${formatBps(r.creatorTaxBps)}</td></tr>`).join("")}</tbody></table></div>` : none("No buy in the window paid above the creator rate.")}</section>
+      <section class="sec"><h2>Door tax by wallet</h2>${b.topPayers.length ? `<div class="tbl"><table class="buys"><thead><tr><th>wallet</th><th class="num">door tax paid</th><th class="num">buys</th></tr></thead><tbody>${b.topPayers.map((r) => `<tr><td><span class="mono">${shortAddress(r.wallet)}</span></td><td class="num">${amt(r.coverPaid)}</td><td class="num">${r.buys}</td></tr>`).join("")}</tbody></table></div>` : none("Nobody paid door tax in the window.")}</section>
     </div></div>`;
   }
+  var WATCH_LABEL = {
+    "dev-sold": "Dev sold",
+    "dev-transferred": "Dev moved tokens",
+    "fee-recipient-moved": "Tax recipient moved",
+    "buyback-changed": "Buyback switched",
+    swept: "Curve swept",
+    graduated: "Graduated",
+    "crew-exit": "Group left",
+    "sold-into-pool": "Sold into pool",
+    "bought-from-pool": "Bought from pool",
+    moved: "Moved",
+    minted: "Minted",
+    burned: "Burned"
+  };
+  var BASE_TITLE = document.title;
   function stopWatch() {
+    document.title = BASE_TITLE;
     if (watcher) {
       clearInterval(watcher);
       watcher = null;
@@ -9142,6 +9422,7 @@
     let head = null;
     let lag = null;
     let failing = null;
+    let seen = 0;
     const add = (html, quiet = false) => {
       const el = document.createElement("div");
       el.className = `event${quiet ? " quiet" : ""}`;
@@ -9174,12 +9455,15 @@
           const events = plan.mode === "launch" ? await readWatchEvents(rpc, slip.id.launch, { fromBlock: cursor, toBlock: at, crew: plan.crew, factory: factoryFor(), quote: slip.rules?.quote ?? chain().native, chunkSize: mode === "demo" ? 1e5 : void 0 }) : await readTokenWatchEvents(rpc, slip.subject, { fromBlock: cursor, toBlock: at, pools: plan.pools, watch: plan.wallets, supply: plan.supply, decimals: plan.decimals, minShareBps: plan.minShareBps, chunkSize: mode === "demo" ? 5e3 : void 0 });
           cursor = at + 1;
           for (const e of events) {
-            add(`<span class="b">${e.block}</span><span class="k">${esc2(e.kind)}</span><span>${esc2(e.text)}</span>`);
+            const label = WATCH_LABEL[e.kind] ?? e.kind;
+            add(`<span class="b">${e.block}</span><span class="k">${esc2(label)}</span><span>${esc2(e.text)}</span>`);
+            seen++;
             try {
-              if (Notification.permission === "granted") new Notification(`BOUNCER \xB7 ${slip.id.meta?.symbol ?? "watch"}`, { body: `${e.kind}: ${e.text}` });
+              if (Notification.permission === "granted") new Notification(`BOUNCER \xB7 ${slip.id.meta?.symbol ?? "watch"}`, { body: `${label}: ${e.text}` });
             } catch {
             }
           }
+          if (events.length) document.title = `(${seen}) ${slip.id.meta?.symbol ?? shortAddress(slip.subject)} \xB7 BOUNCER`;
           if (!events.length && rounds % 4 === 0) add(`<span class="b">${at}</span><span class="k" style="color:var(--dim)">quiet</span><span>no moves up to block ${at}</span>`, true);
         }
         failing = null;
@@ -9201,8 +9485,17 @@
     watcher = window.setInterval(() => void tick(), everyMs);
     watchClock = window.setInterval(paint, 1e3);
   }
-  function bad(text) {
-    out.innerHTML = `<div class="error"><strong>That is not what this tab needs.</strong><p>${esc2(text)}</p></div>`;
+  function bad(text, typo = false) {
+    if (typo) {
+      qhint.innerHTML = `<b>That doesn't look like an address.</b> ${esc2(text)}`;
+      qhint.hidden = false;
+      return;
+    }
+    stopTape();
+    stopWatch();
+    shown = null;
+    status.textContent = "";
+    out.innerHTML = `<div class="error"><strong>That doesn't look like an address for this.</strong><p>${esc2(text)}</p></div>`;
   }
   function summarySentence(slip) {
     if (slip.id.v1) {
@@ -9256,6 +9549,7 @@
     const rest = loadHistory().filter((s) => historyKeyOf(s.chain, s.address) !== want);
     const next = [snapshot, ...rest].slice(0, HISTORY_MAX);
     storage(HISTORY_KEY, JSON.stringify(next));
+    renderSeen();
   }
   function ago(seconds) {
     const units = [
@@ -9324,6 +9618,35 @@
     done: ""
   };
   var MASCOT_URL = `data:image/svg+xml,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" shape-rendering="crispEdges">${MASCOT_SVG_INNER}</svg>`)}`;
+  function keyFindings(notes, word) {
+    const RANK2 = { stop: 0, watch: 1, info: 2 };
+    const loud = notes.filter((n) => (n.level === "stop" || n.level === "watch") && topicOf(n.code) !== "unread").sort((a, b) => RANK2[a.level] - RANK2[b.level]);
+    if (!loud.length) return "";
+    return `<div class="keyf">
+    <p class="whylead"><b>${esc2(word)}</b> comes from ${loud.length === 1 ? "this finding" : `these ${loud.length} findings`}; everything else on the page is context.</p>
+    <ol class="whylist">${loud.map((n) => `<li><button class="keyf-row" type="button" data-q="${topicOf(n.code)}"><span class="whylvl ${n.level}">${LEVEL_WORD[n.level]}</span><span class="keyf-t">${esc2(n.text)}</span></button></li>`).join("")}</ol>
+  </div>`;
+  }
+  function stageTag(slip) {
+    const phase = slip.rules?.phase ?? slip.id.launch?.phase ?? null;
+    if (phase === null || slip.id.v1) return "";
+    if (phase === 0 /* NotGraduated */) {
+      const fill = slip.rules?.fill;
+      if (!fill) return `<span class="stage curve">on the curve</span>`;
+      const pct3 = Math.min(100, fill.bps / 100);
+      return `<span class="stage curve" title="${(fill.bps / 100).toFixed(1)}% of the way to graduating"><span class="stage-bar" aria-hidden="true"><i style="width:${Math.max(3, pct3).toFixed(1)}%"></i></span>on the curve \xB7 ${pct3.toFixed(0)}%</span>`;
+    }
+    if (phase === 1 /* Swept */) return `<span class="stage swept">swept \xB7 no pool yet</span>`;
+    return `<span class="stage grad">graduated \xB7 Uniswap V4</span>`;
+  }
+  function tokenAvatar(address, sym) {
+    const hex = address.replace(/^0x/i, "").toLowerCase();
+    const seed = /^[0-9a-f]{6,}$/.test(hex.slice(-6)) ? parseInt(hex.slice(-6), 16) : [...address].reduce((a, c) => a * 31 + c.charCodeAt(0) >>> 0, 7);
+    const h1 = seed % 360;
+    const h2 = (h1 + 48 + (seed >> 9) % 60) % 360;
+    const letter = (sym.replace(/<[^>]*>/g, "").replace(/[^\p{L}\p{N}]/gu, "")[0] ?? "?").toUpperCase();
+    return `<span class="tokav" aria-hidden="true" style="--h1:${h1};--h2:${h2}">${esc2(letter)}</span>`;
+  }
   function doorBlock(opts) {
     const stage = opts.stage ?? "done";
     const v = verdictOf(opts.notes, stage, opts.coverage);
@@ -9346,13 +9669,20 @@
     ) : "";
     return `<section class="doorway head v-${v.kind}"${stage === "done" ? "" : ' data-pending="1"'}>
     <div class="tokbar">
-      <div class="who2">
-        <div class="tokline">
-          <span class="sym">${opts.sym}</span>
-          <span class="name">${opts.name}</span>
-          <span class="stamp ${stampTone(opts.stampKind)}">${opts.stamp}</span>
+      <div class="tokid">
+        ${tokenAvatar(opts.address, opts.sym)}
+        <div class="who2">
+          <div class="tokline">
+            <span class="sym">${opts.sym}</span>
+            <span class="name">${opts.name}</span>
+            <span class="stamp ${stampTone(opts.stampKind)}">${opts.stamp}</span>
+            ${opts.stageTag ?? ""}
+          </div>
+          <div class="tokacts">
+            <button class="vaddr tokact" type="button" data-copy="${esc2(opts.address)}" title="Copy ${esc2(opts.address)}" aria-label="Copy the contract address ${esc2(opts.address)}"><span class="mono">${esc2(shortAddress(opts.address))}</span><span class="tokact-i" aria-hidden="true">\u29C9</span></button>
+            ${opts.explorer ? `<a class="tokact" href="${esc2(opts.explorer)}" target="_blank" rel="noopener">Explorer<span aria-hidden="true"> \u2197</span></a>` : ""}
+          </div>
         </div>
-        <button class="vaddr" type="button" data-copy="${esc2(opts.address)}" title="Copy the address">${esc2(opts.address)}</button>
       </div>
       ${opts.price ?? ""}
       ${opts.frames ?? ""}
@@ -9366,7 +9696,9 @@
         </div>
       </div>
       ${opts.bands ?? ""}
-      ${opts.facts?.length ? `<div class="facts">${opts.facts.map(factCell).join("")}</div>` : ""}
+      ${stage === "done" ? keyFindings(opts.notes, v.word) : ""}
+      ${opts.alert ?? ""}
+      ${opts.facts?.length ? factsBlock(opts.facts) : ""}
       ${opts.venues ?? ""}
     </aside>
     ${opts.chart ?? ""}
@@ -9374,14 +9706,12 @@
       <div class="list-head">
         <h2>Guest list</h2>
         <span>the five questions asked before any money moves</span>
-        <span class="vat">${opts.at}</span>
       </div>
       <div class="qs">${rows}${gap}</div>
-      ${findingsLog(opts.notes)}
       ${opts.more ?? ""}
     </div>
   </section>
-  <div class="vfoot"><div class="vacts">${opts.actions}</div></div>`;
+  <div class="vfoot"><span class="vat">${opts.at}</span><div class="vacts">${opts.actions}</div></div>`;
   }
   function tapeSeries() {
     const t = tape;
@@ -9416,10 +9746,70 @@
     const tone = change === null ? "flat" : change > 50 ? "up" : change < -50 ? "down" : "flat";
     const move = change === null ? "" : `<span class="move ${tone}">${change > 0 ? "+" : ""}${(change / 100).toFixed(1)}%</span>`;
     const sub = lastPoint ? `last trade ${agoOf(lastPoint.block, t.head)} ago` : value !== null ? `read at block ${block}` : "no price read";
+    const usd2 = value !== null && m.quoteUsd !== null ? Number(value) / 10 ** m.quoteDecimals * m.quoteUsd : null;
+    const coin = value === null ? "\u2014" : `${formatPrice(value, m.quoteDecimals)} ${m.quoteSymbol}`;
     return `<div class="tokprice" id="tokprice">
-    <div class="tp-v">${value === null ? "\u2014" : esc2(formatPrice(value, m.quoteDecimals))}<small>${esc2(m.quoteSymbol)}</small></div>
-    <div class="tp-s">${move}<span>${esc2(sub)}</span></div>
+    <div class="tp-v${value === null ? " none" : ""}">${usd2 !== null ? esc2(formatUsdPrice(usd2)) : value === null ? "no price" : `${esc2(formatPrice(value, m.quoteDecimals))}<small>${esc2(m.quoteSymbol)}</small>`}</div>
+    <div class="tp-s">${move}${usd2 !== null ? `<span class="tp-coin">${esc2(coin)}</span>` : ""}<span>${esc2(sub)}</span></div>
   </div>`;
+  }
+  var QUOTE_USD = /* @__PURE__ */ new Map();
+  var QUOTE_USD_PENDING = /* @__PURE__ */ new Set();
+  function quoteUsdKey() {
+    return mode === "demo" ? "demo" : chain().key;
+  }
+  function quoteUsdNow(native) {
+    return native ? QUOTE_USD.get(quoteUsdKey())?.usd ?? null : null;
+  }
+  async function quoteOfLaunch(rpc, pairToken, block) {
+    if (pairToken.toLowerCase() === ZERO_ADDRESS) return { ...chain().native, native: true };
+    return { ...await readTokenMeta(rpc, pairToken, block), native: false };
+  }
+  function slipNative(slip) {
+    return slip.rules ? slip.rules.quote.native : true;
+  }
+  function ensureQuoteUsd() {
+    const key = quoteUsdKey();
+    const cached = QUOTE_USD.get(key);
+    if (cached && Date.now() - cached.at < 3e5 || QUOTE_USD_PENDING.has(key)) return;
+    const client = blockscoutFor(true);
+    if (!client) {
+      QUOTE_USD.set(key, { usd: null, at: Date.now() });
+      return;
+    }
+    QUOTE_USD_PENDING.add(key);
+    client.coinPriceUsd().catch(() => null).then((usd2) => {
+      QUOTE_USD.set(key, { usd: usd2, at: Date.now() });
+      QUOTE_USD_PENDING.delete(key);
+      if (usd2 !== null && key === quoteUsdKey()) refreshMoney();
+    });
+  }
+  function fillVolume() {
+    if (!shown || shown.slip.open || !tape || tape.head === null) return;
+    const cell = document.querySelector('.doorway .fact[data-fact="Volume 24h"]');
+    if (!cell) return;
+    const total = tape.boughtQuote + tape.soldQuote;
+    cell.innerHTML = factCell({
+      label: `Volume \xB7 ${frame}`,
+      value: formatMoney(total, tape.quote.decimals, tape.quote.symbol, shown.m.quoteUsd),
+      note: `${tape.buys + tape.sells} trade${tape.buys + tape.sells === 1 ? "" : "s"} \xB7 from the tape below`,
+      source: "chain"
+    }).replace(/^<div class="fact" data-fact="[^"]*">|<\/div>$/g, "");
+    cell.dataset.fact = "Volume 24h";
+  }
+  function refreshMoney() {
+    if (!shown) return;
+    const m = marketFacts(shown.slip, { quoteUsd: quoteUsdNow(slipNative(shown.slip)) });
+    shown = { ...shown, m };
+    const facts2 = document.querySelector(".doorway .facts");
+    if (facts2) facts2.outerHTML = factsBlock(m.facts);
+    fillVolume();
+    const price = document.getElementById("tokprice");
+    if (price) price.outerHTML = tokPrice(m, shown.slip.at.block);
+    const exit = doorAnswers(shown.slip, { quoteUsd: m.quoteUsd }).find((a) => a.topic === "exit");
+    const exitValue = document.querySelector("#q-exit .qv");
+    if (exit && exitValue) exitValue.textContent = exit.value;
+    if (tape) paintTape();
   }
   function showPoint(plot, i) {
     const pts = (plot.dataset.pts ?? "").split(";").filter(Boolean);
@@ -9474,6 +9864,17 @@
     return `<div class="frames" role="group" aria-label="Window">${FRAMES.map(
       (f) => `<button class="frame${f === frame ? " on" : ""}" type="button" data-frame="${f}" aria-pressed="${f === frame}">${f}</button>`
     ).join("")}</div>`;
+  }
+  function livePill(stalled) {
+    if (mode === "demo") return `<span class="tape-live demo"><span class="dot"></span>demo</span>`;
+    return `<span class="tape-live${stalled ? " stalled" : ""}"><span class="dot"></span>${stalled ? "stalled" : "live"}</span>`;
+  }
+  function moreRows(total, shown2, noun, which = "largest") {
+    return total > shown2 ? `<p class="qdetail">${plural(total - shown2, `more ${noun}`, `more ${noun}s`)} not listed \xB7 the ${which} ${shown2} shown.</p>` : "";
+  }
+  function widerFrames() {
+    const wider = FRAMES.slice(FRAMES.indexOf(frame) + 1);
+    return wider.length ? `<span class="widen">${wider.map((f) => `<button class="ghost" type="button" data-frame="${f}">Show ${f}</button>`).join("")}</span>` : "";
   }
   var FEED_FILTERS = [
     { key: "all", label: "all", hint: "every launch in the window" },
@@ -9655,7 +10056,8 @@
     const body = kept.length ? `<div class="feed-rows">${kept.map((r) => feedRow(r, here)).join("")}</div>` : f.rows.length ? `<div class="feed-empty"><b>Nothing matches "${esc2(FEED_FILTERS.find((x) => x.key === feedFilter).label)}"</b>${f.rows.length} launch${f.rows.length === 1 ? "" : "es"} in the window, none of them ${esc2(FEED_FILTERS.find((x) => x.key === feedFilter).hint.replace(/^the |^every /, ""))}.</div>` : `<div class="feed-empty">${f.opening ? "<b>Reading the factory\u2026</b>walking back from the head for the launches that just happened" : f.head === null ? `<b>Could not read the launches</b>the chain did not answer, so this says nothing about whether anything launched. The column keeps trying every fifteen seconds.${mode === "demo" ? "" : `<a class="feed-demo" href="#/demo/${DEMO.tokens.fresh.token}">See how the board works on the invented demo chain</a>`}` : `<b>No launch in the window</b>nothing was launched between block ${f.from ?? "?"} and ${f.head}. The column keeps looking.`}</div>`;
     feedBox.innerHTML = `<div class="feed-head">
       <h2>New launches</h2>
-      <span class="tape-live${stalled ? " stalled" : ""}"><span class="dot"></span>${stalled ? "stalled" : "live"}</span>
+      <span class="feed-chain">${mode === "demo" ? "demo chain" : esc2(chain().name)}</span>
+      ${livePill(stalled)}
       <span class="fr-age feed-when">0 s ago</span>
     </div>
     <div class="feed-filters" role="group" aria-label="Which launches">${FEED_FILTERS.map(
@@ -9688,12 +10090,12 @@
   function feedRow(r, here) {
     const tags = [
       r.graduated ? '<span class="ftag grad">graduated</span>' : "",
-      r.swept ? '<span class="ftag swept">swept</span>' : "",
+      r.swept && !r.graduated ? '<span class="ftag swept">swept, no pool</span>' : "",
       r.deployerLaunches > 1 ? `<span class="ftag serial">${r.deployerLaunches}\xD7 dev</span>` : ""
     ].filter(Boolean).join("");
     const sym = r.symbol ?? "no ticker";
     const name = r.name ?? shortAddress(r.token);
-    const fill = r.fill && !r.graduated && !r.swept ? `<span class="fr-fill${r.fill.bps >= 7e3 ? " near" : ""}" role="img" aria-label="${(r.fill.bps / 100).toFixed(0)}% of the way to graduating"><i style="width:${Math.max(2, r.fill.bps / 100).toFixed(1)}%"></i></span><span class="fr-pct">${(r.fill.bps / 100).toFixed(0)}%</span>` : "";
+    const fill = r.fill && !r.graduated && !r.swept ? `<span class="fr-fill${r.fill.bps >= 7e3 ? " near" : ""}" role="img" aria-label="${(r.fill.bps / 100).toFixed(0)}% of the way to graduating"><i style="width:${Math.max(2, r.fill.bps / 100).toFixed(1)}%"></i></span><span class="fr-pct">${(r.fill.bps / 100).toFixed(0)}%</span>` : `<span class="fr-fill hold" aria-hidden="true"></span><span class="fr-pct" aria-hidden="true"></span>`;
     return `<button class="fr${here === r.token ? " on" : ""}${feedState?.fresh.has(r.token) ? " fresh" : ""}" type="button" data-token="${esc2(r.token)}">
     <span class="fr-sym">${esc2(sym)}</span>
     <span class="fr-age">${esc2(r.ageSeconds === null ? `block ${r.block}` : shortAge(r.ageSeconds))}</span>
@@ -9738,12 +10140,13 @@
     const t = tape;
     const dec = t.quote.decimals;
     const sym = t.quote.symbol;
-    const amount = (v) => `${formatUnits(v, dec, v > 0n && v < 10n ** BigInt(dec) ? 4 : 2)} ${sym}`;
+    const usdPer = shown?.m.quoteUsd ?? null;
+    const amount = (v) => formatMoney(v, dec, sym, usdPer);
     const total = t.boughtQuote + t.soldQuote;
     const inPct = total > 0n ? Number(t.boughtQuote * 1000n / total) / 10 : 50;
     const net = t.boughtQuote - t.soldQuote;
     const since = Math.max(0, Math.round((Date.now() - t.lastAt) / 1e3));
-    const flow = t.head === null ? `<div class="flow"><div class="flow-keys"><span class="flow-win">${esc2(FRAME_WORD[frame])}</span><span class="net">${t.opening ? "reading\u2026" : "not read yet"}</span></div></div>` : `<div class="flow">
+    const flow = t.head !== null && t.buys + t.sells === 0 && !t.trades.length ? "" : t.head === null ? `<div class="flow"><div class="flow-keys"><span class="flow-win">${esc2(FRAME_WORD[frame])}</span><span class="net">${t.opening ? "reading\u2026" : "not read yet"}</span></div></div>` : `<div class="flow">
     <div class="flow-keys">
       <span class="flow-win">${esc2(FRAME_WORD[frame])}</span>
       <span class="in">bought <b>${esc2(amount(t.boughtQuote))}</b></span>
@@ -9753,9 +10156,9 @@
     <div class="flow-bar"><i class="in" style="width:${total > 0n ? inPct : 0}%"></i><i class="out" style="width:${total > 0n ? 100 - inPct : 0}%"></i></div>
   </div>`;
     const body = t.trades.length ? `<div class="tape-rows"><table class="trades">
-        <thead><tr><th>ago</th><th>side</th><th>${esc2(sym)}</th><th class="c-tok">tokens</th><th>of supply</th><th>${t.source.kind === "curve" ? "trader" : t.source.pool.kind === "v4" ? "via" : "to"}</th><th class="c-blk">block</th></tr></thead>
+        <thead><tr><th>ago</th><th>side</th>${usdPer !== null ? "<th>value</th>" : ""}<th>${esc2(sym)}</th><th class="c-tok">tokens</th><th>of supply</th><th>${t.source.kind === "curve" ? "trader" : t.source.pool.kind === "v4" ? "via" : "to"}</th><th class="c-blk">block</th></tr></thead>
         <tbody>${t.trades.map((x) => tradeRow(x, t)).join("")}</tbody>
-      </table></div>` : `<div class="tape-empty">${t.opening ? "<b>Reading the trades\u2026</b>the first round is walking the log" : t.head === null ? "<b>Could not read the trades</b>the chain did not answer, so this is not a quiet token \u2014 it is an unread one. The tape keeps trying." : `<b>Nothing traded in the window</b>no buy and no sell between block ${t.from} and ${t.head}`}</div>`;
+      </table></div>` : `<div class="tape-empty">${t.opening ? "<b>Reading the trades\u2026</b>the first round is walking the log" : t.head === null ? "<b>Could not read the trades</b>the chain did not answer, so this is not a quiet token \u2014 it is an unread one. The tape keeps trying." : `<b>Nothing traded in ${esc2(FRAME_WORD[frame])}</b>no buy and no sell between block ${t.from} and ${t.head}${widerFrames()}`}</div>`;
     return `${flow}${body}
     <div class="tape-note">${esc2(
       t.source.kind === "curve" ? `Read from the curve's own CurveBuy and CurveSell, which name the trader. Ages are worked out from this chain's block rate; the block beside each row is the exact figure. Window opens at block ${t.from}${t.head ? `, read up to ${t.head}` : ""}. Last look ${since} s ago.` : t.source.pool.kind === "v4" ? `Read from the PoolManager's Swap log for this pool's id. A V4 swap names only the contract that called the pool \u2014 almost always a router \u2014 so the address says how it traded, not who. Ages are worked out from this chain's block rate; the block beside each row is the exact figure. Window opens at block ${t.from}${t.head ? `, read up to ${t.head}` : ""}. Last look ${since} s ago.` : `Read from the pool's Swap log. The address is where the tokens went, which is a router at least as often as a person. Ages are worked out from this chain's block rate; the block beside each row is the exact figure. Window opens at block ${t.from}${t.head ? `, read up to ${t.head}` : ""}. Last look ${since} s ago.`
@@ -9763,16 +10166,19 @@
   }
   function tradeRow(x, t) {
     const key = `${x.tx}:${x.logIndex}`;
-    const share = x.shareBps === null ? "\u2014" : `${(x.shareBps / 100).toFixed(x.shareBps >= 100 ? 2 : 3)}%`;
-    const big = x.shareBps !== null && x.shareBps >= 100;
+    const usdPer = shown?.m.quoteUsd ?? null;
+    const usd2 = usdPer === null ? null : Number(x.quote) / 10 ** t.quote.decimals * usdPer;
+    const share = x.shareBps === null ? "n/a" : shareText(x.shareBps);
+    const big = x.shareBps !== null && x.shareBps >= 500;
     return `<tr class="t-${x.side}${t.fresh.has(key) ? " fresh" : ""}">
     <td class="t-ago">${esc2(agoOf(x.block, t.head))}</td>
     <td><span class="t-side">${x.side}</span></td>
-    <td class="t-num">${esc2(formatUnits(x.quote, t.quote.decimals, x.quote < 10n ** BigInt(t.quote.decimals) ? 4 : 2))}</td>
-    <td class="t-num c-tok">${esc2(formatUnits(x.tokens, t.tokenDecimals, 0))}</td>
+    ${usd2 !== null ? `<td class="t-num">${esc2(formatUsd(usd2))}</td>` : ""}
+    <td class="t-num">${esc2(formatCoin(x.quote, t.quote.decimals))}</td>
+    <td class="t-num c-tok">${esc2(formatCoin(x.tokens, t.tokenDecimals))}</td>
     <td class="t-share${big ? " big" : ""}">${esc2(share)}</td>
-    <td>${walletCell(x)}</td>
-    <td class="t-w c-blk">${x.block}</td>
+    <td>${walletCell(x, t)}</td>
+    <td class="t-w c-blk">${blockCell(x, t)}</td>
   </tr>`;
   }
   function agoOf(block, head) {
@@ -9781,10 +10187,34 @@
     if (!rate || rate <= 0) return `\u2212${head - block}`;
     return shortAge((head - block) / rate);
   }
-  function walletCell(x) {
-    const explorer = chain().explorerUrl;
+  function linkChain() {
+    return mode === "demo" ? "demo" : chain().key;
+  }
+  function walletCell(x, t) {
     const short2 = shortAddress(x.wallet);
-    return explorer && mode === "live" ? `<a class="t-w" href="${esc2(explorer)}/address/${esc2(x.wallet)}" target="_blank" rel="noopener">${esc2(short2)}</a>` : `<span class="t-w">${esc2(short2)}</span>`;
+    const token = shown?.slip.subject;
+    const explorer = mode === "live" ? explorerAddress(chain(), x.wallet) : null;
+    const link = t.source.kind === "curve" && token ? `<a class="t-w" href="#/wallet/${esc2(token)}/${esc2(x.wallet)}?chain=${linkChain()}" title="${esc2(x.wallet)} \u2014 their bag in this token">${esc2(short2)}</a>` : explorer ? `<a class="t-w" href="${esc2(explorer)}" target="_blank" rel="noopener" title="${esc2(x.wallet)}">${esc2(short2)}</a>` : `<span class="t-w" title="${esc2(x.wallet)}">${esc2(short2)}</span>`;
+    const who = tapeRole(x.wallet);
+    return who ? `${link} <span class="flag t-role ${who === "dev" ? "bad" : ""}">${who}</span>` : link;
+  }
+  function blockCell(x, t) {
+    return t.source.kind === "curve" && x.tx ? `<a href="#/tx/${esc2(x.tx)}?chain=${linkChain()}" title="the trade's receipt">${x.block}</a>` : String(x.block);
+  }
+  function tapeRole(wallet) {
+    const slip = shown?.slip;
+    if (!slip) return null;
+    const w = wallet.toLowerCase();
+    const dev = slip.id.launch?.deployer.toLowerCase() ?? slip.open?.deployer?.address.toLowerCase() ?? null;
+    if (dev && w === dev) return "dev";
+    const recipient = slip.rules?.creatorFeeRecipient.toLowerCase() ?? null;
+    if (recipient && w === recipient) return "creator";
+    return null;
+  }
+  function shareText(bps3) {
+    const pct3 = bps3 / 100;
+    const text = pct3 >= 10 ? pct3.toFixed(0) : pct3 >= 1 ? pct3.toFixed(1) : pct3.toFixed(2);
+    return `${text.replace(/(\.\d*?)0+$/, "$1").replace(/\.$/, "")}%`;
   }
   function tapePanel() {
     if (!tape) return "";
@@ -9793,7 +10223,7 @@
     <div class="tape-head">
       <h2>The tape</h2>
       <span class="tape-src">${esc2(tape.sub)}</span>
-      <span class="tape-live${stalled ? " stalled" : ""}"><span class="dot"></span>${stalled ? "stalled" : "live"}</span>
+      ${livePill(stalled)}
       <span class="tape-when">${tape.failing ? esc2(tape.failing) : tape.head === null ? "opening" : `block ${tape.head}`}</span>
     </div>
     ${tapeBody()}
@@ -9817,6 +10247,7 @@
     const after2 = document.getElementById("tape")?.querySelector(".tape-rows");
     if (after2 && at > 0) after2.scrollTop = at;
     paintChart();
+    fillVolume();
   }
   function startTape(slip, picked, m, keepFrame = false) {
     stopTape();
@@ -9934,48 +10365,49 @@
       }
     ];
   }
-  function venueList(pools, quote, tokenDecimals) {
+  function venueList(pools, quote, tokenDecimals, usd2 = null) {
     if (pools === null || pools === void 0) return "";
     if (!pools.length) {
       return `<div class="venues"><div class="cap-l">Where it trades</div><div class="venue">nothing on this chain's known DEX factories</div></div>`;
     }
     const rows = pools.slice(0, 4).map(
-      (p) => `<div class="venue"><span>${esc2(p.dex)} \xB7 ${(p.feeBps / 100).toFixed(2)}%</span><b>${p.quoteReserve === null ? "unread" : `${formatUnits(p.quoteReserve, quote.decimals, 2)} ${esc2(quote.symbol)}`}</b></div>
-        <div class="venue"><span>tokens inside</span><b>${p.tokenReserve === null ? "unread" : formatUnits(p.tokenReserve, tokenDecimals, 0)}</b></div>`
+      (p) => `<div class="venue"><span>${esc2(p.dex)} \xB7 ${(p.feeBps / 100).toFixed(2)}%</span><b>${p.quoteReserve === null ? "unread" : esc2(formatMoney(p.quoteReserve, quote.decimals, quote.symbol, usd2))}</b></div>
+        <div class="venue"><span>tokens inside</span><b>${p.tokenReserve === null ? "unread" : esc2(formatCoin(p.tokenReserve, tokenDecimals))}</b></div>`
     ).join("");
     return `<div class="venues"><div class="cap-l">Where it trades</div>${rows}</div>`;
   }
+  function railFacts(facts2) {
+    return facts2.filter((f) => f.label !== "Price");
+  }
+  function factsBlock(facts2) {
+    const rail = railFacts(facts2);
+    const pendingTape = (f) => f.value === null && /tape below/.test(f.why ?? "");
+    const cells = rail.filter((f) => f.value !== null || pendingTape(f));
+    const missing = rail.filter((f) => f.value === null && !pendingTape(f));
+    return `<div class="facts">${cells.map(factCell).join("")}${missing.length ? `<div class="fact-miss"><b>Not read</b> ${missing.map((f) => `${esc2(f.label.toLowerCase())} <span>\u2014 ${esc2(f.why ?? "no reading")}</span>`).join(" \xB7 ")}</div>` : ""}</div>`;
+  }
+  function factValue(value) {
+    const pair = /^(\S+) \((.+)\)$/.exec(value);
+    return pair ? `${esc2(pair[1])}<small class="fact-coin">${esc2(pair[2])}</small>` : esc2(value);
+  }
   function factCell(f) {
-    return `<div class="fact">
+    return `<div class="fact" data-fact="${esc2(f.label)}">
     <div class="fact-l">${esc2(f.label)}</div>
-    <div class="fact-v ${f.value === null ? "none" : f.warn ? "warn" : ""}"${f.value === null ? ' aria-label="not read"' : ""}>${f.value === null ? "\u2014" : esc2(f.value)}</div>
+    <div class="fact-v ${f.value === null ? "none" : f.warn ? "warn" : ""}"${f.value === null ? ' aria-label="not read"' : ""}>${f.value === null ? "\u2014" : factValue(f.value)}</div>
     <div class="fact-n">${esc2(f.value === null ? f.why ?? f.note : f.note)}</div>
   </div>`;
   }
-  function findingsLog(notes) {
-    const mine = notes.filter((n) => topicOf(n.code) !== "unread");
-    if (!mine.length) return "";
-    const RANKED = { stop: 0, watch: 1, info: 2 };
-    const row = (n) => `<div class="log-row"><span class="log-lvl ${n.level}">${LEVEL_WORD[n.level]}</span><span>${glossed(n.text)}</span></div>`;
-    const loud = mine.filter((n) => n.level !== "info").sort((a, b) => RANKED[a.level] - RANKED[b.level]);
-    const quiet = mine.filter((n) => n.level === "info");
-    return `<details class="log">
-    <summary><span class="cap-l">Everything I found</span> <span class="log-n">${mine.length} line${mine.length === 1 ? "" : "s"}</span><span class="chev" aria-hidden="true"></span></summary>
-    <div class="log-body">
-      ${loud.map(row).join("")}
-      ${quiet.length ? `<details class="log-more"><summary>${quiet.length} more worth knowing, none of them dangerous</summary>${quiet.map(row).join("")}</details>` : ""}
-    </div>
-  </details>`;
-  }
   function chartPanel(series, quoteSymbol, quoteDecimals, spot, pending = true) {
     void spot;
-    const head = (move2 = "") => `<div class="chart-head"><span class="cap-l" title="Drawn from this token's own trades: each point is what one trade paid per token">Price</span><span class="chart-win">${esc2(FRAME_WORD[frame])} \xB7 ${esc2(quoteSymbol)}</span>${move2}</div>`;
+    const usd2 = shown?.m.quoteUsd ?? null;
+    const px = (v) => usd2 !== null ? formatUsdPrice(Number(v) / 10 ** quoteDecimals * usd2) : formatPrice(v, quoteDecimals);
+    const head = (move2 = "") => `<div class="chart-head"><span class="cap-l" title="Drawn from this token's own trades: each point is what one trade paid per token">Price</span><span class="chart-win">${usd2 !== null ? `$ per token \xB7 from ${esc2(quoteSymbol)}` : `${esc2(quoteSymbol)} per token`}</span>${move2}${pending === true ? frameTabs() : ""}</div>`;
     if (!series) {
       return `<div class="chartbox" id="chart">${head()}<div class="chart-empty${pending === true ? " busy" : ""}">${pending === true ? "Reading the trades\u2026" : esc2(pending)}</div></div>`;
     }
     if (series.unread || series.points.length < 2) {
       const why = series.unread ?? (series.swaps === 0 ? `No trade in ${FRAME_WORD[frame]}: nobody bought or sold it.` : `One trade in ${FRAME_WORD[frame]}, which is not a line yet.`);
-      return `<div class="chartbox" id="chart">${head()}<div class="chart-empty">${esc2(why)}</div></div>`;
+      return `<div class="chartbox" id="chart">${head()}<div class="chart-empty"><span>${esc2(why)}${series.unread ? "" : widerFrames()}</span></div></div>`;
     }
     const range = seriesRange(series);
     const span = range.high > range.low ? range.high - range.low : 1n;
@@ -9983,7 +10415,8 @@
     const H = 260;
     const PAD = 18;
     const n = series.points.length;
-    const yOf = (price) => PAD + (1 - Number((price - range.low) * 10000n / span) / 1e4) * (H - PAD * 2);
+    const flat = range.high === range.low;
+    const yOf = (price) => flat ? H / 2 : PAD + (1 - Number((price - range.low) * 10000n / span) / 1e4) * (H - PAD * 2);
     const coords = series.points.map((p, i) => [i / (n - 1) * W, yOf(p.price)]);
     const line = coords.map(([x, y]) => `${x.toFixed(1)},${y.toFixed(1)}`).join(" ");
     const area = `0,${H} ${line} ${W},${H}`;
@@ -9991,12 +10424,12 @@
     const tone = change === null ? "flat" : change > 50 ? "up" : change < -50 ? "down" : "flat";
     const move = change === null ? "" : `<span class="move ${tone}">${change > 0 ? "+" : ""}${(change / 100).toFixed(1)}%</span>`;
     const last = coords[n - 1];
-    const pts = series.points.map((p) => `${formatPrice(p.price, quoteDecimals)}|${agoOf(p.block, tape?.head ?? null)}|${p.sell ? "sell" : "buy"}`).join(";");
+    const pts = series.points.map((p) => `${px(p.price)}|${agoOf(p.block, tape?.head ?? null)}|${p.sell ? "sell" : "buy"}`).join(";");
     void move;
     return `<div class="chartbox" id="chart">
     ${head()}
     <div class="chart-plot t-${tone}" tabindex="0" role="img" data-pts="${esc2(pts)}"
-      aria-label="Price over ${esc2(FRAME_WORD[frame])}, ${n} points from ${formatPrice(range.low, quoteDecimals)} to ${formatPrice(range.high, quoteDecimals)} ${esc2(quoteSymbol)}. Every trade behind it is listed in the tape. Arrow keys move along the line.">
+      aria-label="Price over ${esc2(FRAME_WORD[frame])}, ${n} points from ${px(range.low)} to ${px(range.high)}${usd2 !== null ? "" : ` ${esc2(quoteSymbol)}`}. Every trade behind it is listed in the tape. Arrow keys move along the line.">
       <svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" aria-hidden="true">
         <defs><linearGradient id="chart-wash" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="currentColor" stop-opacity=".2"/><stop offset="1" stop-color="currentColor" stop-opacity="0"/></linearGradient></defs>
         <line class="grid" x1="0" x2="${W}" y1="${PAD}" y2="${PAD}"/>
@@ -10005,8 +10438,8 @@
         <polygon points="${area}" fill="url(#chart-wash)"/>
         <polyline points="${line}" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" vector-effect="non-scaling-stroke"/>
       </svg>
-      <span class="chart-hi">${esc2(formatPrice(range.high, quoteDecimals))}</span>
-      <span class="chart-lo">${esc2(formatPrice(range.low, quoteDecimals))}</span>
+      ${flat ? `<span class="chart-hi" style="top:50%">${esc2(px(range.high))} \xB7 flat</span>` : `<span class="chart-hi">${esc2(px(range.high))}</span>
+      <span class="chart-lo">${esc2(px(range.low))}</span>`}
       <span class="chart-dot" style="top:${(last[1] / H * 100).toFixed(2)}%"></span>
       <span class="chart-xh" hidden></span>
       <div class="chart-tip" hidden></div>
@@ -10020,7 +10453,7 @@
   function qrow(a, evidence) {
     const loud = a.notes.filter((n) => n.level !== "info");
     const worst = loud.some((n) => n.level === "stop") ? "stop" : loud.length ? "warn" : "";
-    const badge = loud.length ? `<span class="qn ${worst}">${loud.length}</span>` : "";
+    const badge = loud.length ? `<span class="qn ${worst}" title="${loud.length} finding${loud.length === 1 ? "" : "s"} worth reading" aria-label="${loud.length} finding${loud.length === 1 ? "" : "s"} worth reading"><span aria-hidden="true">!</span>${loud.length}</span>` : "";
     const chips = a.chips.length ? `<div class="qchips">${a.chips.map((c) => `<span class="qchip ${c.tone}">${esc2(c.text)}</span>`).join("")}</div>` : "";
     return `<details class="q" id="q-${a.topic}">
     <summary>
@@ -10031,7 +10464,7 @@
         ${chips}
         ${bar(a.bar)}
       </span>
-      ${a.figure ? `<span class="qfig ${a.tone}">${esc2(a.figure)}</span>` : ""}
+      ${a.figure ? `<span class="qfig ${a.tone}${/^[-−$<\d]/.test(a.figure) ? " n" : ""}">${esc2(a.figure)}</span>` : ""}
       ${badge}
       <span class="chev" aria-hidden="true"></span>
     </summary>
@@ -10067,48 +10500,47 @@
   }
   function buyStrip(chainKey, address, sellable = true, verdict = "clear") {
     if (!sellable) {
-      return `<section class="buy">
-      <div class="buy-head"><h2>Buy it</h2></div>
-      <p class="qblurb">No links here. BOUNCER could not establish that this address is a token you can hold or sell, and sending you to a venue to buy it anyway would be the one piece of advice on this page that is not read off the chain.</p>
+      return `<section class="buy buy-none">
+      <div class="buy-head"><h2>Open it on a venue</h2></div>
+      <p class="buy-lead">No links here. BOUNCER could not establish that this address is a token you can hold or sell, and sending you to a venue to buy it anyway would be the one piece of advice on this page that is not read off the chain.</p>
     </section>`;
     }
     const venues = tradeVenues(chainKey, address);
     if (!venues.length) return "";
-    const links = venues.map(
-      (v) => `<a class="buy-link" href="${esc2(v.url)}" target="_blank" rel="noopener nofollow sponsored">
-          <span class="buy-name">${esc2(v.name)}</span>
-          <span class="buy-what">${esc2(v.what)}</span>
-          <span class="buy-go" aria-hidden="true">\u2197</span>
+    const stop = verdict === "stop";
+    const cards = venues.map(
+      (v) => `<a class="buy-link v-${esc2(v.key)}" href="${esc2(v.url)}" target="_blank" rel="noopener nofollow sponsored">
+          <span class="buy-mark" aria-hidden="true">${esc2(v.name.slice(0, 1))}</span>
+          <span class="buy-text"><span class="buy-name">${esc2(v.name)}</span><span class="buy-what">${esc2(v.what)}${(PROVEN[chainKey] ?? []).includes(v.key) ? "" : " \xB7 link not yet checked on this chain"}</span></span>
+          <span class="buy-go">Trade on ${esc2(v.name)}<span aria-hidden="true"> \u2197</span></span>
         </a>`
     ).join("");
     const missing = missingVenues(chainKey);
-    const gap = missing.length ? `<p class="buy-gap">${esc2(missing.join(" and "))} ${missing.length === 1 ? "is" : "are"} not linked on this chain: BOUNCER has no confirmed address for ${missing.length === 1 ? "it" : "them"} here, and a guessed link is a dead one.</p>` : "";
-    const head = verdict === "stop" ? "Open it on a venue anyway?" : "Open it on a venue";
-    const lead = verdict === "stop" ? "The slip above says STOP: something here can cost you money outright. The links are not hidden \u2014 this page does not decide for anybody \u2014 but read the red lines first, because nothing on the other side of them will." : verdict === "incomplete" ? (
-      // Without this branch an incomplete reading got the CLEAR
-      // wording — "nothing here changes what it says" — over a slip
-      // that had just admitted it could not finish. The first
-      // typecheck of this file is what caught it.
+    const gap = missing.length ? `<p class="buy-gap">${esc2(missing.join(" and "))} ${missing.length === 1 ? "is" : "are"} not linked on this chain: BOUNCER has no link for ${missing.length === 1 ? "it" : "them"} here.</p>` : "";
+    const head = stop ? "Open it on a venue anyway?" : "Open it on a venue";
+    const lead = stop ? "The check above says STOP: something here can cost you money outright. The links are not hidden \u2014 this page does not decide for anybody \u2014 but read the red lines first, because nothing on the other side of them will." : verdict === "incomplete" ? (
+      // Without this branch an incomplete reading got the CLEAR wording
+      // over a slip that had just admitted it could not finish.
       "The check above did not finish: part of what decides whether you could sell was not read. These links still work; what is missing above is not."
-    ) : verdict === "watch" ? "The slip above has things worth reading first. These open the token on someone else's venue; BOUNCER cannot trade and holds no key." : "BOUNCER cannot trade and holds no key. These open the token on someone else's venue. Read the slip above first; nothing here changes what it says.";
-    const disclosure = `<p class="buy-disc"><strong>These are referral links.</strong> BOUNCER earns a share if you trade through one. Nothing on this page is ordered, worded or coloured because of that \u2014 the venues are listed in a fixed order, no venue paid to be here, and a venue with no confirmed address for this chain is named as missing rather than dropped.</p>`;
-    return `<section class="buy${verdict === "stop" ? " buy-stop" : ""}">
-    <div class="buy-head"><h2>${head}</h2></div>
-    <p class="qblurb">${lead}</p>
+    ) : verdict === "watch" ? "The check above has things worth reading first. BOUNCER holds no key and cannot trade \u2014 these open the token on someone else's venue." : "BOUNCER holds no key and cannot trade \u2014 these open the token on someone else's venue, with the check above still true there.";
+    const disclosure = `<p class="buy-disc"><span class="buy-ref">Referral links</span> BOUNCER earns a share if you trade through one. That is why these buttons exist, and it is all it touches: the verdict above is read off the chain before any link is drawn, the venues keep one fixed order and one size, every card goes grey under a STOP, no venue paid to be here, and a venue with no confirmed address for this chain is named as missing rather than dropped.</p>`;
+    return `<section class="buy${stop ? " buy-stop" : verdict === "incomplete" ? " buy-hold" : ""}" aria-labelledby="buy-h">
+    <div class="buy-head"><h2 id="buy-h">${head}</h2></div>
+    <p class="buy-lead">${lead}</p>
+    <div class="buy-links">${cards}</div>
     ${disclosure}
-    <div class="buy-links">${links}</div>
     ${gap}
   </section>`;
   }
   function exitCalcBody(supply) {
     const presets = supply && supply > 0n ? [
       { label: "0.1% of supply", value: supply / 1000n },
-      { label: "1%", value: supply / 100n },
-      { label: "5%", value: supply / 20n }
+      { label: "1% of supply", value: supply / 100n },
+      { label: "5% of supply", value: supply / 20n }
     ] : [];
     return `<div class="calc">
     <div class="calc-row">
-      <input id="calc-size" inputmode="decimal" spellcheck="false" placeholder="how many tokens do you hold?" aria-label="Position size in tokens">
+      <input id="calc-size" inputmode="decimal" spellcheck="false" placeholder="tokens you hold, e.g. 1,000,000" aria-label="Position size in tokens">
       <button class="ghost" id="calc-go" type="button">What would I get?</button>
     </div>
     ${presets.length ? `<div class="calc-presets">${presets.map((x) => `<button class="chip" type="button" data-size="${x.value}">${esc2(x.label)}</button>`).join("")}</div>` : ""}
@@ -10116,7 +10548,7 @@
     <p class="calc-foot">Priced against the reserves read above, at the same moment as everything else on this slip \u2014 not a fresh quote, and not a promise about later. It is the venue's own arithmetic on balances that anybody can move between now and when you sell.</p>
   </div>`;
   }
-  function wireExitCalc(decimals, quoteFor) {
+  function wireExitCalc(decimals, quoteFor, supply, nativeQuote) {
     const input = document.getElementById("calc-size");
     const out2 = document.getElementById("calc-out");
     if (!input || !out2) return;
@@ -10132,6 +10564,10 @@
         return;
       }
       const tokens = BigInt(whole || "0") * 10n ** BigInt(decimals) + BigInt((frac + "0".repeat(decimals)).slice(0, decimals) || "0");
+      if (supply && tokens > supply) {
+        out2.innerHTML = `<p class="calc-no">That is more than the whole supply (${esc2(formatCoin(supply, decimals))} tokens).</p>`;
+        return;
+      }
       const answer = quoteFor(tokens);
       if (!answer.ok) {
         out2.innerHTML = `<p class="calc-no">${esc2(answer.why.replace(/^./, (c) => c.toUpperCase()))}.</p>`;
@@ -10139,17 +10575,13 @@
       }
       const q2 = answer.quote;
       const said = readSizeQuote(q2);
-      out2.innerHTML = `<div class="calc-res calc-${said.level}">
-      <div class="calc-fig">
-        <b class="num">${esc2(formatUnits(q2.out, q2.quoteDecimals))}</b>
-        <span>${esc2(q2.quoteSymbol)} in hand</span>
-      </div>
-      <div class="calc-side">
-        <div class="calc-kv"><span>you keep</span><b>${(q2.realisedBps / 100).toFixed(1)}%</b><span>of the screen price</span></div>
-        <div class="calc-kv"><span>your size is</span><b>${(q2.shareOfPoolBps / 100).toFixed(2)}%</b><span>of the pool's token side</span></div>
-      </div>
-      <p class="calc-say">${esc2(said.text)}</p>
-    </div>`;
+      const ofSupply = supply && supply > 0n ? ` \xB7 ${shareText(Number(tokens * 1000000n / supply) / 100)} of supply` : "";
+      out2.innerHTML = `<div class="calc-res">
+      <div class="calc-fig"><span class="l">in hand</span><b class="v num">${esc2(formatMoney(q2.out, q2.quoteDecimals, q2.quoteSymbol, quoteUsdNow(nativeQuote)))}</b><span class="s">for ${esc2(formatCoin(tokens, decimals))} tokens${ofSupply}</span></div>
+      <div class="calc-fig"><span class="l">you keep</span><b class="v num">${(q2.realisedBps / 100).toFixed(1)}%</b><span class="s">of what the screen price says</span></div>
+      <div class="calc-fig"><span class="l">your size</span><b class="v num">${esc2(shareText(q2.shareOfPoolBps))}</b><span class="s">of the token side of ${esc2(q2.venue)}</span></div>
+    </div>
+    <p class="calc-say ${said.level}">${esc2(said.text)}</p>`;
     };
     input.addEventListener("keydown", (e) => {
       if (e.key === "Enter") {
@@ -10168,8 +10600,7 @@
   function whyBody(notes, coverage, at, source) {
     const deciding = notes.filter((n) => n.level === "stop" || n.level === "watch");
     const word = readVerdict(notes, coverage).word;
-    const why = deciding.length ? `<p class="whylead">The word <b>${word}</b> is these ${deciding.length} finding${deciding.length === 1 ? "" : "s"} and nothing else. Every other line on the slip is context.</p>
-       <ol class="whylist">${deciding.map((n) => `<li><span class="whylvl ${n.level}">${n.level.toUpperCase()}</span><span>${esc2(n.text)}</span><code>${esc2(n.code)}</code></li>`).join("")}</ol>` : coverage.state === "thin" ? `<p class="whylead">The word <b>INCOMPLETE</b> is not a finding about the token. Nothing loud was found, and ${esc2(coverage.line.replace(/^./, (c) => c.toLowerCase()))}</p>` : `<p class="whylead">The word <b>CLEAR</b> is the absence of a finding, not the presence of a clean bill. It means every check below ran and none of them flagged anything \u2014 which is a smaller claim than it sounds.</p>`;
+    const why = deciding.length ? `<p class="howlead">The findings behind <b>${word}</b> are listed under the stamp, each linked to its question. This is how they were read.</p>` : coverage.state === "thin" ? `<p class="howlead">The word <b>INCOMPLETE</b> is not a finding about the token. Nothing loud was found, and ${esc2(coverage.line.replace(/^./, (c) => c.toLowerCase()))}</p>` : `<p class="howlead">The word <b>CLEAR</b> is the absence of a finding, not the presence of a clean bill. It means every check below ran and none of them flagged anything \u2014 which is a smaller claim than it sounds.</p>`;
     const checks = `<ul class="whychecks">${coverage.checks.map(
       (c) => `<li class="whycheck">
           <span class="wcs wcs-${c.state === "n/a" ? "na" : c.state}">${esc2(c.state)}</span>
@@ -10282,23 +10713,24 @@
       address: slip.subject,
       stamp: stampLabel(slip.stamp, null),
       stampKind: slip.stamp,
-      at: `${esc2(slip.chain.name)} \xB7 ${esc2(solanaWhen(slip))}${slip.at.timestamp ? ` \xB7 ${isoUtc(slip.at.timestamp)}` : ""}`,
+      at: `${esc2(slip.chain.name)} \xB7 ${esc2(solanaWhen(slip))}${slip.at.timestamp ? ` \xB7 ${humanUtc(slip.at.timestamp)}` : ""}`,
       notes: slip.notes,
       stage: stage0,
       coverage,
       stillReading: SOL_STILL_READING,
       answers,
       facts: splFacts(slip),
+      explorer: explorerAddress(chain(), slip.subject),
       bands: `${coverage ? coverageBand(coverage, stage0) : ""}${changes ?? ""}`,
       evidence,
       more: moreStack([
-        coverage && opts.source ? section("s-why", "Why this verdict", "Which findings made the word, what was asked of the chain, and what was never checked.", whyBody(slip.notes, coverage, `${esc2(slip.chain.name)} \xB7 ${esc2(solanaWhen(slip))}${slip.at.timestamp ? ` \xB7 ${isoUtc(slip.at.timestamp)}` : ""}`, opts.source), false) : "",
+        coverage && opts.source ? section("s-why", "How this was read", "The endpoint, what was asked of it, and which checks ran.", whyBody(slip.notes, coverage, `${esc2(slip.chain.name)} \xB7 ${esc2(solanaWhen(slip))}${slip.at.timestamp ? ` \xB7 ${humanUtc(slip.at.timestamp)}` : ""}`, opts.source), false) : "",
         stage0 === "done" ? section("s-watch", "Watch for changes", "Whether this tab can follow the mint after you leave it.", watchBody(splWatch(slip)), false) : ""
       ]),
       actions: `<button class="ghost primary" id="act-share" type="button">Copy card</button><button class="ghost" id="act-link" type="button">Copy link</button><button class="ghost" id="act-json" type="button">JSON</button>`
     })}
-    ${stage0 === "done" ? tapeNone("Solana has no log filter to walk, so there is no cheap way to read a mint's trades one window at a time. Every buy and sell would mean re-reading each token account, which is the read the public endpoints refuse. The figures above are the slot they were read at.") : ""}
     ${buyStrip(slip.chain.key, slip.subject, Boolean(slip.mint), verdictOf(slip.notes, "done", coverage).kind)}
+    ${stage0 === "done" ? tapeNone("Solana has no log filter to walk, so there is no cheap way to read a mint's trades one window at a time. Every buy and sell would mean re-reading each token account, which is the read the public endpoints refuse. The figures above are the slot they were read at.") : ""}
   </div>`;
     $("act-share").addEventListener("click", async (event) => {
       const button = event.currentTarget;
@@ -10315,7 +10747,7 @@
     });
     $("act-json").addEventListener("click", async () => {
       try {
-        await navigator.clipboard.writeText(slipJson(slip));
+        await navigator.clipboard.writeText(slipJson(mode === "demo" ? { demo: true, note: "invented example chain: every address, trade and number is made up", ...slip } : slip));
         showToast("JSON copied");
       } catch {
         showToast("Clipboard blocked; use the CLI --format json");
@@ -10332,7 +10764,7 @@
     });
     wireRetry();
     wireShape();
-    if (m) wireExitCalc(m.decimals, (tokens) => splExitFor(slip, tokens));
+    if (m) wireExitCalc(m.decimals, (tokens) => splExitFor(slip, tokens), m.supply ?? null, false);
     if (after2) remember({ ...after2, chain: historyChain(after2.chain) });
   }
   function wireShape() {
@@ -10388,6 +10820,14 @@
   function formatSupply(value, decimals) {
     const whole = value / 10n ** BigInt(decimals);
     return whole.toLocaleString("en-US");
+  }
+  function realOne(slip) {
+    const real = impostorOf(slip);
+    if (!real) return "";
+    return `<a class="realone" href="#/${mode === "demo" ? "demo" : "t"}/${esc2(real.address)}${routeChain()}">
+    <span>The ${esc2(slip.chain.launchpad ?? "launchpad")}'s own ${esc2(slip.lookalikes.query)} is <b class="mono">${esc2(shortAddress(real.address))}</b>, launched earlier.</span>
+    <span class="realone-go">Check that one <span aria-hidden="true">\u2192</span></span>
+  </a>`;
   }
   function openDoorSentence(slip) {
     const t = slip.id.token;
@@ -10535,7 +10975,9 @@
     const o = slip.open;
     const tradesText = o ? tradesBody(slip) : "";
     const qd = slip.rules?.quote ?? slip.chain.native;
-    const amt = (v) => `${formatUnits(v, qd.decimals)} ${esc2(qd.symbol)}`;
+    const evUsd = quoteUsdNow(slipNative(slip));
+    const money2 = (v) => formatMoney(v, qd.decimals, qd.symbol, evUsd);
+    const amt = (v) => esc2(formatMoney(v, qd.decimals, qd.symbol, evUsd));
     const c = slip.cover;
     const r = slip.rules;
     const room = slip.room;
@@ -10554,7 +10996,7 @@
       </div>` : registered ? `<div class="tiles">
         <div class="tile"><div class="l">Door tax</div><div class="v ${c?.status === "open" ? "open" : "closed"}" id="cd">${c ? c.status === "open" ? `${c.secondsLeft}s` : c.status === "closed" ? "OFF" : "OFF" : "OFF"}</div><div class="s" id="cd-note">${c ? c.status === "open" ? `left, then it is safe to buy` : c.status === "closed" ? `ended ${formatDuration(Math.max(0, c.head.timestamp - c.windowEndsAt))} ago` : "disabled for this launch" : "ended long ago"}</div></div>
         <div class="tile"><div class="l">Fee per trade</div><div class="v ${r && r.totalTradeBps >= 1000n ? "bad" : ""}">${r ? formatBps(r.totalTradeBps) : "\u2014"}</div><div class="s">${r ? `${formatBps(r.creatorTaxBps)} of it to the creator` : ""}</div></div>
-        <div class="tile"><div class="l">${room && room.buys > 0 ? "Creator funded" : "Curve full"}</div><div class="v ${room && room.devShareBps >= 5e3 ? "bad" : ""}">${room && room.buys > 0 ? `${(room.devShareBps / 100).toFixed(0)}%` : r?.fill ? `${(r.fill.bps / 100).toFixed(0)}%` : "\u2014"}</div><div class="s">${room && room.buys > 0 ? `of all buys \xB7 ${room.buyers} buyers` : r?.fill ? "of the way to graduation" : ""}</div></div>
+        <div class="tile"><div class="l">${room && room.buys > 0 ? "Creator funded" : "Curve full"}</div><div class="v ${room && room.devShareBps >= 5e3 ? "bad" : ""}">${room && room.buys > 0 ? `${(room.devShareBps / 100).toFixed(0)}%` : r?.fill ? `${(r.fill.bps / 100).toFixed(0)}%` : "\u2014"}</div><div class="s">${room && room.buys > 0 ? `of all buys \xB7 ${plural(room.buyers, "buyer")}` : r?.fill ? "of the way to graduation" : ""}</div></div>
         <div class="tile"><div class="l">This dev before</div><div class="v ${d && d.counts.launched >= 5 && d.counts.graduated === 0 ? "bad" : ""}">${d ? `${d.counts.launched}` : "\u2014"}</div><div class="s">${d ? `launch${d.counts.launched === 1 ? "" : "es"} in ${mode === "demo" ? "8" : "24"} h \xB7 ${d.counts.graduated} graduated` : ""}</div></div>
       </div>` : o ? openDoorTiles(slip) : "";
     const idFlags = (x) => {
@@ -10569,51 +11011,57 @@
       return f.join("");
     };
     const idBody = `<dl class="kv">
-    <dt>chain</dt><dd>${esc2(slip.chain.name)}${slip.chain.launchpad ? ` \xB7 ${esc2(slip.chain.launchpad)}` : ""}</dd>
+    <dt>chain</dt><dd>${esc2(slip.chain.name)}${slip.chain.launchpad && !v1 && registered ? ` \xB7 ${esc2(slip.chain.launchpad)}` : ""}</dd>
     <dt>factory record</dt><dd>${registered ? `<span class="flag ok">yes</span> ${v1 ? "the Pons V1 factory" : "the launchpad's own factory"} deployed this token${slip.id.resolvedAs === "curve" ? " (you pasted its curve)" : ""}` : `<span class="flag ${o ? "" : "bad"}">none</span> ${slip.chain.launchpad ? `neither the ${esc2(slip.chain.launchpad)} factory${slip.chain.key === "robinhood" ? " nor the Pons V1 factory" : ""} deployed this address` : `no launchpad BOUNCER knows runs on ${esc2(slip.chain.name)}`}${o ? "; checked as an ordinary token below" : ""}`}</dd>
     <dt>token code</dt><dd>${t.code.empty ? "empty (no contract)" : `${t.code.bytes} bytes`}<br>${idFlags(t)}</dd>
     ${slip.id.curve ? `<dt>curve code</dt><dd>${slip.id.curve.code.bytes} bytes<br>${idFlags(slip.id.curve)}</dd>` : ""}
-    ${v1 ? `<dt>launchpad</dt><dd>Pons V1</dd><dt>deployer</dt><dd><span class="mono">${esc2(v1.record.deployer.toLowerCase())}</span></dd>` : ""}
-    ${slip.id.launch ? `<dt>deployer</dt><dd><a href="#/dev/${slip.id.launch.deployer.toLowerCase()}${routeChain()}"><span class="mono">${esc2(slip.id.launch.deployer.toLowerCase())}</span></a> <small style="color:var(--dim)">click for their history</small></dd><dt>stage</dt><dd>${{ curve: "on the bonding curve", swept: "curve closed, pool not created yet", pool: "graduated: trades in the locked Uniswap pool", rescued: "graduated (rescued)" }[PHASE_LABEL[slip.id.launch.phase]] ?? PHASE_LABEL[slip.id.launch.phase]}</dd>` : ""}
-    ${explorer ? `<dt>explorer</dt><dd><a href="${explorer}" target="_blank" rel="noopener">${mode === "demo" ? "open in Blockscout (demo address, will be empty)" : "open in Blockscout"}</a></dd>` : ""}
+    ${v1 ? `<dt>launchpad</dt><dd>Pons V1</dd><dt>deployer</dt><dd><span class="mono" title="${esc2(v1.record.deployer.toLowerCase())}">${esc2(shortAddress(v1.record.deployer))}</span></dd>` : ""}
+    ${slip.id.launch ? `<dt>deployer</dt><dd><a href="#/dev/${slip.id.launch.deployer.toLowerCase()}${routeChain()}" title="${esc2(slip.id.launch.deployer.toLowerCase())}"><span class="mono">${esc2(shortAddress(slip.id.launch.deployer))}</span></a> \xB7 their launch history \u203A</dd>` : ""}
   </dl>`;
     let coverBody = "";
     if (c) {
-      const buys = c.observed.map((b) => `<tr class="${b.creatorWallet ? "exempt" : ""}"><td>${b.secondsAfterLaunch.toFixed(1)} s</td><td>${shortAddress(b.buyer)}${b.creatorWallet ? ' <span class="flag">creator \xB7 exempt</span>' : ""}</td><td>${amt(b.quoteIn)}</td><td>${(b.chargeBps / 100).toFixed(1)}%</td></tr>`).join("");
+      const buys = c.observed.map((b) => `<tr class="${b.creatorWallet ? "exempt" : ""}"><td>${b.secondsAfterLaunch.toFixed(1)} s</td><td><span class="mono">${shortAddress(b.buyer)}</span>${b.creatorWallet ? ' <span class="flag">creator</span>' : ""}</td><td class="num">${esc2(money2(b.quoteIn))}</td><td class="num">${b.creatorWallet ? "exempt" : b.doorBps > 0 ? `${(b.doorBps / 100).toFixed(1)}%` : "0%"}</td><td class="num">${((b.chargeBps - b.doorBps) / 100).toFixed(0)}%</td></tr>`).join("");
       coverBody = `${c.status === "open" ? `<div class="bar"><i id="cd-bar" style="width:${Math.round(c.secondsLeft / c.terms.seconds * 100)}%"></i></div>` : ""}
       <dl class="kv">
         <dt>the rule</dt><dd>In the first ${c.terms.seconds} s after launch, a buy pays up to ${formatBps(c.terms.startBps)} of its money to the creator on top of normal fees, falling to zero over the window. The creator's own wallets never pay it.${c.termsChangedSinceLaunch ? ' <span class="flag bad">the factory changed these terms after this launch</span>' : ""}</dd>
-        <dt>launched</dt><dd>${isoUtc(c.launch.timestamp)} \xB7 block ${c.launch.block}</dd>
+        <dt>launched</dt><dd>${humanUtc(c.launch.timestamp)} \xB7 block ${c.launch.block}</dd>
         <dt>now</dt><dd>${esc2(coverChargeLine(c))}</dd>
       </dl>
-      ${c.observed.length ? `<div class="tbl"><table class="buys"><thead><tr><th>after launch</th><th>buyer</th><th>spent</th><th>paid at the door</th></tr></thead><tbody>${buys}</tbody></table></div>` : `<p style="color:var(--muted);font-size:13px;margin:8px 0 0">No buys landed inside the window.</p>`}`;
+      ${c.observed.length ? `<div class="tbl"><table class="buys"><thead><tr><th>after launch</th><th>buyer</th><th class="num">spent</th><th class="num">door tax</th><th class="num">ordinary fees</th></tr></thead><tbody>${buys}</tbody></table></div>` : `<p style="color:var(--muted);font-size:13px;margin:8px 0 0">No buys landed inside the window.</p>`}`;
     } else if (registered) {
       coverBody = `<p style="color:var(--muted);margin:0">This launch is older than the search window; the door tax ended long ago and was not read.</p>`;
     }
     const rulesBody = r ? `<ol class="rules">${r.rules.map((x) => `<li>${esc2(x)}</li>`).join("")}</ol>` : "";
-    const exitBody = e ? `<p style="margin:0 0 4px;color:var(--muted);font-size:13px">If you held ${formatUnits(e.position, 18, 0)} tokens (1% of supply) and sold now on the ${e.venue === "pool" ? "pool" : "curve"}${e.venue !== "closed" ? ` \xB7 ${formatBps(e.feeBps)} fee + ${formatBps(e.creatorTaxBps)} creator tax` : ""}:</p>
-        ${e.quotes.length ? `<div class="exit-grid">${e.quotes.map((x) => `<div><span>sell ${x.shareBps / 100}%</span><b class="num">${formatUnits(x.net, qd.decimals)}</b><span>${esc2(qd.symbol)} in hand</span><small>${(x.realisedBps / 100).toFixed(1)}% of the quoted price</small></div>`).join("")}</div>` : ""}
-        <p style="margin:0;color:var(--dim);font-size:12px">${esc2(e.note)}</p>
+    const supplyOf = slip.id.meta?.totalSupply ?? 0n;
+    const exitBody = e ? `<p class="qdetail" style="margin:0 0 4px">What a sale of each size would pay right now on the ${e.venue === "pool" ? "pool" : "curve"}${e.venue !== "closed" ? `, after the ${formatBps(e.feeBps + e.creatorTaxBps)} it charges (${formatBps(e.feeBps)} fee + ${formatBps(e.creatorTaxBps)} creator tax)` : ""}:</p>
+        ${e.quotes.length ? `<div class="exit-grid">${e.quotes.map((x) => {
+      const tokensIn = e.position * BigInt(x.shareBps) / 10000n;
+      const ofSupply = supplyOf > 0n ? shareText(Number(tokensIn * 1000000n / supplyOf) / 100) : "";
+      return `<div><span>${esc2(formatCoin(tokensIn, 18))} tokens${ofSupply ? ` \xB7 ${ofSupply} of supply` : ""}</span><b class="num">${esc2(money2(x.net))}</b><small>${(x.realisedBps / 100).toFixed(1)}% of the quote</small></div>`;
+    }).join("")}</div>` : ""}
+        <p class="qdetail">${esc2(e.note)}</p>
         <div class="wallet-row"><input id="wallet-q" placeholder="your wallet 0x\u2026 to see your own bag on this token" spellcheck="false"><button class="ghost" id="wallet-go" type="button">Show my bag</button></div>` : "";
     const roomBody = room ? `<dl class="kv">
         <dt>since launch</dt><dd>${esc2(roomLine(room))}</dd>
-        <dt>bought</dt><dd>${amt(room.totalQuoteIn)} after fees \xB7 ${room.buys} buys \xB7 ${room.sells} sells</dd></dl>
-        ${room.wallets.length ? `<div class="tbl"><table class="buys"><thead><tr><th>wallet</th><th>in</th><th>out</th><th>buys</th></tr></thead><tbody>${room.wallets.slice(0, 8).map((w) => `<tr><td>${shortAddress(w.address)}${w.creatorWallet ? ' <span class="flag">creator</span>' : ""}</td><td>${amt(w.quoteIn)}</td><td>${w.quoteOut ? amt(w.quoteOut) : "\u2014"}</td><td>${w.buys}</td></tr>`).join("")}</tbody></table></div>` : ""}` : "";
+        <dt>bought</dt><dd>${amt(room.totalQuoteIn)} after fees \xB7 ${plural(room.buys, "buy")} \xB7 ${plural(room.sells, "sell")}</dd></dl>
+        ${room.wallets.length ? `<div class="tbl"><table class="buys"><thead><tr><th>wallet</th><th>in, after fees</th><th>out</th><th>buys</th></tr></thead><tbody>${[...room.wallets].sort((a, b) => b.quoteIn > a.quoteIn ? 1 : b.quoteIn < a.quoteIn ? -1 : 0).slice(0, 8).map((w) => `<tr><td>${shortAddress(w.address)}${w.creatorWallet ? ' <span class="flag">creator</span>' : ""}</td><td>${amt(w.quoteIn)}</td><td>${w.quoteOut ? amt(w.quoteOut) : "\u2014"}</td><td>${w.buys}</td></tr>`).join("")}</tbody></table></div>${moreRows(room.wallets.length, 8, "wallet")}` : ""}` : "";
     const crewBody = crew ? `<dl class="kv"><dt>first buyers</dt><dd>${esc2(oneCrewLine(crew))}</dd>
-        ${crew.crews.slice(0, 3).map((cr, i) => `<dt>group ${i + 1}</dt><dd>${cr.wallets.length} wallets were all funded by <span class="mono">${shortAddress(cr.funder)}</span> before the launch \xB7 together ${(cr.shareBps / 100).toFixed(1)}% of all buys</dd>`).join("")}</dl>
-        <div class="tbl"><table class="buys"><thead><tr><th>wallet</th><th>got its money from</th><th>bought</th></tr></thead><tbody>${crew.wallets.slice(0, 10).map((w) => `<tr><td>${shortAddress(w.address)}</td><td>${w.creatorWallet ? '<span class="flag">creator wallet</span>' : w.funder ? `${shortAddress(w.funder)} <small style="color:var(--dim)">@${w.fundedAtBlock}</small>` : '<span style="color:var(--dim)">not found</span>'}</td><td>${amt(w.quoteIn)}</td></tr>`).join("")}</tbody></table></div>` : "";
+        ${crew.crews.slice(0, 3).map((cr, i) => `<dt>group ${i + 1}</dt><dd>${plural(cr.wallets.length, "wallet")} ${cr.wallets.length === 1 ? "was" : "were all"} funded by <span class="mono">${shortAddress(cr.funder)}</span> before the launch \xB7 together ${(cr.shareBps / 100).toFixed(1)}% of all buys</dd>`).join("")}</dl>
+        <div class="tbl"><table class="buys"><thead><tr><th>wallet</th><th>got its money from</th><th>bought, after fees</th></tr></thead><tbody>${crew.wallets.slice(0, 10).map((w) => `<tr><td>${shortAddress(w.address)}</td><td>${w.creatorWallet ? '<span class="flag">creator wallet</span>' : w.funder ? `<span class="mono">${shortAddress(w.funder)}</span> <small style="color:var(--dim)">block ${w.fundedAtBlock}</small>` : '<span style="color:var(--dim)">not traced</span>'}</td><td>${amt(w.quoteIn)}</td></tr>`).join("")}</tbody></table></div>${moreRows(crew.wallets.length, 10, "wallet", "first")}` : "";
     const lookBody = l ? `<h3 class="cap">Tokens carrying this ticker</h3><dl class="kv"><dt>${esc2(l.query)}</dt><dd>${esc2(lookalikeLine(l))}</dd></dl>
         <h3 class="cap">Every one found <b>\xB7 the factory decides, not the name</b></h3><div class="tbl"><table class="buys"><thead><tr><th>address</th><th>from the factory?</th><th>stage</th><th>launch block</th></tr></thead><tbody>${l.candidates.slice(0, 8).map((x) => `<tr><td><a href="#/${mode === "demo" ? "demo" : "t"}/${x.address}${routeChain()}">${shortAddress(x.address)}</a>${x.address === l.subject ? " \xB7 this one" : ""}</td><td>${x.registered ? '<span class="flag ok">yes</span>' : '<span class="flag bad">no</span>'}</td><td>${x.phase !== null ? PHASE_LABEL[x.phase] : "\u2014"}</td><td>${x.launchBlock ?? "\u2014"}</td></tr>`).join("")}</tbody></table></div>` : "";
     const offer = doorWatch(slip);
     const evidence = {
       id: idBody + lookBody,
-      keep: (o ? controlBody(slip) : "") + rulesBody + (v1 ? `<h3 class="cap">Rules of a Pons V1 launch</h3><ol class="rules">${v1.rules.map((x) => `<li>${esc2(x)}</li>`).join("")}</ol>` : ""),
-      sell: (o ? probeBody(slip) : "") + coverBody,
+      keep: coverBody + (o ? controlBody(slip) : "") + rulesBody + (v1 ? `<h3 class="cap">Rules of a Pons V1 launch</h3><ol class="rules">${v1.rules.map((x) => `<li>${esc2(x)}</li>`).join("")}</ol>` : ""),
+      sell: o ? probeBody(slip) : "",
       exit: tradesText + exitBody + exitCalcBody(slip.id.meta?.totalSupply ?? null),
       room: (o && (o.holders || o.deployer || o.activity) ? holdersBody(slip) : "") + roomBody + crewBody + (d ? devSection(d, slip.subject, false, true) : "")
     };
-    const answers = doorAnswers(slip);
-    const m = marketFacts(slip);
+    ensureQuoteUsd();
+    const usdPer = quoteUsdNow(slipNative(slip));
+    const answers = doorAnswers(slip, { quoteUsd: usdPer });
+    const m = marketFacts(slip, { quoteUsd: usdPer });
     const picked = tradeSourceFor(slip, m);
     const chart = chartPanel(null, m.quoteSymbol, m.quoteDecimals, m.spot, "why" in picked ? picked.why : true);
     out.innerHTML = `<div class="slip">
@@ -10621,9 +11069,9 @@
       sym,
       name,
       address: slip.subject,
-      stamp: stampLabel(slip.stamp, slip.chain.launchpad),
+      stamp: stampLabel(slip.stamp, slip.chain.launchpad, Boolean(slip.id.v1)),
       stampKind: slip.stamp,
-      at: `${mode === "demo" ? "DEMO \xB7 " : ""}${esc2(slip.chain.name)} \xB7 block ${slip.at.block} \xB7 ${isoUtc(slip.at.timestamp)}`,
+      at: `${mode === "demo" ? "DEMO \xB7 " : ""}${esc2(slip.chain.name)} \xB7 block ${slip.at.block} \xB7 ${humanUtc(slip.at.timestamp)}`,
       notes: slip.notes,
       stage: stage0,
       coverage,
@@ -10631,25 +11079,28 @@
       facts: m.facts,
       chart,
       price: tokPrice(m, slip.at.block),
-      frames: "why" in picked ? "" : frameTabs(),
-      venues: venueList(slip.open?.pools, slip.rules?.quote ?? slip.chain.native, slip.id.meta?.decimals ?? 18),
+      stageTag: stageTag(slip),
+      explorer: mode === "demo" ? null : explorerAddress(chain(), slip.subject),
+      frames: "",
+      venues: venueList(slip.open?.pools, slip.rules?.quote ?? slip.chain.native, slip.id.meta?.decimals ?? 18, usdPer),
+      alert: realOne(slip),
       bands: `${coverage ? coverageBand(coverage, stage0) : ""}${changes ?? ""}`,
       evidence,
       more: moreStack([
-        coverage && opts.source ? section("s-why", "Why this verdict", "Which findings made the word, what was asked of the chain, and what was never checked.", whyBody(slip.notes, coverage, `${esc2(slip.chain.name)} \xB7 block ${slip.at.block} \xB7 ${isoUtc(slip.at.timestamp)}`, opts.source), false) : "",
+        coverage && opts.source ? section("s-why", "How this was read", "The endpoint, what was asked of it, and which checks ran.", whyBody(slip.notes, coverage, `${esc2(slip.chain.name)} \xB7 block ${slip.at.block} \xB7 ${humanUtc(slip.at.timestamp)}`, opts.source), false) : "",
         stage0 === "done" ? section("s-watch", "Watch for changes", "Get told when the dev moves or tokens go into a pool.", watchBody(offer), new URLSearchParams(location.hash.split("?")[1] ?? "").get("watch") === "1") : ""
       ]),
       actions: `<button class="ghost primary" id="act-share" type="button">Copy card</button><button class="ghost" id="act-card" type="button">Preview</button><button class="ghost" id="act-link" type="button">Copy link</button><button class="ghost" id="act-json" type="button">JSON</button>`
     })}
-    ${stage0 === "done" ? "why" in picked ? tapeNone(picked.why) : `<section class="tape" id="tape"></section>` : ""}
     <div class="card-wrap" id="card"></div>
-    ${buyStrip(mode === "demo" ? "" : slip.chain.key, slip.subject, Boolean(slip.id.meta) && slip.open?.transferFunction !== false, verdictOf(slip.notes, "done", coverage).kind)}
+    ${stage0 === "done" ? buyStrip(mode === "demo" ? "" : slip.chain.key, slip.subject, Boolean(slip.id.meta) && slip.open?.transferFunction !== false, verdictOf(slip.notes, "done", coverage).kind) : ""}
+    ${stage0 === "done" ? "why" in picked ? tapeNone(picked.why) : `<section class="tape" id="tape"></section>` : ""}
   </div>`;
     shown = { slip, m, picked };
     if (stage0 === "done" && !("why" in picked)) startTape(slip, picked, m);
     const cardSvg = () => {
       noteCard("door", slip.id.meta?.symbol ?? slip.subject);
-      return doorCard(slip, { repoUrl: REPO, ticker: MARK, mascotSvg: MASCOT_SVG_INNER, checkUrl: shareBase(), lead: summarySentence(slip) });
+      return doorCard(slip, { repoUrl: REPO, ticker: MARK, mascotSvg: MASCOT_SVG_INNER, checkUrl: shareBase(), lead: summarySentence(slip), demo: mode === "demo" });
     };
     $("act-card").addEventListener("click", () => {
       const wrap = $("card");
@@ -10661,7 +11112,7 @@
       button.disabled = true;
       try {
         const sym2 = slip.id.meta?.symbol ?? slip.subject.slice(0, 10);
-        const how = await copyCardImage(cardSvg(), `bouncer-${sym2.replace(/[^a-z0-9]+/gi, "-").toLowerCase()}.png`);
+        const how = await copyCardImage(cardSvg(), `bouncer-${mode === "demo" ? "demo-" : ""}${sym2.replace(/[^a-z0-9]+/gi, "-").toLowerCase()}.png`);
         showToast(how === "copied" ? "Card copied \u2014 paste it anywhere" : "Your browser would not take an image; the card was downloaded instead");
       } finally {
         button.disabled = false;
@@ -10669,7 +11120,7 @@
     });
     $("act-json").addEventListener("click", async () => {
       try {
-        await navigator.clipboard.writeText(slipJson(slip));
+        await navigator.clipboard.writeText(slipJson(mode === "demo" ? { demo: true, note: "invented example chain: every address, trade and number is made up", ...slip } : slip));
         showToast("JSON copied");
       } catch {
         showToast("Clipboard blocked; use the CLI --format json");
@@ -10686,7 +11137,7 @@
     });
     wireRetry();
     wireShape();
-    wireExitCalc(slip.id.meta?.decimals ?? 18, (tokens) => evmExitFor(slip, tokens));
+    wireExitCalc(slip.id.meta?.decimals ?? 18, (tokens) => evmExitFor(slip, tokens), slip.id.meta?.totalSupply ?? null, slipNative(slip));
     if (after2) remember({ ...after2, chain: historyChain(after2.chain) });
     const walletGo = document.getElementById("wallet-go");
     if (walletGo) {
@@ -10718,21 +11169,25 @@
       const started = Date.now();
       ticker = window.setInterval(() => {
         const left = Math.max(0, cc.secondsLeft - Math.floor((Date.now() - started) / 1e3));
-        const cd = document.getElementById("cd");
-        const bar2 = document.getElementById("cd-bar");
-        const note = document.getElementById("cd-note");
-        if (!cd) {
-          if (ticker) clearInterval(ticker);
-          return;
-        }
-        cd.textContent = left > 0 ? `${left}s` : "OFF";
-        if (bar2) bar2.style.width = `${Math.round(left / cc.terms.seconds * 100)}%`;
-        if (left <= 0) {
-          cd.className = "v closed";
-          if (note) note.textContent = "ended while you were looking; check again to see who paid";
+        const row = document.getElementById("q-keep");
+        if (!row) {
           if (ticker) clearInterval(ticker);
           ticker = null;
+          return;
         }
+        const value = row.querySelector(".qv");
+        const fig = row.querySelector(".qfig");
+        const bar2 = document.getElementById("cd-bar");
+        if (bar2) bar2.style.width = `${Math.round(left / cc.terms.seconds * 100)}%`;
+        if (left > 0) {
+          if (value) value.textContent = `Yes, on a buy \u2014 the door tax is on for ${left} more second${left === 1 ? "" : "s"}`;
+          if (fig) fig.textContent = `${left}s`;
+          return;
+        }
+        if (value) value.textContent = "The door tax ended while you were looking \u2014 check again to see who paid it";
+        if (fig) fig.textContent = "ended";
+        if (ticker) clearInterval(ticker);
+        ticker = null;
       }, 1e3);
     }
   }
@@ -10742,16 +11197,6 @@
   }
   function pctText(bps3) {
     return bps3 === null ? "unknown" : `${(bps3 / 100).toFixed(1)}%`;
-  }
-  function money2(value) {
-    if (!Number.isFinite(value)) return "unreadable";
-    if (value === 0) return "$0";
-    if (value >= 1) return `$${value.toFixed(2)}`;
-    const digits = Math.min(18, Math.max(2, 2 - Math.floor(Math.log10(Math.abs(value)))));
-    return `$${value.toFixed(digits)}`;
-  }
-  function usdShort(v) {
-    return v >= 1e9 ? `$${(v / 1e9).toFixed(2)}B` : v >= 1e6 ? `$${(v / 1e6).toFixed(1)}M` : v >= 1e3 ? `$${(v / 1e3).toFixed(0)}K` : `$${v.toFixed(0)}`;
   }
   function probeVerdict(probes) {
     if (!probes.length) return { value: "\u2014", bad: false, note: "not simulated" };
@@ -10779,7 +11224,7 @@
   }
   function controlBody(slip) {
     const o = slip.open;
-    const powers = o.powers.length ? `<h3 class="cap">What the code can do <b>\xB7 read off the bytecode</b></h3><div class="tbl"><table class="buys"><thead><tr><th>function in the code</th><th>lets whoever may call it</th></tr></thead><tbody>${o.powers.map((p) => `<tr><td><span class="mono">${esc2(p.signature)}</span></td><td>${esc2(POWER_MEANING[p.kind])}</td></tr>`).join("")}</tbody></table></div><p class="qdetail">A name in the dispatcher is not a permission. Whether each is guarded by the owner, by a role, or by nothing at all is not readable from bytecode.</p>` : o.surfaceFrom === "implementation-unreadable" ? `<p class="qdetail">The code this proxy points at could not be read, so no function list is shown. Its switches are unknown, not absent.</p>` : `<p class="qdetail">No mint, pause, blacklist, fee, limit, trading or upgrade function was seen among the ${o.selectors} four-byte selectors in the code.</p>`;
+    const powers = o.powers.length ? `<h3 class="cap">What the code can do <b>\xB7 read off the bytecode</b></h3><div class="tbl"><table class="buys"><thead><tr><th>function in the code</th><th>lets whoever may call it</th></tr></thead><tbody>${o.powers.map((p) => `<tr><td><span class="mono">${esc2(p.signature)}</span></td><td>${esc2(/^unpause|^resume/i.test(p.signature) ? "turn transfers back on after a pause" : POWER_MEANING[p.kind])}</td></tr>`).join("")}</tbody></table></div><p class="qdetail">A name in the dispatcher is not a permission. Whether each is guarded by the owner, by a role, or by nothing at all is not readable from bytecode.</p>` : o.surfaceFrom === "implementation-unreadable" ? `<p class="qdetail">The code this proxy points at could not be read, so no function list is shown. Its switches are unknown, not absent.</p>` : `<p class="qdetail">No mint, pause, blacklist, fee, limit, trading or upgrade function was seen among the ${o.selectors} four-byte selectors in the code.</p>`;
     return `<h3 class="cap">What the chain answered</h3><dl class="kv">
     <dt>owner</dt><dd>${o.ownerUnread ? "owner() is in the code but the chain would not answer it" : o.owner === null ? "no owner() function in the code" : o.owner.renounced ? '<span class="flag ok">renounced</span> nobody can call owner-only functions' : `<span class="mono">${esc2(o.owner.address)}</span>${o.owner.isContract ? " (a contract)" : ""}${o.ownerBalance?.bps != null ? ` \xB7 holds ${pctText(o.ownerBalance.bps)}` : ""}${o.ownable ? "" : " \xB7 no renounceOwnership()"}`}</dd>
     ${o.paused !== null ? `<dt>paused</dt><dd>${o.paused ? '<span class="flag bad">yes</span>' : '<span class="flag ok">no</span>'}</dd>` : ""}
@@ -10802,18 +11247,17 @@
     const q2 = slip.chain.native;
     const dec = slip.id.meta?.decimals ?? 18;
     const explorer = chain().blockscout;
-    const amount = (v, decimals, fraction) => v === null ? "unread" : formatUnits(v, decimals, fraction);
-    const pools = o.pools ? o.pools.length ? `<div class="tbl"><table class="buys"><thead><tr><th>pool</th><th>fee</th><th>W${esc2(q2.symbol)} inside</th><th>tokens inside</th></tr></thead><tbody>${o.pools.map((p) => `<tr><td>${explorer && mode !== "demo" ? `<a href="${esc2(explorer)}/address/${esc2(p.address)}" target="_blank" rel="noopener">${esc2(p.dex)} \xB7 ${shortAddress(p.address)}</a>` : `${esc2(p.dex)} \xB7 ${shortAddress(p.address)}`}</td><td>${(p.feeBps / 100).toFixed(2)}%</td><td>${amount(p.quoteReserve, q2.decimals, 3)}</td><td>${amount(p.tokenReserve, dec, 0)}</td></tr>`).join("")}</tbody></table></div><p style="color:var(--dim);font-size:12px;margin:6px 0 0">Reserves are the pool's balances at this block. Whether the liquidity is locked is not read here, and pools on other venues or against other pairs are not counted.</p>` : `<p style="color:var(--muted);font-size:13px;margin:0">No W${esc2(q2.symbol)} pool on the chain's known DEX factories. It may trade on another DEX, in a Uniswap V4 pool, against another pair, or not at all.</p>` : "";
-    const feed = o.explorer && o.explorer.priceUsd != null ? `<dl class="kv"><dt>explorer price</dt><dd>${money2(o.explorer.priceUsd)}${o.explorer.volume24hUsd !== null ? ` \xB7 ${usdShort(o.explorer.volume24hUsd)} in 24 h` : ""}${o.explorer.marketCapUsd !== null ? ` \xB7 ${usdShort(o.explorer.marketCapUsd)} market cap` : ""} <small style="color:var(--dim)">the explorer's feed, not the chain's</small></dd></dl>` : "";
+    const pools = o.pools ? o.pools.length ? `<div class="tbl"><table class="buys"><thead><tr><th>pool</th><th>fee</th><th class="num">${esc2(q2.symbol)} side</th><th class="num">tokens</th></tr></thead><tbody>${o.pools.map((p) => `<tr><td>${explorer && mode !== "demo" ? `<a href="${esc2(explorer)}/address/${esc2(p.address)}" target="_blank" rel="noopener">${esc2(p.dex)} \xB7 ${shortAddress(p.address)}</a>` : `${esc2(p.dex)} \xB7 ${shortAddress(p.address)}`}</td><td>${(p.feeBps / 100).toFixed(2)}%</td><td class="num">${p.quoteReserve === null ? "unread" : esc2(formatMoney(p.quoteReserve, q2.decimals, q2.symbol, quoteUsdNow(true)))}</td><td class="num">${p.tokenReserve === null ? "unread" : esc2(formatCoin(p.tokenReserve, dec))}</td></tr>`).join("")}</tbody></table></div><p style="color:var(--dim);font-size:12px;margin:6px 0 0">Reserves are the pool's balances at this block. Whether the liquidity is locked is not read here, and pools on other venues or against other pairs are not counted.</p>` : `<p style="color:var(--muted);font-size:13px;margin:0">No W${esc2(q2.symbol)} pool on the chain's known DEX factories. It may trade on another DEX, in a Uniswap V4 pool, against another pair, or not at all.</p>` : "";
+    const feed = o.explorer && o.explorer.priceUsd != null ? `<dl class="kv"><dt>explorer price</dt><dd>${esc2(formatUsdPrice(o.explorer.priceUsd))}${o.explorer.volume24hUsd !== null ? ` \xB7 ${esc2(formatUsd(o.explorer.volume24hUsd))} in 24 h` : ""}${o.explorer.marketCapUsd !== null ? ` \xB7 ${esc2(formatUsd(o.explorer.marketCapUsd))} market cap` : ""} <small style="color:var(--dim)">the explorer's feed, not the chain's</small></dd></dl>` : "";
     return `${feed}${pools}`;
   }
   function holdersBody(slip) {
     const o = slip.open;
     const h = o.holders;
-    const role = (x) => x.role === "deployer" ? '<span class="flag">deployer</span>' : x.role === "owner" ? '<span class="flag">owner</span>' : x.role === "burn" ? '<span class="flag ok">burn</span>' : x.role === "token" ? '<span class="flag">the token</span>' : x.delegated ? '<span class="flag">wallet \xB7 7702</span>' : x.isContract ? `<span class="flag">${esc2(x.name ?? "contract")}</span>` : "";
+    const role = (x) => x.role === "deployer" ? '<span class="flag">deployer</span>' : x.role === "owner" ? '<span class="flag">owner</span>' : x.role === "burn" ? '<span class="flag ok">burn</span>' : x.role === "token" ? '<span class="flag">the token</span>' : x.delegated ? '<span class="flag">wallet \xB7 7702</span>' : x.isContract ? `<span class="flag name">${esc2(x.name ?? "contract")}</span>` : "";
     const explorer = chain().blockscout;
     return `<h3 class="cap">The shares <b>\xB7 from the explorer's holder list</b></h3><dl class="kv">
-    ${o.deployer ? `<dt>deployer</dt><dd><span class="mono">${esc2(o.deployer.address)}</span> \xB7 holds ${pctText(o.deployer.bps)}${o.deployer.createdAt ? ` \xB7 deployed ${isoUtc(o.deployer.createdAt)} (${formatDuration(Math.max(0, slip.at.timestamp - o.deployer.createdAt))} ago)` : ""}</dd>` : ""}
+    ${o.deployer ? `<dt>deployer</dt><dd><span class="mono">${esc2(o.deployer.address)}</span> \xB7 holds ${pctText(o.deployer.bps)}${o.deployer.createdAt ? ` \xB7 deployed ${humanUtc(o.deployer.createdAt)} (${formatDuration(Math.max(0, slip.at.timestamp - o.deployer.createdAt))} ago)` : ""}</dd>` : ""}
     ${h ? `<dt>holders</dt><dd>${h.count ?? "unknown"}${h.transfers !== null ? ` \xB7 ${h.transfers} transfers indexed` : ""}</dd>
     <dt>top 10 wallets</dt><dd>${pctText(h.top10WalletsBps)} of supply, over the ${h.rows} rows the explorer returned. Contracts and burn addresses are not counted; wallets that delegated under EIP-7702 are.</dd>
     <dt>in contracts</dt><dd>${pctText(h.contractsBps)} (pools, lockers, vaults, the token itself)${h.burnedBps ? ` \xB7 burned ${pctText(h.burnedBps)}` : ""}</dd>` : ""}
@@ -10822,78 +11266,109 @@
   ${h && h.top.length ? `<h3 class="cap">The biggest wallets</h3><div class="tbl"><table class="buys"><thead><tr><th>#</th><th>holder</th><th>share</th></tr></thead><tbody>${h.top.slice(0, 15).map((x, i) => `<tr><td>${i + 1}</td><td>${explorer && mode !== "demo" ? `<a href="${esc2(explorer)}/address/${esc2(x.address)}" target="_blank" rel="noopener"><span class="mono">${shortAddress(x.address)}</span></a>` : `<span class="mono">${shortAddress(x.address)}</span>`} ${role(x)}</td><td>${pctText(x.bps)}</td></tr>`).join("")}</tbody></table></div>` : ""}`;
   }
   function devSection(d, subject, standalone, bodyOnly = false) {
-    const inner = `<dl class="kv"><dt>deployer</dt><dd><span class="mono">${esc2(d.deployer)}</span></dd><dt>in window</dt><dd>${esc2(devReportLine(d))}</dd>${standalone ? `<dt>blocks</dt><dd>${d.window.fromBlock}\u2013${d.window.toBlock}</dd>` : ""}</dl>
-    ${d.launches.length ? `<div class="tbl"><table class="buys"><thead><tr><th>ticker</th><th>launched</th><th>stage</th><th>creator tax</th><th>launch \u2192 sweep</th></tr></thead><tbody>${d.launches.map((l) => `<tr><td><a href="#/${mode === "demo" ? "demo" : "t"}/${l.token}${routeChain()}">${esc2(l.symbol)}</a>${l.token === subject ? " \xB7 this one" : ""}</td><td>${isoUtc(l.launchedAt).slice(0, 16).replace("T", " ")}</td><td>${PHASE_LABEL[l.phase]}</td><td>${formatBps(l.creatorTaxBps)}</td><td>${l.secondsToSweep === null ? "\u2014" : formatDuration(l.secondsToSweep)}</td></tr>`).join("")}</tbody></table></div>${d.truncated ? `<p style="color:var(--muted);font-size:13px">${d.counts.launched - d.launches.length} older launches counted but not listed.</p>` : ""}` : ""}`;
+    const span = d.window.toBlock - d.window.fromBlock;
+    const hours = chain().blocksPerSecond > 0 ? span / chain().blocksPerSecond / 3600 : null;
+    const windowText = `${hours !== null ? `last ${hours >= 1 ? Math.round(hours) : Math.max(1, Math.round(hours * 60))}${hours >= 1 ? " h" : " min"} \xB7 ` : ""}blocks ${d.window.fromBlock.toLocaleString("en-US")}\u2013${d.window.toBlock.toLocaleString("en-US")}`;
+    const inner = `<dl class="kv"><dt>deployer</dt><dd><button class="vaddr tokact" type="button" data-copy="${esc2(d.deployer)}" title="Copy ${esc2(d.deployer)}"><span class="mono">${esc2(shortAddress(d.deployer))}</span><span class="tokact-i" aria-hidden="true">\u29C9</span></button>${standalone ? "" : ` <a href="#/dev/${esc2(d.deployer)}${routeChain()}">full history \u203A</a>`}</dd><dt>window</dt><dd>${esc2(windowText)}</dd><dt>in it</dt><dd>${esc2(devReportLine(d))}</dd></dl>
+    ${d.launches.length ? `<div class="tbl"><table class="buys"><thead><tr><th>ticker</th><th>launched</th><th>stage</th><th class="num">creator tax</th><th class="num">swept after</th></tr></thead><tbody>${d.launches.map((l) => `<tr><td><a href="#/${mode === "demo" ? "demo" : "t"}/${l.token}${routeChain()}">${esc2(l.symbol)}</a>${l.token === subject ? " \xB7 this one" : ""}</td><td>${humanUtc(l.launchedAt)}</td><td>${PHASE_LABEL[l.phase]}</td><td class="num">${formatBps(l.creatorTaxBps)}</td><td class="num">${l.secondsToSweep === null ? "n/a" : formatDuration(l.secondsToSweep)}</td></tr>`).join("")}</tbody></table></div>${d.truncated ? `<p style="color:var(--muted);font-size:13px">${d.counts.launched - d.launches.length} older launches counted but not listed.</p>` : ""}` : ""}`;
     return bodyOnly ? inner : `<section class="sec wide"><h2>This dev before</h2>${inner}</section>`;
   }
-  function renderPosition(p, head) {
-    const qd = chain().native;
-    const amt = (v) => `${formatUnits(v, qd.decimals)} ${esc2(qd.symbol)}`;
+  function renderPosition(p, head, symbol, qd) {
+    const money2 = (v) => esc2(formatMoney(v, qd.decimals, qd.symbol, quoteUsdNow(qd.native)));
     const whole = p.exit.quotes.find((x) => x.shareBps === 1e4);
-    const sign = p.unrealised < 0n ? "\u2212" : "+";
-    const absU = p.unrealised < 0n ? -p.unrealised : p.unrealised;
+    const buys = p.trades.filter((t) => t.kind === "buy");
+    const sells = p.trades.filter((t) => t.kind === "sell");
+    const bought = buys.reduce((a, t) => a + t.tokens, 0n);
+    const sold = sells.reduce((a, t) => a + t.tokens, 0n);
+    const signed = (v) => v > 0n ? `+${money2(v).replace(/\(/, "(+")}` : money2(v);
+    const resultWord = p.balance === 0n ? "result so far" : "if sold now";
+    const drift = bought - sold !== p.balance;
+    const tokenLabel = symbol ?? shortAddress(p.token);
+    const tokenHref = `#/${mode === "demo" ? "demo" : "t"}/${p.token}${routeChain()}`;
+    const rows = p.trades.slice(-20).reverse().map((t) => `<tr class="t-${t.kind}">
+      <td><a href="#/tx/${esc2(t.tx)}?chain=${linkChain()}" title="the trade's receipt">${t.block}</a></td>
+      <td><span class="t-side">${t.kind}</span></td>
+      <td class="num">${money2(t.quote)}</td>
+      <td class="num">${esc2(formatCoin(t.tokens, 18))}</td>
+      <td class="num">${money2(t.fee + t.tax)}</td>
+    </tr>`).join("");
     out.innerHTML = `<div class="slip">
-    <div class="stamp-row"><div class="who"><div class="sym">THE BAG</div><div class="name"><span class="mono">${esc2(p.wallet)}</span> on <a href="#/${mode === "demo" ? "demo" : "t"}/${p.token}${routeChain()}">${shortAddress(p.token)}</a></div><div class="at">block ${head} \xB7 ${p.exit.venue}</div></div>
-      <div class="stamp ${p.unrealised < 0n ? "no" : ""}">${sign}${formatUnits(absU, qd.decimals, 3)} ${esc2(qd.symbol)}</div></div>
+    <div class="stamp-row"><div class="who">
+        <div class="cap-l">Wallet in <a href="${tokenHref}">${esc2(tokenLabel)}</a></div>
+        <div class="sym"><button class="vaddr tokact" type="button" data-copy="${esc2(p.wallet)}" title="Copy ${esc2(p.wallet)}"><span class="mono">${esc2(shortAddress(p.wallet))}</span><span class="tokact-i" aria-hidden="true">\u29C9</span></button></div>
+        <div class="at">block ${head.toLocaleString("en-US")} \xB7 ${esc2(p.exit.venue)}</div></div>
+      <div class="stamp ${p.unrealised < 0n ? "no" : ""}" title="${esc2(resultWord)}">${signed(p.unrealised)}</div></div>
     <div class="grid">
       <section class="sec"><h2>Position</h2><dl class="kv">
-        <dt>balance</dt><dd class="num">${formatUnits(p.balance, 18, 0)} tokens</dd>
-        <dt>spent</dt><dd>${amt(p.spentQuote)} over ${p.trades.filter((t) => t.kind === "buy").length} buys</dd>
-        <dt>received</dt><dd>${amt(p.receivedQuote)} over ${p.trades.filter((t) => t.kind === "sell").length} sells</dd>
-        <dt>fees paid</dt><dd>${amt(p.feesPaid)}</dd>
-        <dt>taxes paid</dt><dd>${amt(p.taxesPaid)} <small style="color:var(--dim)">creator tax plus any cover charge</small></dd>
-        <dt>cost basis</dt><dd>${amt(p.costBasis)}</dd>
-        <dt>exit now</dt><dd>${whole ? amt(whole.net) : "n/a"}</dd>
-        <dt>unrealised</dt><dd>${sign}${amt(absU)}</dd>
+        <dt>holds now</dt><dd class="num">${esc2(formatCoin(p.balance, 18))} ${esc2(tokenLabel)}</dd>
+        ${drift ? `<dt></dt><dd><small style="color:var(--dim)">Bought ${esc2(formatCoin(bought, 18))} and sold ${esc2(formatCoin(sold, 18))} on the curve; the rest moved by plain transfer. The balance is what the chain holds now.</small></dd>` : ""}
+        <dt>spent</dt><dd>${money2(p.spentQuote)} over ${plural(buys.length, "buy")}</dd>
+        <dt>received</dt><dd>${money2(p.receivedQuote)} over ${plural(sells.length, "sell")}</dd>
+        <dt>fees paid</dt><dd>${money2(p.feesPaid)}</dd>
+        <dt>taxes paid</dt><dd>${money2(p.taxesPaid)} <small style="color:var(--dim)">creator tax plus any door tax</small></dd>
+        <dt>net in</dt><dd>${money2(p.costBasis)}${p.costBasis < 0n ? " \xB7 took out more than put in" : ""}</dd>
+        <dt>sell it all now</dt><dd>${p.balance === 0n ? "nothing left to sell" : whole ? money2(whole.net) : "n/a"}</dd>
+        <dt>${esc2(resultWord)}</dt><dd>${signed(p.unrealised)}</dd>
       </dl><p style="margin:10px 0 0;color:var(--dim);font-size:12px">${esc2(p.exit.note)}</p></section>
-      <section class="sec"><h2>Trades</h2>${p.trades.length ? `<div class="tbl"><table class="buys"><thead><tr><th>block</th><th>side</th><th>quote</th><th>tokens</th><th>fee + tax</th></tr></thead><tbody>${p.trades.slice(0, 20).map((t) => `<tr><td>${t.block}</td><td>${t.kind}</td><td>${amt(t.quote)}</td><td>${formatUnits(t.tokens, 18, 0)}</td><td>${formatUnits(t.fee + t.tax, qd.decimals)}</td></tr>`).join("")}</tbody></table></div>` : `<p style="color:var(--muted);margin:0">No curve trades by this wallet on this launch.</p>`}</section>
+      <section class="sec"><h2>Trades</h2>${p.trades.length ? `<div class="tbl"><table class="buys trades"><thead><tr><th>block</th><th>side</th><th class="num">paid / received</th><th class="num">tokens</th><th class="num">fee + tax</th></tr></thead><tbody>${rows}</tbody></table></div>` : `<p style="color:var(--muted);margin:0">No curve trades by this wallet on this launch.</p>`}</section>
     </div></div>`;
   }
-  function receiptSection(r) {
-    const qd = chain().native;
-    const amt = (v) => `${formatUnits(v, qd.decimals)} ${esc2(qd.symbol)}`;
-    const share = (v) => r.quote === 0n ? "0" : (Number(v * 10000n / r.quote) / 100).toFixed(1);
-    return `<div class="stamp-row"><div class="who"><div class="sym">${r.kind.toUpperCase()}</div><div class="name">${r.launch ? `<a href="#/${mode === "demo" ? "demo" : "t"}/${r.launch.token.toLowerCase()}${routeChain()}">${shortAddress(r.launch.token)}</a>` : `curve ${shortAddress(r.curve)} (no factory record)`} \xB7 by <span class="mono">${shortAddress(r.wallet)}</span></div><div class="addr">${esc2(r.hash)}</div><div class="at">block ${r.block}</div></div>
-      <div class="stamp ${r.coverChargePart > 0n ? "no" : ""}">${r.coverChargePart > 0n ? `${share(r.coverChargePart)}% COVER` : "NO COVER"}</div></div>
+  function receiptSection(r, qd) {
+    const amt = (v) => esc2(formatMoney(v, qd.decimals, qd.symbol, quoteUsdNow(qd.native)));
+    const share = (v) => r.quote === 0n ? "0%" : formatBps(v * 10000n / r.quote);
+    const token = r.launch ? `<a href="#/${mode === "demo" ? "demo" : "t"}/${r.launch.token.toLowerCase()}${routeChain()}">${esc2(r.symbol ?? shortAddress(r.launch.token))}</a>` : `curve ${shortAddress(r.curve)} (no factory record)`;
+    return `<div class="stamp-row"><div class="who"><div class="cap-l">Trade receipt</div><div class="sym"><span class="t-${r.kind}"><span class="t-side">${r.kind}</span></span> ${token}</div><div class="name">by <span class="mono">${shortAddress(r.wallet)}</span> \xB7 block ${r.block.toLocaleString("en-US")}</div><button class="vaddr tokact" type="button" data-copy="${esc2(r.hash)}" title="Copy ${esc2(r.hash)}"><span class="mono">${esc2(shortHash(r.hash))}</span><span class="tokact-i" aria-hidden="true">\u29C9</span></button></div>
+      <div class="stamp ${r.coverChargePart > 0n ? "no" : ""}">${r.coverChargePart > 0n ? `${share(r.coverChargePart)} DOOR TAX` : "NO DOOR TAX"}</div></div>
     <section class="sec wide"><h2>Itemised</h2><dl class="kv">
       <dt>${r.kind === "buy" ? "paid" : "received"}</dt><dd>${amt(r.quote)}</dd>
-      <dt>tokens</dt><dd class="num">${formatUnits(r.tokens, 18, 0)}</dd>
-      <dt>protocol fee</dt><dd>${amt(r.fee)} \xB7 ${share(r.fee)}%</dd>
-      <dt>creator tax</dt><dd>${amt(r.creatorTaxPart)} \xB7 ${share(r.creatorTaxPart)}%${r.launch ? ` <small style="color:var(--dim)">rate ${formatBps(r.launch.creatorTaxBps)}</small>` : ""}</dd>
-      <dt>cover charge</dt><dd>${amt(r.coverChargePart)} \xB7 ${share(r.coverChargePart)}% <small style="color:var(--dim)">the part of the tax above the creator's rate: paid at the door</small></dd>
-      <dt>effective price</dt><dd>${formatUnits(r.effectivePrice, qd.decimals, 12)} ${esc2(qd.symbol)} per token, fees included</dd>
-      <dt>curve price after</dt><dd>${r.marginalPriceAfter === null ? "not served by this RPC for that block" : `${formatUnits(r.marginalPriceAfter, qd.decimals, 12)} ${esc2(qd.symbol)} per token`}</dd>
+      <dt>tokens</dt><dd><span class="mono">${esc2(formatCoin(r.tokens, 18))}</span></dd>
+      <dt>protocol fee</dt><dd>${amt(r.fee)} \xB7 ${share(r.fee)}</dd>
+      <dt>creator tax</dt><dd>${amt(r.creatorTaxPart)} \xB7 ${share(r.creatorTaxPart)}</dd>
+      <dt>door tax</dt><dd>${amt(r.coverChargePart)} \xB7 ${share(r.coverChargePart)}<small class="gloss-line">the part of the tax above the creator's own rate</small></dd>
+      <dt>effective price</dt><dd><span class="mono">${esc2(formatPrice(r.effectivePrice, qd.decimals))}</span> ${esc2(qd.symbol)} per token, fees included</dd>
+      <dt>curve price after</dt><dd>${r.marginalPriceAfter === null ? "not served by this RPC for that block" : `<span class="mono">${esc2(formatPrice(r.marginalPriceAfter, qd.decimals))}</span> ${esc2(qd.symbol)} per token`}</dd>
     </dl></section>`;
+  }
+  function shortHash(hash) {
+    return hash.length > 14 ? `${hash.slice(0, 6)}\u2026${hash.slice(-4)}` : hash;
   }
   function renderPlan(plan) {
     const qd = plan.quote;
     const c = chain();
-    const u = (v, f = 4) => `${formatUnits(v, qd.decimals, f)} ${esc2(qd.symbol)}`;
+    const u = (v) => esc2(formatMoney(v, qd.decimals, qd.symbol, quoteUsdNow(qd.native)));
+    const price = (v) => `<span class="mono">${esc2(formatPrice(v, qd.decimals))}</span> ${esc2(qd.symbol)}`;
+    const tokens = (v) => `<span class="mono">${esc2(formatCoin(v, 18))}</span>`;
     out.innerHTML = `<div class="slip">
-    <div class="stamp-row"><div class="who"><div class="sym">PLAN</div><div class="name">${esc2(c.name)} \xB7 ${esc2(c.launchpad ?? "no launchpad")} \xB7 config ${plan.configId}${plan.configEnabled ? "" : " (disabled)"} \xB7 quote ${esc2(qd.symbol)}</div><div class="at">block ${plan.block}</div>
-      <form class="row" id="plan-form" style="margin-top:12px"><input class="short" id="plan-tax" placeholder="creator tax bps" value="${plan.creatorTaxBps}"><input class="short" id="plan-buy" placeholder="sample buy (${esc2(qd.symbol)})" value="${formatUnits(plan.sampleBuy, qd.decimals)}"><input class="short" id="plan-quote" placeholder="quote token 0x\u2026 (blank = ${esc2(c.native.symbol)})" value="${plan.pairToken === "0x0000000000000000000000000000000000000000" ? "" : plan.pairToken}"><button class="ghost" type="submit">Recalculate</button></form></div>
+    <div class="stamp-row"><div class="who"><div class="cap-l">Launch planner</div><div class="sym">Plan a launch</div><div class="name">${esc2(c.name)} \xB7 ${esc2(c.launchpad ?? "no launchpad")}${plan.configEnabled ? "" : " \xB7 this config is disabled"} \xB7 quote ${esc2(qd.symbol)} \xB7 block ${plan.block.toLocaleString("en-US")}</div>
+      <form class="plan-form" id="plan-form">
+        <label>creator tax, bps<input id="plan-tax" inputmode="numeric" value="${plan.creatorTaxBps}"></label>
+        <label>sample buy, ${esc2(qd.symbol)}<input id="plan-buy" inputmode="decimal" value="${formatUnits(plan.sampleBuy, qd.decimals)}"></label>
+        <label class="wide">quote token <span>(blank = ${esc2(c.native.symbol)})</span><input id="plan-quote" placeholder="0x\u2026" value="${plan.pairToken === "0x0000000000000000000000000000000000000000" ? "" : plan.pairToken}"></label>
+        <button class="btn" type="submit">Recalculate</button>
+      </form></div>
       <div class="stamp">${formatBps(plan.creatorTaxBps)} TAX</div></div>
     <div class="grid">
       <section class="sec"><h2>Terms today</h2><dl class="kv">
-        <dt>launch fee</dt><dd>${formatUnits(plan.launchFee, c.native.decimals)} ${esc2(c.native.symbol)} to the protocol</dd>
-        <dt>supply</dt><dd class="num">${formatUnits(plan.supply, 18, 0)}</dd>
-        <dt>curve</dt><dd>phantom ${u(plan.phantomQuote)} \xB7 graduates at ${u(plan.graduationThreshold)}</dd>
+        <dt>launch fee</dt><dd>${esc2(formatMoney(plan.launchFee, c.native.decimals, c.native.symbol, quoteUsdNow(true)))} to the protocol</dd>
+        <dt>supply</dt><dd>${tokens(plan.supply)}</dd>
+        <dt>curve</dt><dd>graduates at ${u(plan.graduationThreshold)} \xB7 priced from a ${u(plan.phantomQuote)} virtual reserve</dd>
         <dt>creator tax</dt><dd>${formatBps(plan.creatorTaxBps)} of every curve trade (ceiling ${formatBps(plan.maxCreatorTaxBps)})</dd>
-        <dt>curve fee</dt><dd>${formatBps(plan.curveFeeBps)} \xB7 protocol ${formatBps(plan.protocolFeeShareBps)} / buyback ${formatBps(plan.buybackBurnBps)} of the rest / creator</dd>
+        <dt>curve fee</dt><dd>${formatBps(plan.curveFeeBps)} of every trade</dd>
+        <dt>of which</dt><dd>${formatBps(plan.protocolFeeShareBps)} to the protocol; of the rest, ${formatBps(plan.buybackBurnBps)} to buyback and the remainder to the creator</dd>
         <dt>after graduation</dt><dd>pool fee ${Number(plan.poolFeePpm) / 1e4}% \xB7 hook fee ${formatBps(plan.hookFeeBps)}</dd>
-        <dt>cover charge</dt><dd>${formatBps(plan.snipe.startBps)} in the launch second, 0 after ${plan.snipe.seconds} s</dd>
+        <dt>door tax</dt><dd>${formatBps(plan.snipe.startBps)} in the launch second, falling to 0% after ${plan.snipe.seconds} s</dd>
       </dl></section>
       <section class="sec"><h2>What the curve does</h2><dl class="kv">
-        <dt>start price</dt><dd>${formatUnits(plan.startPrice, qd.decimals, 12)} ${esc2(qd.symbol)}</dd>
-        <dt>graduation price</dt><dd>${formatUnits(plan.graduationPrice, qd.decimals, 12)} ${esc2(qd.symbol)} \xB7 ${(Number(plan.graduationPrice * 100n / (plan.startPrice || 1n)) / 100).toFixed(2)}\xD7 the start</dd>
-        <dt>sold on the curve</dt><dd class="num">${formatUnits(plan.tokensSoldOnCurve, 18, 0)} tokens (${(Number(plan.tokensSoldOnCurve * 10000n / (plan.supply || 1n)) / 100).toFixed(1)}%)</dd>
-        <dt>seeded into the pool</dt><dd class="num">${formatUnits(plan.tokensToPool, 18, 0)} tokens + ${u(plan.graduationThreshold)} \xB7 locked</dd>
-        <dt>FDV at graduation</dt><dd>${u(plan.fdvAtGraduation, 2)}</dd>
+        <dt>start price</dt><dd>${price(plan.startPrice)}</dd>
+        <dt>graduation price</dt><dd>${price(plan.graduationPrice)} \xB7 ${(Number(plan.graduationPrice * 100n / (plan.startPrice || 1n)) / 100).toFixed(1)}\xD7 the start</dd>
+        <dt>sold on the curve</dt><dd>${tokens(plan.tokensSoldOnCurve)} tokens (${(Number(plan.tokensSoldOnCurve * 10000n / (plan.supply || 1n)) / 100).toFixed(1)}%)</dd>
+        <dt>seeded into the pool</dt><dd>${tokens(plan.tokensToPool)} tokens + ${u(plan.graduationThreshold)} \xB7 locked</dd>
+        <dt>FDV at graduation</dt><dd>${u(plan.fdvAtGraduation)}</dd>
         <dt>creator earns</dt><dd>${u(plan.graduationThreshold * plan.creatorTaxBps / 10000n)} if the curve fills with no sells</dd>
-        <dt>${u(plan.sampleBuy)} at second 0</dt><dd>pays ${u(plan.sampleDoorCharge)} to the creator as cover charge, unless the wallet is on the exemption list</dd>
+        <dt>a ${u(plan.sampleBuy)} buy in second 0</dt><dd>pays ${u(plan.sampleDoorCharge)} to the creator as door tax, unless the wallet is on the exemption list</dd>
       </dl></section>
     </div>
-    <p style="color:var(--dim);font:12px var(--mono);margin:0">Read from the factory and the hook at block ${plan.block}; the curve arithmetic is the contract's own. The factory owner can retune terms before you launch.</p>
+    <p class="qdetail">Read from the factory and the hook at block ${plan.block.toLocaleString("en-US")}; the curve arithmetic is the contract's own. The factory owner can retune terms before you launch.</p>
   </div>`;
     $("plan-form").addEventListener("submit", (e) => {
       e.preventDefault();
@@ -10922,12 +11397,26 @@
       go.disabled = false;
     });
   }
+  function home() {
+    stopTape();
+    stopWatch();
+    if (ticker) {
+      clearInterval(ticker);
+      ticker = null;
+    }
+    shown = null;
+    q.value = "";
+    status.textContent = "";
+    setView("door");
+    out.innerHTML = feedOn ? pickOne() : "";
+    renderSeen();
+  }
   function route() {
     const raw = location.hash.replace(/^#/, "");
     const [path, query = ""] = raw.split("?");
     const params = new URLSearchParams(query);
     const parts = path.split("/").filter(Boolean);
-    if (!parts.length) return;
+    if (!parts.length) return home();
     const chainParam = params.get("chain");
     const wantDemo = parts[0] === "demo" || chainParam === "demo";
     if (wantDemo && mode !== "demo") setMode("demo", true);
@@ -10935,6 +11424,7 @@
       if (mode !== "live") setMode("live", true);
       if (chainParam && CHAINS[chainParam]) selectChain(chainParam);
     }
+    ensureQuoteUsd();
     switch (parts[0]) {
       case "t":
       case "demo":
@@ -10959,27 +11449,47 @@
         break;
       case "plan":
         setView("plan");
-        q.value = params.get("tax") ?? "100";
+        q.value = "";
         start(() => runPlan(Number(params.get("tax") ?? 100), params));
         break;
       case "board":
         setView("board");
-        q.value = params.get("hours") ?? "1";
+        q.value = "";
         start(() => runBoard(Number(params.get("hours") ?? 1) || 1));
         break;
     }
   }
+  function pastedSubject(text) {
+    const link = /https?:\/\/\S+/i.exec(text)?.[0];
+    const page = link ? pageSubject(link) : null;
+    if (page) return { address: page.address, chain: page.chain };
+    const evm = /0x[0-9a-fA-F]{40}(?![0-9a-fA-F])/.exec(text)?.[0];
+    if (evm) return { address: evm.toLowerCase(), chain: null };
+    const mint = text.split(/[\s/?#=&:,;"'()]+/).find((w) => isSolanaAddress(w));
+    return mint && mode === "live" ? { address: mint, chain: null } : null;
+  }
   function submit() {
     const v = q.value.trim();
+    qhint.hidden = true;
+    if (!detect(v) && !(view === "plan" || view === "board")) {
+      const found = pastedSubject(v);
+      if (found && detect(found.address)) {
+        q.value = found.address;
+        if (found.chain && mode === "live" && CHAINS[found.chain]) selectChain(found.chain);
+        showToast(`Found ${shortAddress(found.address)} in what you pasted`);
+        return submit();
+      }
+    }
     const same = chainSelect.value === "auto" && autoChain && resolvedFor.address === v.trim().toLowerCase();
     const c = mode === "demo" ? "demo" : chainSelect.value === "auto" ? same ? autoChain.key : "auto" : chain().key;
     let hash;
-    if (view === "plan") hash = `#/plan?tax=${encodeURIComponent(v || "100")}&chain=${c}`;
-    else if (view === "board") hash = `#/board?hours=${encodeURIComponent(v || "1")}&chain=${c}`;
+    const bare = v === "" || /^\d+(\.\d+)?$/.test(v);
+    if (view === "plan" && bare) hash = `#/plan?tax=${encodeURIComponent(v || "100")}&chain=${c}`;
+    else if (view === "board" && bare) hash = `#/board?hours=${encodeURIComponent(v || "1")}&chain=${c}`;
     else if (view === "dev" && ADDR.test(v)) hash = `#/dev/${v.toLowerCase()}?chain=${c}`;
     else {
       const found = detect(v);
-      if (!found) return bad(chainOrNull()?.family === "solana" && mode === "live" ? "Paste a Solana mint address: 32 bytes in base58, like EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v." : "Paste a token or curve address (0x + 40 hex characters), a transaction hash (0x + 64), or a token and a wallet address separated by a space.");
+      if (!found) return bad(chainOrNull()?.family === "solana" && mode === "live" ? "Paste a Solana mint address: 32 bytes in base58, like EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v." : "Paste a token or curve address (0x + 40 hex characters), a transaction hash (0x + 64), or a token and a wallet address separated by a space.", true);
       if (found.view === "wallet") hash = `#/wallet/${found.parts[0].toLowerCase()}/${found.parts[1].toLowerCase()}?chain=${c}`;
       else if (found.view === "tx") hash = `#/tx/${found.parts[0]}?chain=${c}`;
       else hash = `#/${mode === "demo" ? "demo" : "t"}/${mode === "live" && isSolanaAddress(found.parts[0]) && !ADDR.test(found.parts[0]) ? found.parts[0] : found.parts[0].toLowerCase()}${mode === "demo" ? "" : `?chain=${c}`}`;
@@ -11020,6 +11530,9 @@
       const open = !settings.classList.contains("open");
       settings.classList.toggle("open", open);
       settingsToggle.setAttribute("aria-expanded", String(open));
+    });
+    q.addEventListener("input", () => {
+      qhint.hidden = true;
     });
     form.addEventListener("submit", (e) => {
       e.preventDefault();
@@ -11079,6 +11592,15 @@
         next.scrollIntoView({ block: "nearest" });
         event.preventDefault();
       }
+    });
+    out.addEventListener("click", (event) => {
+      const row = event.target.closest("[data-q]");
+      if (!row?.dataset.q) return;
+      const q2 = document.getElementById(`q-${row.dataset.q}`);
+      if (!q2) return;
+      q2.open = true;
+      q2.scrollIntoView({ behavior: "smooth", block: "start" });
+      q2.querySelector("summary")?.focus({ preventScroll: true });
     });
     out.addEventListener("click", (event) => {
       const button = event.target.closest("[data-frame]");

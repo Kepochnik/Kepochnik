@@ -139,10 +139,15 @@ function blockTime(block: number): number {
 
 function launchedRecord(t: DemoToken): string {
   const phase = t.graduated ? 2n : t.swept ? 1n : 0n;
+  // The record is the state NOW, so it follows the token's own change events:
+  // it used to name the launch-time recipient and buyback setting after the
+  // demo had moved and flipped them, and the page faithfully printed both.
+  const recipient = t.recipientMoves?.length ? t.recipientMoves[t.recipientMoves.length - 1][1] : t.deployer;
+  const buyback = t.buybackFlips?.length ? t.buybackFlips[t.buybackFlips.length - 1][1] : true;
   return [
-    encodeWord("address", t.token), encodeWord("address", t.curve), encodeWord("address", t.deployer), encodeWord("address", t.deployer),
+    encodeWord("address", t.token), encodeWord("address", t.curve), encodeWord("address", t.deployer), encodeWord("address", recipient),
     encodeWord("address", ZERO_ADDRESS), encodeWord("uint256", DEMO.threshold), encodeWord("uint24", 10_000n), encodeWord("int24", 200n),
-    encodeWord("uint16", t.taxBps), encodeWord("bool", true), encodeWord("uint8", phase),
+    encodeWord("uint16", t.taxBps), encodeWord("bool", buyback), encodeWord("uint8", phase),
     encodeWord("uint256", t.graduated ? t.raised : 0n), encodeWord("uint256", t.graduated ? (t.supplyToPool ?? 0n) : 0n),
     encodeWord("uint256", t.swept ? BigInt(Math.round(blockTime(t.swept))) : 0n), encodeWord("bool", true),
   ].join("");

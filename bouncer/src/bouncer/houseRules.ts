@@ -10,7 +10,7 @@ import { FACTORY_EVENTS, GraduationPhase, PONS_V2_FACTORY, ZERO_ADDRESS, type La
 import { PonsReader, readTokenMeta, type LaunchSnapshot } from "../chain/reader.js";
 import type { RpcClient } from "../chain/rpc.js";
 import { addressTopic, readTape } from "../chain/tape.js";
-import { formatBps, formatPercent, formatUnits } from "../format.js";
+import { shortAddress, formatBps, formatPercent, formatUnits } from "../format.js";
 
 export interface HouseRules {
   snapshot: LaunchSnapshot;
@@ -102,7 +102,15 @@ export function houseRulesInWords(r: HouseRules, launch: LaunchedToken): string[
   } else {
     out.push(`On the curve this launch charged ${formatBps(r.creatorTaxBps)} creator tax on top of the protocol fee; the graduated pool charges ${Number(r.poolFeePpm) / 10_000}% per swap through the Pons hook.`);
   }
-  out.push(`The creator tax is paid to ${r.creatorFeeRecipient}${r.creatorFeeRecipientChanges.length ? `, changed ${r.creatorFeeRecipientChanges.length}× since launch` : ", unchanged since launch"}. The creator can move it again at any time.`);
+  // The recipient now is the one the factory record names at this block. When
+  // the last change event points somewhere else, both are said: a page that
+  // silently picks one of two disagreeing reads is choosing for the reader.
+  const lastMove = r.creatorFeeRecipientChanges[r.creatorFeeRecipientChanges.length - 1];
+  const moved = r.creatorFeeRecipientChanges.length;
+  out.push(
+    `The creator tax is paid to ${shortAddress(r.creatorFeeRecipient)}${r.creatorFeeRecipient === launch.deployer.toLowerCase() ? " (the deployer)" : ""}${moved ? `, moved ${moved === 1 ? "once" : `${moved} times`} since launch` : ", unchanged since launch"}. The creator can move it again at any time.` +
+      (lastMove && lastMove.to !== r.creatorFeeRecipient ? ` The factory record and the last change event disagree: the record says ${shortAddress(r.creatorFeeRecipient)}, the event says ${shortAddress(lastMove.to)}.` : ""),
+  );
   out.push(
     r.buybackEnabled
       ? "Buyback is on: a share of fees buys tokens back and locks them in a vault that vests them to the creator and the protocol over five years. Nothing is burned."

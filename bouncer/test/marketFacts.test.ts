@@ -66,3 +66,17 @@ test("an ordinary token still takes its figures from the pool it was found in", 
   const price = fact(m, "Price");
   if (price.value) assert.match(price.note, /from the pool/);
 });
+
+test("with the coin's dollar price, money reads $X (Y ETH); without it, the coin alone", async () => {
+  const slip = await slipFor(DEMO.tokens.late.token);
+  const priced = marketFacts(slip, { quoteUsd: 2_000 });
+  // 13.33 ETH of market cap at $2,000 an ether.
+  assert.equal(fact(priced, "Market cap").value, "$26.7K (13.33 ETH)");
+  assert.equal(fact(priced, "Liquidity").value, "$6.2K (3.1 ETH)");
+  assert.match(fact(priced, "Price").value ?? "", /^\$0\.0₄/);
+  assert.match(fact(priced, "Price").note, /ETH · from the curve/);
+
+  const bare = marketFacts(slip, { quoteUsd: null });
+  assert.equal(fact(bare, "Market cap").value, "13.33 ETH");
+  assert.doesNotMatch(JSON.stringify(bare.facts), /\$/, "a dollar sign appeared with no dollar price to back it");
+});

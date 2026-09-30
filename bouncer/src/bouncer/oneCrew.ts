@@ -73,7 +73,14 @@ export async function readOneCrew(blockscout: BlockscoutClient, room: Room, laun
 
 export function oneCrewLine(c: OneCrew): string {
   if (c.checked === 0) return "no buyers to check";
-  if (!c.crews.length) return `${c.checked} first buyers checked · no shared funder${c.unresolved ? ` · ${c.unresolved} unresolved` : ""}`;
+  // "No shared funder" is a claim that the funders were looked at and did not
+  // match. When some could not be traced it is only true of the rest, and when
+  // none could, it is the unread shown as the clean.
+  if (!c.crews.length) {
+    const traced = c.checked - c.unresolved;
+    if (traced <= 0) return `${c.checked} first buyer${c.checked === 1 ? "" : "s"} checked · funding traced for none of them, so a shared funder cannot be ruled out`;
+    return `${c.checked} first buyer${c.checked === 1 ? "" : "s"} checked · no shared funder${c.unresolved ? ` among the ${traced} whose funding was traced (${c.unresolved} not traced)` : ""}`;
+  }
   const top = c.crews[0];
   return `${c.checked} first buyers checked · ${top.wallets.length} share a funder (${(top.shareBps / 100).toFixed(0)}% of the curve)${c.fundedByCreator.length ? ` · ${c.fundedByCreator.length} funded by the creator` : ""}`;
 }

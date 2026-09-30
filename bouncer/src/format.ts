@@ -93,11 +93,41 @@ export function formatPrice(value: bigint, decimals: number): string {
   return `0.0${count}${digits}`;
 }
 
-/** Three significant figures, trailing zeros dropped: 3.2, 12.4, 123. */
+/**
+ * Three significant figures, trailing zeros dropped from the FRACTION only:
+ * 3.2, 12.4, 120. It used to strip zeros from whole numbers too, so $120K
+ * printed as $12K and $200K as $2K — a figure off by an order of magnitude.
+ */
 function sig3(n: number): string {
   const digits = n >= 100 ? 0 : n >= 10 ? 1 : 2;
-  return n.toFixed(digits).replace(/\.?0+$/, "");
+  const text = n.toFixed(digits);
+  return text.includes(".") ? text.replace(/\.?0+$/, "") : text;
 }
+
+const STEPS: [number, string][] = [
+  [1e9, "B"],
+  [1e6, "M"],
+  [1e3, "K"],
+];
+
+/**
+ * 1.2K, 3.4M, 5B, for a non-negative number at or above `from`; null below.
+ * Rounding can carry across a unit — 999.6K rounds to "1000K" — so the
+ * rounded text is checked and moved up a unit when it gets there.
+ */
+function compact(n: number, from = 1e3): string | null {
+  for (let i = 0; i < STEPS.length; i++) {
+    const [size, suffix] = STEPS[i];
+    if (n < size || n < from) continue;
+    const text = sig3(n / size);
+    if (Number(text) >= 1000 && i > 0) return `${sig3(n / STEPS[i - 1][0])}${STEPS[i - 1][1]}`;
+    return `${text}${suffix}`;
+  }
+  return null;
+}
+
+/** The minus sign a reader sees, not the hyphen a keyboard makes. */
+const MINUS = "\u2212";
 
 /**
  * A dollar total the way a trading screen writes it: $3.2M, $12.4K, $950,
@@ -106,12 +136,16 @@ function sig3(n: number): string {
  */
 export function formatUsd(value: number): string {
   if (!Number.isFinite(value)) return "";
-  const sign = value < 0 ? "-" : "";
+  const sign = value < 0 ? MINUS : "";
   const n = Math.abs(value);
-  if (n >= 1e9) return `${sign}$${sig3(n / 1e9)}B`;
-  if (n >= 1e6) return `${sign}$${sig3(n / 1e6)}M`;
-  if (n >= 1e3) return `${sign}$${sig3(n / 1e3)}K`;
-  if (n >= 1) return `${sign}$${n >= 100 ? n.toFixed(0) : n.toFixed(2)}`;
+  // Whole dollars from ten up: "$99.21" beside "$124" in a column reads as
+  // two different kinds of number. Cents only where they are most of it.
+  // The unit is chosen on the rounded figure, so 999.6 is "$1K", not "$1000".
+  const whole = Math.round(n);
+  const big = compact(whole >= 1000 ? Math.max(n, 1000) : n);
+  if (big) return `${sign}$${big}`;
+  if (n >= 9.995) return `${sign}$${whole}`;
+  if (n >= 1) return `${sign}$${n.toFixed(2)}`;
   if (n === 0) return "$0";
   return `${sign}$${n.toFixed(2) === "0.00" ? "<0.01" : n.toFixed(2)}`;
 }
@@ -119,13 +153,22 @@ export function formatUsd(value: number): string {
 /**
  * A per-token dollar price, with the same zero-collapsing as formatPrice:
  * $0.0₅2134 is five zeros after the point. Four significant digits.
+ *
+ * The zeros and the digits come from one rounded representation. Counting
+ * zeros with a logarithm and the digits separately was off by one at exact
+ * powers of ten — $0.1 printed as $0.01.
  */
 export function formatUsdPrice(value: number): string {
   if (!Number.isFinite(value) || value <= 0) return "$0";
-  if (value >= 1) return value >= 1_000 ? formatUsd(value) : `$${value.toFixed(value >= 100 ? 2 : 4).replace(/\.?0+$/, "")}`;
-  const zeros = Math.floor(-Math.log10(value));
-  // Four significant digits after the zeros, trailing zeros dropped.
-  const digits = String(Math.round(value * 10 ** (zeros + 4))).slice(0, 4).replace(/0+$/, "") || "0";
+  if (value >= 1) {
+    if (value >= 1_000) return formatUsd(value);
+    const text = value.toFixed(value >= 100 ? 2 : 4);
+    return `$${text.replace(/\.?0+$/, "")}`;
+  }
+  const [mantissa, exponent] = value.toExponential(3).split("e");
+  const zeros = -Number(exponent) - 1;
+  const digits = mantissa.replace(".", "").replace(/0+$/, "") || "0";
+  if (zeros < 0) return `$${Number(mantissa).toString()}`;
   if (zeros < 4) return `$0.${"0".repeat(zeros)}${digits}`;
   const count = String(zeros).split("").map((d) => SUBSCRIPT[Number(d)]).join("");
   return `$0.0${count}${digits}`;
@@ -139,15 +182,16 @@ export function formatUsdPrice(value: number): string {
 export function formatCoin(value: bigint, decimals: number): string {
   const n = Number(value) / 10 ** decimals;
   if (!Number.isFinite(n)) return formatUnits(value, decimals, 2);
+  const sign = n < 0 ? MINUS : "";
   const abs = Math.abs(n);
-  if (abs >= 1e6) return `${sig3(n / 1e6)}M`;
-  if (abs >= 1e4) return `${sig3(n / 1e3)}K`;
-  if (abs >= 100) return Math.round(n).toLocaleString("en-US");
-  if (abs >= 1) return n.toFixed(2).replace(/\.?0+$/, "");
+  const big = compact(abs, 1e4);
+  if (big) return `${sign}${big}`;
+  if (abs >= 100) return `${sign}${Math.round(abs).toLocaleString("en-US")}`;
+  if (abs >= 1) return `${sign}${abs.toFixed(2).replace(/\.?0+$/, "")}`;
   if (abs === 0) return "0";
   // Below one coin: four significant digits, so 0.0042 does not become 0.
   const zeros = Math.floor(-Math.log10(abs));
-  return n.toFixed(Math.min(decimals, zeros + 3)).replace(/0+$/, "").replace(/\.$/, "");
+  return `${sign}${abs.toFixed(Math.min(decimals, zeros + 3)).replace(/0+$/, "").replace(/\.$/, "")}`;
 }
 
 /** Dollar value of an amount of the quote coin, or null without a price. */
@@ -166,4 +210,22 @@ export function formatMoney(amount: bigint, decimals: number, symbol: string, us
   const usd = usdOf(amount, decimals, usdPerCoin);
   const coin = `${formatCoin(amount, decimals)} ${symbol}`;
   return usd === null ? coin : `${formatUsd(usd)} (${coin})`;
+}
+
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+/**
+ * A moment as a reader writes it: "15 Sep 2026, 00:00 UTC". The ISO form
+ * (2026-09-15T00:00:00Z) is for machines and for the JSON; on a page it is a
+ * string to decode, and the T and the Z are the parts nobody reads.
+ */
+export function humanUtc(unix: number): string {
+  const d = new Date(unix * 1000);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getUTCDate()} ${MONTHS[d.getUTCMonth()]} ${d.getUTCFullYear()}, ${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())} UTC`;
+}
+
+/** "1 buy", "3 buys": a count with its noun, never "1 buyers". */
+export function plural(n: number, one: string, many = `${one}s`): string {
+  return `${n.toLocaleString("en-US")} ${n === 1 ? one : many}`;
 }

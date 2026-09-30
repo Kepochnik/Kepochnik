@@ -30,7 +30,8 @@
  *   - The tone is the loudest note on that question, so the colour a reader
  *     scans agrees with the findings they open.
  */
-import { formatBps, formatUnits, shortAddress } from "../format.js";
+import { GraduationPhase } from "../chain/pons.js";
+import { formatBps, formatMoney, formatUnits, plural, shortAddress } from "../format.js";
 import type { DoorNote, DoorSlip } from "./door.js";
 import { powerKinds, sellProbes, POWER_VERB } from "./openDoor.js";
 import type { SplSlip } from "./spl.js";
@@ -176,6 +177,10 @@ function keepAnswer(slip: DoorSlip, notes: DoorNote[]): Answer {
   if (!o) {
     const r = slip.rules;
     if (!r) return plain("keep", "Not read", "unknown", "the house rules read did not run", mine);
+    const c = slip.cover;
+    if (c?.status === "open") {
+      return plain("keep", `Yes, on a buy — the door tax is on for ${c.secondsLeft} more seconds`, "warn", `a buy right now pays up to ${formatBps(c.terms.startBps)} of its money to the creator, falling to nothing over ${c.terms.seconds} s. Selling is not taxed by it.`, mine, `${c.secondsLeft}s`);
+    }
     const moved = r.creatorFeeRecipientChanges.length;
     const flips = r.buybackChanges.length;
     const did = [
@@ -225,14 +230,27 @@ function sellAnswer(slip: DoorSlip, notes: DoorNote[]): Answer {
     // curve takes sells by construction, and what a seller actually needs to
     // know is what it costs and whether the door tax is still on.
     const r = slip.rules;
-    const c = slip.cover;
-    if (c?.status === "open") {
-      return plain("sell", `Wait — the door tax is on for ${c.secondsLeft} more seconds`, "warn", `a buy in the launch second pays up to ${formatBps(c.terms.startBps)} to the creator; it decays to nothing over ${c.terms.seconds} s`, mine, `${c.secondsLeft}s`);
+    const e = slip.exit;
+    // Where it trades decides the answer: a closed curve with no pool yet takes
+    // nothing, and a graduated token is sold into its pool at the pool's fee —
+    // one fee figure, the one the exit calculator applies, not three.
+    if (e?.venue === "closed" || r.phase === GraduationPhase.Swept) {
+      return plain("sell", "Not right now — the curve is closed and the pool does not exist yet", toneOf(mine, "warn"), "the launch was swept; nothing trades until the factory seeds the pool", mine, "closed");
     }
-    return plain("sell", `Yes — the curve takes sells at any size`, toneOf(mine), `every trade pays ${formatBps(r.totalTradeBps)}, of which ${formatBps(r.creatorTaxBps)} goes to the creator`, mine, formatBps(r.totalTradeBps));
+    if (e?.venue === "pool") {
+      const total = e.feeBps + e.creatorTaxBps;
+      return plain("sell", "Yes — the Uniswap pool takes sells at any size", toneOf(mine), `a sale pays ${formatBps(total)}: ${formatBps(e.feeBps)} pool fee and ${formatBps(e.creatorTaxBps)} creator tax on the ETH side`, mine, formatBps(total));
+    }
+    return plain("sell", "Yes — the curve takes sells at any size", toneOf(mine), `a sale pays ${formatBps(r.totalTradeBps)}: ${formatBps(r.curveFeeBps)} protocol fee and ${formatBps(r.creatorTaxBps)} creator tax`, mine, formatBps(r.totalTradeBps));
   }
   const probes = o ? sellProbes(o) : [];
   const ran = probes.filter((p) => p.status !== "unread");
+  // Unreadable code is checked first: it is not code without a transfer
+  // function, it is code nobody could look at, and saying the first when the
+  // truth is the second is the "could not read" shown as "none".
+  if (o?.surfaceFrom === "implementation-unreadable") {
+    return plain("sell", "Unknown — the code that runs could not be read", "unknown", "this is a proxy and the implementation it points at would not load, so no sale was simulated", mine, "unreadable");
+  }
   if (o && !o.transferFunction) {
     return plain("sell", "No transfer function is in the code", toneOf(mine, "unknown"), "so no sale could be simulated; whatever this contract is, it is not a plain ERC-20", mine);
   }
@@ -267,34 +285,37 @@ function sellAnswer(slip: DoorSlip, notes: DoorNote[]): Answer {
 }
 
 /** What would you get out? The number is read off the pool, not modelled. */
-function exitAnswer(slip: DoorSlip, notes: DoorNote[]): Answer {
+function exitAnswer(slip: DoorSlip, notes: DoorNote[], quoteUsd: number | null = null): Answer {
   const mine = notesFor(notes, "exit");
   const e = slip.exit;
+  // The row's number is how much of the quoted value a sale keeps — the
+  // figure the sentence does not already say. It used to repeat the amount
+  // the sentence had just given.
   if (e && e.quotes.length) {
     const q = e.quotes.find((x) => x.shareBps === 1_000) ?? e.quotes[0];
     const quote = slip.rules?.quote ?? slip.chain.native;
-    const amount = `${formatUnits(q.net, quote.decimals, 4)} ${quote.symbol}`;
+    const amount = formatMoney(q.net, quote.decimals, quote.symbol, quoteUsd);
     return plain(
       "exit",
       `Selling ${shareOfSupply(q.shareBps)} of the supply pays ${amount}`,
       toneOf(mine),
-      `that is ${(q.shareBps / 100).toFixed(0)}% of a reference position of 1% of the supply, sold on the ${e.venue} after fees at this block — ${(q.realisedBps / 100).toFixed(1)}% of what the quoted price says it is worth. The gap is what your own sale does to the price.`,
+      `sold on the ${e.venue} after fees at this block, that is ${(q.realisedBps / 100).toFixed(1)}% of what the quoted price says it is worth; the gap is what your own sale does to the price. Sized as ${(q.shareBps / 100).toFixed(0)}% of a reference position of 1% of the supply.`,
       mine,
-      amount,
+      `${(q.realisedBps / 100).toFixed(1)}% kept`,
     );
   }
   const m = slip.open?.market;
   if (m?.best && m.quotes.length) {
     const q = m.quotes[0];
     const quote = slip.chain.native;
-    const amount = `${formatUnits(q.out, quote.decimals, 4)} ${quote.symbol}`;
+    const amount = formatMoney(q.out, quote.decimals, quote.symbol, quoteUsd);
     return plain(
       "exit",
       `Selling ${shareOfSupply(q.shareBps)} of the supply pays ${amount}`,
       toneOf(mine),
-      `that is ${(q.shareBps / 100).toFixed(0)}% of a reference position of 1% of the supply, priced against the ${m.best.dex} pool's own reserves at this block — ${(q.realisedBps / 100).toFixed(1)}% of the quoted price. The token's own transfer tax, if it has one, is not included.`,
+      `priced against the ${m.best.dex} pool's own reserves at this block, that is ${(q.realisedBps / 100).toFixed(1)}% of the quoted price. The token's own transfer tax, if it has one, is not included. Sized as ${(q.shareBps / 100).toFixed(0)}% of a reference position of 1% of the supply.`,
       mine,
-      amount,
+      `${(q.realisedBps / 100).toFixed(1)}% kept`,
     );
   }
   if (slip.open?.pools === null) {
@@ -350,19 +371,20 @@ function roomAnswer(slip: DoorSlip, notes: DoorNote[]): Answer {
   if (room && room.buys > 0) {
     return plain(
       "room",
-      room.devShareBps >= 2_000 ? `The creator's own wallets funded ${(room.devShareBps / 100).toFixed(0)}% of every buy` : `${room.buyers} wallets have bought since launch`,
+      room.devShareBps >= 2_000 ? `The creator's own wallets funded ${(room.devShareBps / 100).toFixed(0)}% of every buy` : `${plural(room.buyers, "wallet has", "wallets have")} bought since launch`,
       toneOf(mine),
-      `${room.buys} buys and ${room.sells} sells on the curve so far`,
+      `${plural(room.buys, "buy")} and ${plural(room.sells, "sell")} on the curve so far`,
       mine,
-      `${room.buyers} buyers`,
+      plural(room.buyers, "buyer"),
     );
   }
   return plain("room", "Not read — the holder list did not answer", "unknown", "who holds the supply is one of the two questions that decide whether you can get out, and it is open", mine);
 }
 
 /** The five rows for an EVM token. */
-export function doorAnswers(slip: DoorSlip): Answer[] {
-  return [idAnswer(slip, slip.notes), keepAnswer(slip, slip.notes), sellAnswer(slip, slip.notes), exitAnswer(slip, slip.notes), roomAnswer(slip, slip.notes)];
+/** The five answers. `quoteUsd` (dollars per quote coin, read by the caller) only changes how money is written. */
+export function doorAnswers(slip: DoorSlip, options: { quoteUsd?: number | null } = {}): Answer[] {
+  return [idAnswer(slip, slip.notes), keepAnswer(slip, slip.notes), sellAnswer(slip, slip.notes), exitAnswer(slip, slip.notes, options.quoteUsd ?? null), roomAnswer(slip, slip.notes)];
 }
 
 /**

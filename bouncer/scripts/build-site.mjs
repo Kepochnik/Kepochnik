@@ -28,8 +28,17 @@ const js = readFileSync("site/dist/app.js", "utf8");
 // extension popup and offline — and the page said nothing, it just rendered in
 // whatever the browser had.
 const fonts = readFileSync("site/fonts.css", "utf8");
-const html = readFileSync("site/index.html", "utf8").replace(/^\/\* @fonts.*?\*\/$/ms, fonts);
-const inlined = html.replace('<script src="app.js"></script>', `<script>\n${js.replace(/<\/script/g, "<\\/script")}\n</script>`);
+// Every insertion below uses a replacer FUNCTION, never a replacement
+// string. In a replacement string `$$` means "$", and `$'` and `$\`` splice in
+// the text after and before the match — so inlining a bundle that contains
+// `${sign}$${…}` (a dollar sign before a template value) silently turned
+// "$3.2M" into "3.2M" on the website while the extension, which loads the
+// same bundle as a file, printed it correctly. Sixteen such sequences were
+// in the bundle before anyone printed a dollar.
+const html = readFileSync("site/index.html", "utf8").replace(/^\/\* @fonts.*?\*\/$/ms, () => fonts);
+const bundle = js.replace(/<\/script/g, "<\\/script");
+const inlined = html.replace('<script src="app.js"></script>', () => `<script>\n${bundle}\n</script>`);
+if (!inlined.includes(bundle)) throw new Error("the inlined page does not carry the bundle byte for byte");
 writeFileSync("site/dist/index.html", inlined);
 
 // Privacy policy page for the Web Store listing, from extension/store/PRIVACY.md.
@@ -59,7 +68,7 @@ const popupCss = readFileSync("extension/popup.css", "utf8");
 const popup = html
   .replace(/<link rel="preconnect"[^>]*>\n/g, "")
   .replace(/<link rel="stylesheet" href="https:\/\/fonts\.googleapis\.com[^>]*>\n/, "")
-  .replace("</style>", `${popupCss}</style>`)
+  .replace("</style>", () => `${popupCss}</style>`)
   .replace('<script src="app.js"></script>', '<script src="page-subject.js"></script>\n<script src="popup-init.js"></script>\n<script src="app.js"></script>');
 writeFileSync("extension/popup.html", popup);
 copyFileSync("site/dist/app.js", "extension/app.js");

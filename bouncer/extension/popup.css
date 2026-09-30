@@ -43,7 +43,8 @@ header{position:static}
    he stands above it — and stands BESIDE his own stamp, the way he does on a
    phone, so the verdict is the first thing in the window rather than 120px
    of mascot followed by it. */
-.doorway{grid-template-columns:1fr;grid-template-areas:"bar" "door" "chart" "list"}
+.doorway{grid-template-columns:1fr;grid-template-areas:"bar" "door" "chart" "list";background:var(--surface)!important}
+.doorman{position:static;max-height:none;overflow:visible;align-self:stretch}
 .tokbar{padding:12px 16px;gap:8px 14px}
 .tokprice{margin-left:0;text-align:left}
 .tp-s{justify-content:flex-start}

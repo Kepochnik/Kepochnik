@@ -8,7 +8,7 @@
  * from its reserves at that block, when the endpoint still serves it.
  */
 import { decodeLog, decodeOutputs, encodeCall, eventTopic, type RawLog } from "../chain/abi.js";
-import { CURVE_EVENTS, CURVE_FUNCTIONS, type LaunchedToken } from "../chain/pons.js";
+import { CURVE_EVENTS, CURVE_FUNCTIONS, ERC20_FUNCTIONS, type LaunchedToken } from "../chain/pons.js";
 import { NotAPonsLaunch, PonsReader } from "../chain/reader.js";
 import type { RpcClient } from "../chain/rpc.js";
 
@@ -18,6 +18,8 @@ export interface TradeReceipt {
   kind: "buy" | "sell";
   curve: string;
   launch: LaunchedToken | null;
+  /** The token's ticker, when it answered; the receipt names the token by it. */
+  symbol: string | null;
   wallet: string;
   quote: bigint;
   tokens: bigint;
@@ -60,6 +62,15 @@ export async function readTradeReceipt(rpc: RpcClient, hash: string, factory: st
     const tax = decoded.args.tax as bigint;
     const creatorTaxPart = launch ? (quote * launch.creatorTaxBps) / 10_000n : tax;
     const coverChargePart = tax > creatorTaxPart ? tax - creatorTaxPart : 0n;
+    let symbol: string | null = null;
+    if (launch) {
+      try {
+        const [symbolRaw] = await rpc.callBatch([{ to: launch.token, data: encodeCall(ERC20_FUNCTIONS.symbol, []) }], block);
+        symbol = (decodeOutputs(ERC20_FUNCTIONS.symbol, symbolRaw) as [string])[0].trim() || null;
+      } catch {
+        symbol = null;
+      }
+    }
     let marginalPriceAfter: bigint | null = null;
     try {
       const [reservesRaw] = await rpc.callBatch([{ to: curve, data: encodeCall(CURVE_FUNCTIONS.getReserves, []) }], block);
@@ -74,6 +85,7 @@ export async function readTradeReceipt(rpc: RpcClient, hash: string, factory: st
       kind: isBuy ? "buy" : "sell",
       curve,
       launch,
+      symbol,
       wallet: String(isBuy ? decoded.args.buyer : decoded.args.seller).toLowerCase(),
       quote,
       tokens,

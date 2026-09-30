@@ -18,7 +18,8 @@ export interface LaunchPlan {
   configId: number;
   configEnabled: boolean;
   pairToken: string;
-  quote: { symbol: string; decimals: number };
+  /** `native` is by identity (no pair token), never by the pair token's own symbol. */
+  quote: { symbol: string; decimals: number; native: boolean };
   supply: bigint;
   curveFeeBps: bigint;
   creatorTaxBps: bigint;
@@ -80,12 +81,12 @@ export async function readLaunchPlan(rpc: RpcClient, options: PlanOptions): Prom
   const [hook] = decodeOutputs(FACTORY_FUNCTIONS.memeHook, r[5]) as [string];
   let phantomQuote = phantomNative;
   let graduationThreshold = thresholdNative;
-  let quote = { symbol: options.nativeSymbol, decimals: 18 };
+  let quote = { symbol: options.nativeSymbol, decimals: 18, native: true };
   if (!native) {
     const [p, t] = decodeOutputs(FACTORY_FUNCTIONS.pairTokenEconomics, r[6]) as [bigint, bigint, bigint];
     phantomQuote = p;
     graduationThreshold = t;
-    quote = await readTokenMeta(rpc, pairToken, options.block);
+    quote = { ...(await readTokenMeta(rpc, pairToken, options.block)), native: false };
   }
   let hookFeeBps = 0n;
   let protocolFeeShareBps = 0n;
