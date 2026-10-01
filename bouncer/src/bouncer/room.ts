@@ -60,7 +60,10 @@ export async function readRoom(rpc: RpcClient, launch: LaunchedToken, fromBlock:
       wallets.set(who, w);
     }
     if (isBuy) {
-      const spent = (log.args.quoteIn as bigint) - (log.args.fee as bigint) - (log.args.tax as bigint);
+      // What the wallet paid, the same figure the tape and the wallet view
+      // show. Net of fees and door tax it disagreed with the tape right under
+      // it: "the creator paid for 69%" over rows adding up to 50%.
+      const spent = log.args.quoteIn as bigint;
       buys++;
       w.buys++;
       w.quoteIn += spent;

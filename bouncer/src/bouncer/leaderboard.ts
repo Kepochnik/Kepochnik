@@ -52,6 +52,8 @@ export interface Board {
    * they are counted here and left out of every total and table above.
    */
   otherPairCurves: number;
+  /** Graduations in the window of launches from before it: counted in the total, absent from the deployer rows. */
+  graduatedEarlierLaunches: number;
   chunks: number;
 }
 
@@ -80,6 +82,7 @@ export async function readBoard(rpc: RpcClient, options: BoardOptions): Promise<
   const curveNative = new Map<string, boolean>();
   let launches = 0;
   let graduations = 0;
+  let graduatedEarlierLaunches = 0;
   for (const l of ledger.logs) {
     const token = String(l.args.token).toLowerCase();
     if (l.name === "TokenLaunched") {
@@ -99,6 +102,7 @@ export async function readBoard(rpc: RpcClient, options: BoardOptions): Promise<
       graduations++;
       const d = tokenToDeployer.get(token);
       if (d) byDeployer.get(d)!.graduated++;
+      else graduatedEarlierLaunches++;
     }
   }
   const rows = [...byDeployer.values()];
@@ -176,7 +180,7 @@ export async function readBoard(rpc: RpcClient, options: BoardOptions): Promise<
     topPayers = [...perPayer.values()].sort((a, b) => (b.coverPaid > a.coverPaid ? 1 : -1)).slice(0, top);
     otherPairCurves = otherPairs.size;
   }
-  return { window: { fromBlock: options.fromBlock, toBlock: options.toBlock }, launches, graduations, deployers: rows.length, topDeployers, serial, coverTotal, taxedBuys, topCurves, topPayers, otherPairCurves, chunks };
+  return { window: { fromBlock: options.fromBlock, toBlock: options.toBlock }, launches, graduations, deployers: rows.length, topDeployers, serial, coverTotal, taxedBuys, topCurves, topPayers, otherPairCurves, graduatedEarlierLaunches, chunks };
 }
 
 export { readTape };

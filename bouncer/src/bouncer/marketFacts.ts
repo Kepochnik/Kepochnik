@@ -152,7 +152,7 @@ export function marketFacts(slip: DoorSlip, options: MarketFactsOptions = {}): M
   const supply = meta?.totalSupply ?? null;
   facts.push(
     spot !== null && supply
-      ? { label: "Market cap", value: formatMoney((spot * supply) / 10n ** BigInt(decimals), quote.decimals, quote.symbol, quoteUsd), note: "price × supply", source: "derived" }
+      ? { label: "Market cap", value: formatMoney((spot * supply) / 10n ** BigInt(decimals), quote.decimals, quote.symbol, quoteUsd), note: `spot at block ${slip.at.block} × supply`, source: "derived" }
       : { label: "Market cap", value: null, note: "price × supply", source: "derived", why: spot === null ? "no price to multiply" : "the supply could not be read" },
   );
 
