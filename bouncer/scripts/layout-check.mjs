@@ -52,6 +52,10 @@ const ROUTES = [
   { hash: "#/demo/0x00000000000000000000000000000000000f2e54", what: "a launch with the column of launches open", tall: true, feed: true },
   { hash: "", what: "the column of launches with nothing picked", feed: true },
   { hash: "#/plan?tax=100&chain=demo", what: "the launch planner" },
+  // The other pages share the token page's frame; each is measured, not assumed.
+  { hash: "#/wallet/0x00000000000000000000000000000000000000a7/0x00000000000000000000000000000000000000b7?chain=demo", what: "a wallet's bag" },
+  { hash: "#/tx/0xdemoLATE31337450s?chain=demo", what: "a trade receipt" },
+  { hash: "#/dev/0x00000000000000000000000000000000000000b7?chain=demo", what: "a deployer's history" },
 ];
 
 function findChromium() {

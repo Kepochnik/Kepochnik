@@ -1392,6 +1392,72 @@ table.trades tr:hover td{background:rgba(255,255,255,.02)}
   .doorway.fit .sec-panel .check-v{font-size:12.5px}
   .doorway.fit .panel-head{margin-bottom:4px}
 }
+
+/* ---- the other pages: board, bag, receipt, deployer, planner on the token page's frame */
+.pg{--tone-wash:transparent;min-width:0;border-radius:18px;border:1px solid var(--line);background:var(--surface);overflow:hidden;
+  box-shadow:0 1px 0 rgba(255,255,255,.03) inset,0 20px 40px -24px rgba(0,0,0,.7)}
+.pg.pg-up{--tone-wash:rgba(61,214,140,.08)}
+.pg.pg-down{--tone-wash:rgba(255,98,87,.08)}
+.pg>.tokbar{border-bottom:1px solid var(--line)}
+.pg .tokline{align-items:center}
+.pg .sym .t-side{font:inherit;letter-spacing:inherit;text-transform:none}
+.tokav.glyph{background:var(--surface-3);color:var(--brand);box-shadow:inset 0 0 0 1px var(--line-2)}
+.tokav.sm{width:24px;height:24px;border-radius:7px;font-size:11.5px;box-shadow:inset 0 1px 0 rgba(255,255,255,.25)}
+.pg-meta{display:inline-flex;align-items:center;min-height:28px;color:var(--dimmer);font-size:12px}
+.tp-v.up{color:var(--ok)} .tp-v.down{color:var(--stop)}
+.tp-v .fact-coin{margin-left:8px;font:500 13px var(--num);letter-spacing:0;color:var(--dim)}
+.fact-v.ok{color:var(--ok)} .fact-v.stop{color:var(--stop)}
+.stamp.warn{background:var(--warn-bg);color:var(--warn);border-color:var(--warn-edge)}
+.pg-body{display:grid;grid-template-columns:minmax(0,1fr) 380px;min-width:0}
+.pg-body.solo{grid-template-columns:minmax(0,1fr)}
+.pg-main,.pg-side{min-width:0}
+.pg-side{border-left:1px solid var(--line);background:var(--surface-2)}
+.pg-main>.panel:last-child,.pg-side>.panel:last-child{border-bottom:0}
+.pg .panel{padding:16px 22px 18px}
+.pg .panel .tbl{margin:4px -22px -18px;border:0;border-radius:0}
+.pg table.buys th:first-child,.pg table.buys td:first-child{padding-left:22px}
+.pg table.buys th:last-child,.pg table.buys td:last-child{padding-right:22px}
+.pg table.buys td{padding-top:10px;padding-bottom:10px}
+.pg table.buys tr:hover td{background:rgba(255,255,255,.02)}
+.pg .info{max-width:none}
+.pg .info dd>.m{white-space:nowrap}
+.pg .info dt{white-space:nowrap}
+.pg .info dd .tokact{min-height:26px;padding:0 8px}
+.pg .tokline .name a{display:inline-flex;align-items:center;min-height:24px}
+.pg-tok{display:inline-flex;align-items:center;gap:9px;text-decoration:none!important;color:var(--text)!important}
+.pg-tok:hover .pg-tok-s{text-decoration:underline;text-underline-offset:3px}
+.pg-tok-s{font-weight:600}
+.pg-tok .mono{font-size:11.5px}
+.pg-list{list-style:none;margin:0;padding:0}
+.pg-list li{display:flex;justify-content:space-between;gap:12px;padding:9px 0;border-top:1px solid var(--line);font-size:13px}
+.pg-list li:first-child{border-top:0}
+.pg-list li span{color:var(--dim)}
+.pg-empty{margin:4px 0 0;color:var(--dim);font-size:13px}
+.pg-p{margin:12px 0 0;color:var(--dim);font-size:12.5px;line-height:1.55}
+.pg-p.lead-p{margin-top:2px;color:var(--muted);font-size:13.5px}
+.pg-p b{color:var(--text);font-weight:600}
+.pg-note{margin:0;padding:12px 22px;border-top:1px solid var(--line);color:var(--dim);font-size:12px;line-height:1.55}
+.pg-side .plan-form{display:grid;gap:12px;margin:4px 0 0}
+.pg-side .plan-form label{font:500 12px var(--sans);letter-spacing:0;text-transform:none;color:var(--dim)}
+.pg-side .plan-form input{width:100%;font-family:var(--num)}
+.pg-side .plan-form .btn{justify-self:start}
+@media (max-width:1060px){
+  .pg-body{grid-template-columns:minmax(0,1fr)}
+  .pg-side{border-left:0;border-top:1px solid var(--line)}
+}
+@media (max-width:720px){
+  .pg>.tokbar{display:flex;flex-wrap:wrap;align-items:center;padding:14px 16px;gap:10px 14px}
+  .pg .tokprice{margin-left:0;text-align:left}
+  .pg .tp-s{justify-content:flex-start}
+  .pg .tokline .sym{font-size:22px}
+  .pg .panel{padding:14px 16px 16px}
+  .pg .panel .tbl{margin:4px -16px -16px}
+  .pg table.buys th:first-child,.pg table.buys td:first-child{padding-left:16px}
+  .pg table.buys th:last-child,.pg table.buys td:last-child{padding-right:16px}
+  .pg-note{padding:12px 16px}
+  .pg-meta{min-height:44px}
+  .pg .info dd .tokact{min-height:44px}
+}
 /* Popup-only overrides.
 
    The popup is the same app in a 560-pixel box that Chrome sizes to this

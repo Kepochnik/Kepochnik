@@ -1179,7 +1179,7 @@ async function runDev(address: string): Promise<void> {
     const d = await readDevReport(rpc, address, { fromBlock, toBlock: head.number, factory: factoryFor(), chunking: mode === "demo" ? { startChunk: 100_000, maxChunk: 100_000 } : undefined });
     if (run !== doorRun) return;
     done(`block ${head.number} · last ${mode === "demo" ? "8" : "24"} h`);
-    out.innerHTML = `<div class="slip">${devSection(d, null, true)}</div>`;
+    renderDev(d);
   } catch (error) {
     if (run !== doorRun) return;
     failed(error, address);
@@ -1312,29 +1312,47 @@ async function runBoard(hours: number): Promise<void> {
 
 function renderBoard(b: Board, hours: number, symbols: Map<string, string> = new Map()): void {
   const qd = chain().native;
-  const amt = (v: bigint) => mny(v, qd.decimals, qd.symbol, true);
-  const link = (a: string) => {
-    const sym = symbols.get(a.toLowerCase());
-    return `<a href="#/${mode === "demo" ? "demo" : "t"}/${a}${routeChain()}">${sym ? `${esc(sym)} <span class="mono dim">${shortAddress(a)}</span>` : shortAddress(a)}</a>`;
-  };
-  const dev = (a: string) => `<a href="#/dev/${a}${routeChain()}">${shortAddress(a)}</a>`;
-  const windows = [1, 6, 24].map((h) => `<a class="frame${h === hours ? " on" : ""}" href="#/board?hours=${h}&chain=${mode === "demo" ? "demo" : chain().key}" aria-current="${h === hours ? "true" : "false"}">${h}h</a>`).join("");
-  const none = (text: string) => `<p class="qdetail">${text}</p>`;
-  out.innerHTML = `<div class="slip">
-    <div class="stamp-row"><div class="who"><div class="cap-l">Leaderboard</div><div class="sym">Tonight on ${esc(chain().name)}</div><div class="name">last ${hours} h · blocks ${b.window.fromBlock.toLocaleString("en-US")}–${b.window.toBlock.toLocaleString("en-US")}</div></div>
-      <div class="frames" role="group" aria-label="Window">${windows}</div></div>
-    <div class="grid">
-      <section class="sec"><h2>Tonight</h2><div class="exit-grid">
-        <div><span>launches</span><b class="num">${b.launches}</b></div>
-        <div><span>graduations</span><b class="num">${b.graduations}</b>${b.graduatedEarlierLaunches ? `<span>${b.graduatedEarlierLaunches} launched before the window</span>` : ""}</div>
-        <div><span>deployers</span><b class="num">${b.deployers}</b></div>
-        <div><span>door tax paid</span><b class="num">${amt(b.coverTotal)}</b><span>${b.taxedBuys} buy${b.taxedBuys === 1 ? "" : "s"}</span></div>
-      </div><p class="qdetail">Door tax = the extra a buyer paid to the creator in a launch's first seconds, on top of the normal fees — read from each curve's own CurveBuy events. Counts, not scores.${b.otherPairCurves ? ` ${plural(b.otherPairCurves, "curve")} paired with another token also took door tax; ${b.otherPairCurves === 1 ? "its amounts are" : "their amounts are"} in that token's units, so ${b.otherPairCurves === 1 ? "it is" : "they are"} left out of these totals rather than added to ${esc(qd.symbol)}.` : ""}</p></section>
-      <section class="sec"><h2>Deployers</h2>${b.topDeployers.length ? `<div class="tbl"><table class="buys"><thead><tr><th>deployer</th><th class="num">launched</th><th class="num" title="of the launches in this window">graduated</th><th class="num">swept</th></tr></thead><tbody>${b.topDeployers.map((r) => `<tr><td>${dev(r.deployer)}</td><td class="num">${r.launched}</td><td class="num">${r.graduated}</td><td class="num">${Math.max(0, r.swept - r.graduated)}</td></tr>`).join("")}</tbody></table></div>` : none("No launches in the window.")}
-        ${b.serial.length ? `<h2 style="margin-top:14px">Serial, no graduation</h2><div class="tbl"><table class="buys"><tbody>${b.serial.map((r) => `<tr><td>${dev(r.deployer)}</td><td>${r.launched} launched, none graduated</td></tr>`).join("")}</tbody></table></div>` : ""}</section>
-      <section class="sec wide"><h2>Door tax by token</h2>${b.topCurves.length ? `<div class="tbl"><table class="buys"><thead><tr><th>token</th><th class="num">collected</th><th class="num">buys</th><th class="num">highest</th><th class="num">creator tax</th></tr></thead><tbody>${b.topCurves.map((r) => `<tr><td>${link(r.token ?? r.curve)}</td><td class="num">${amt(r.coverCollected)}</td><td class="num">${r.taxedBuys}</td><td class="num">${(r.highestBps / 100).toFixed(1)}%</td><td class="num">${formatBps(r.creatorTaxBps)}</td></tr>`).join("")}</tbody></table></div>` : none("No buy in the window paid above the creator rate.")}</section>
-      <section class="sec"><h2>Door tax by wallet</h2>${b.topPayers.length ? `<div class="tbl"><table class="buys"><thead><tr><th>wallet</th><th class="num">door tax paid</th><th class="num">buys</th></tr></thead><tbody>${b.topPayers.map((r) => `<tr><td><span class="mono">${shortAddress(r.wallet)}</span></td><td class="num">${amt(r.coverPaid)}</td><td class="num">${r.buys}</td></tr>`).join("")}</tbody></table></div>` : none("Nobody paid door tax in the window.")}</section>
-    </div></div>`;
+  const amt = (v: bigint, split = false) => mny(v, qd.decimals, qd.symbol, true, { split });
+  const sym = (a: string) => symbols.get(a.toLowerCase()) ?? null;
+  const dev = (a: string) => `<a class="mono" href="${devHref(a)}">${shortAddress(a)}</a>`;
+  const windows = [1, 6, 24].map((h) => `<a class="frame${h === hours ? " on" : ""}" href="#/board?hours=${h}&chain=${linkChain()}" aria-current="${h === hours ? "true" : "false"}">${h}h</a>`).join("");
+  const none = (text: string) => `<p class="pg-empty">${text}</p>`;
+  const blocks = `blocks ${b.window.fromBlock.toLocaleString("en-US")}–${b.window.toBlock.toLocaleString("en-US")}`;
+  const byToken = b.topCurves.length
+    ? `<div class="tbl"><table class="buys"><thead><tr><th>token</th><th class="num">collected</th><th class="num">buys</th><th class="num">highest</th><th class="num">creator tax</th></tr></thead><tbody>${b.topCurves
+        .map((r) => `<tr><td>${tokenCell(r.token ?? r.curve, r.token ? sym(r.token) : null)}</td><td class="num">${amt(r.coverCollected)}</td><td class="num">${r.taxedBuys}</td><td class="num">${(r.highestBps / 100).toFixed(1)}%</td><td class="num">${formatBps(r.creatorTaxBps)}</td></tr>`)
+        .join("")}</tbody></table></div>`
+    : none("No buy in the window paid above the creator rate.");
+  const byWallet = b.topPayers.length
+    ? `<div class="tbl"><table class="buys"><thead><tr><th>wallet</th><th class="num">door tax paid</th><th class="num">buys</th></tr></thead><tbody>${b.topPayers
+        .map((r) => `<tr><td><span class="mono">${shortAddress(r.wallet)}</span></td><td class="num">${amt(r.coverPaid)}</td><td class="num">${r.buys}</td></tr>`)
+        .join("")}</tbody></table></div>`
+    : none("Nobody paid door tax in the window.");
+  const deployers = b.topDeployers.length
+    ? `<div class="tbl"><table class="buys"><thead><tr><th>deployer</th><th class="num">launched</th><th class="num" title="of the launches in this window">graduated</th><th class="num">swept</th></tr></thead><tbody>${b.topDeployers
+        .map((r) => `<tr><td>${dev(r.deployer)}</td><td class="num">${r.launched}</td><td class="num">${r.graduated}</td><td class="num">${Math.max(0, r.swept - r.graduated)}</td></tr>`)
+        .join("")}</tbody></table></div>`
+    : none("No launches in the window.");
+  const serial = b.serial.length
+    ? panel("Serial, no graduation", plural(b.serial.length, "deployer"), `<ul class="pg-list">${b.serial.map((r) => `<li>${dev(r.deployer)}<span>${r.launched} launched, none graduated</span></li>`).join("")}</ul>`)
+    : "";
+  out.innerHTML = `<div class="slip">${pageCard({
+    kind: "board",
+    avatar: pageIcon("board"),
+    title: "Launch board",
+    name: `${esc(chain().name)} · last ${hours} h`,
+    acts: `<span class="pg-meta">${blocks}</span>`,
+    right: `<div class="frames" role="group" aria-label="Window">${windows}</div>`,
+    stats: [
+      stat("Launches", `${b.launches}`, "made by the factory"),
+      stat("Graduated", `${b.graduations}`, b.graduatedEarlierLaunches ? `${b.graduatedEarlierLaunches} launched before the window` : "moved to a pool"),
+      stat("Deployers", `${b.deployers}`, b.serial.length ? `${b.serial.length} serial, none graduated` : "different wallets", b.serial.length ? "warn" : ""),
+      stat("Door tax paid", amt(b.coverTotal, true), plural(b.taxedBuys, "buy")),
+    ],
+    main: panel("Door tax by token", "who collected the most", byToken) + panel("Door tax by wallet", "who paid the most", byWallet),
+    side: panel("Deployers", "most launches first", deployers) + serial,
+    note: `Door tax = the extra a buyer paid to the creator in a launch's first seconds, on top of the normal fees — read from each curve's own CurveBuy events. Counts, not scores.${b.otherPairCurves ? ` ${plural(b.otherPairCurves, "curve")} paired with another token also took door tax; ${b.otherPairCurves === 1 ? "its amounts are" : "their amounts are"} in that token's units, so ${b.otherPairCurves === 1 ? "it is" : "they are"} left out of these totals rather than added to ${esc(qd.symbol)}.` : ""}`,
+  })}</div>`;
 }
 
 /** What a watch event is called on screen: words, not the code's own keys. */
@@ -1943,7 +1961,7 @@ function infoPanel(slip: DoorSlip): string {
   const deployer = l?.deployer ?? slip.open?.deployer?.address ?? null;
   const rows: [string, string][] = [];
   rows.push(["Contract", addr(slip.subject)]);
-  if (deployer) rows.push(["Deployer", `${addr(deployer)} <a class="info-x" href="#/dev/${esc(deployer)}${routeChain()}">history ›</a>`]);
+  if (deployer) rows.push(["Deployer", `${addr(deployer)} <a class="info-x" href="${devHref(deployer)}">history ›</a>`]);
   if (slip.rules) rows.push(["Creator tax to", addr(slip.rules.creatorFeeRecipient)]);
   if (created) rows.push(["Created", `${esc(humanUtc(created))}${slip.launchBlock ? ` <small>block ${slip.launchBlock.toLocaleString("en-US")}</small>` : ""}`]);
   if (meta) rows.push(["Supply", `${esc(formatCoin(meta.totalSupply, meta.decimals))} <small>${esc(meta.totalSupply === 0n ? "" : (meta.totalSupply / 10n ** BigInt(meta.decimals)).toLocaleString("en-US"))} · ${meta.decimals} decimals</small>`]);
@@ -2008,6 +2026,100 @@ function tokenAvatar(address: string, sym: string): string {
   const h2 = (h1 + 48 + ((seed >> 9) % 60)) % 360;
   const letter = (sym.replace(/<[^>]*>/g, "").replace(/[^\p{L}\p{N}]/gu, "")[0] ?? "?").toUpperCase();
   return `<span class="tokav" aria-hidden="true" style="--h1:${h1};--h2:${h2}">${esc(letter)}</span>`;
+}
+
+// ---------------------------------------------------------------- the other pages
+
+/**
+ * The board, a wallet's bag, a receipt, a deployer and the planner are drawn
+ * on the token page's own frame: a header with a face and the links that
+ * belong to it, one row of figures, then panels — the main read on the left
+ * and the details beside it. They used to be loose boxes of label-value
+ * lines, a second visual language on the same site.
+ */
+const PAGE_ICON: Record<string, string> = {
+  board: '<path d="M5 20V11M12 20V4M19 20v-6"/>',
+  plan: '<path d="M4 7h9M17 7h3M4 17h3M11 17h9"/><circle cx="15" cy="7" r="2"/><circle cx="9" cy="17" r="2"/>',
+  dev: '<circle cx="12" cy="8" r="3.6"/><path d="M4.5 20c.8-3.6 3.9-5.6 7.5-5.6s6.7 2 7.5 5.6"/>',
+};
+
+function pageIcon(kind: keyof typeof PAGE_ICON): string {
+  return `<span class="tokav glyph" aria-hidden="true"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${PAGE_ICON[kind]}</svg></span>`;
+}
+
+/** One cell of the metrics row. The value is markup: money figures stay rewritable. */
+function stat(label: string, value: string, note = "", tone: "" | "ok" | "warn" | "stop" | "none" = ""): string {
+  return `<div class="fact"><div class="fact-l">${esc(label)}</div><div class="fact-v${tone ? ` ${tone}` : ""}">${value}</div>${note ? `<div class="fact-n">${note}</div>` : ""}</div>`;
+}
+
+function panel(title: string, sub: string, body: string): string {
+  return `<section class="panel"><div class="panel-head"><h3>${esc(title)}</h3>${sub ? `<span class="panel-sub">${sub}</span>` : ""}</div>${body}</section>`;
+}
+
+function infoList(rows: [string, string][]): string {
+  return `<dl class="info">${rows.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${v}</dd>`).join("")}</dl>`;
+}
+
+function copyAct(value: string, label: string, what: string): string {
+  return `<button class="vaddr tokact" type="button" data-copy="${esc(value)}" title="Copy ${esc(value)}" aria-label="Copy the ${esc(what)} ${esc(value)}"><span class="mono">${esc(label)}</span><span class="tokact-i" aria-hidden="true">⧉</span></button>`;
+}
+
+/** The explorer's page for an address or a transaction, live chains only. */
+function explorerLink(kind: "address" | "tx", value: string): string {
+  if (mode !== "live") return "";
+  const c = chain();
+  const base = c.blockscout ?? c.explorerUrl;
+  if (!base || c.family === "solana") return "";
+  return `<a class="tokact" href="${esc(`${base}/${kind}/${value}`)}" target="_blank" rel="noopener">Explorer<span aria-hidden="true"> ↗</span></a>`;
+}
+
+/** A deployer's history, on the chain this page is on — the demo included. */
+function devHref(address: string): string {
+  return `#/dev/${address.toLowerCase()}?chain=${linkChain()}`;
+}
+
+function tokenHref(address: string): string {
+  return `#/${mode === "demo" ? "demo" : "t"}/${address.toLowerCase()}${routeChain()}`;
+}
+
+/** A token in a table: its face, its ticker, its address. */
+function tokenCell(address: string, symbol: string | null): string {
+  return `<a class="pg-tok" href="${tokenHref(address)}">${tokenAvatar(address, symbol ?? "?").replace('class="tokav"', 'class="tokav sm"')}<span class="pg-tok-s">${esc(symbol ?? shortAddress(address))}</span>${symbol ? `<span class="mono dim">${shortAddress(address)}</span>` : ""}</a>`;
+}
+
+function pageCard(o: {
+  kind: string;
+  avatar: string;
+  title: string;
+  name?: string;
+  chips?: string;
+  acts?: string;
+  right?: string;
+  stats?: string[];
+  main: string;
+  side?: string;
+  note?: string;
+  tone?: "up" | "down";
+}): string {
+  return `<section class="pg${o.tone ? ` pg-${o.tone}` : ""}" data-page="${o.kind}">
+    <div class="tokbar">
+      <div class="tokid">${o.avatar}
+        <div class="who2">
+          <div class="tokline"><span class="sym">${o.title}</span>${o.name ? `<span class="name">${o.name}</span>` : ""}${o.chips ?? ""}</div>
+          ${o.acts ? `<div class="tokacts">${o.acts}</div>` : ""}
+        </div>
+      </div>
+      ${o.right ?? ""}
+    </div>
+    ${o.stats?.length ? `<div class="stats"><div class="facts" style="--n:${o.stats.length}">${o.stats.join("")}</div></div>` : ""}
+    <div class="pg-body${o.side ? "" : " solo"}"><div class="pg-main">${o.main}</div>${o.side ? `<aside class="pg-side">${o.side}</aside>` : ""}</div>
+    ${o.note ? `<p class="pg-note">${o.note}</p>` : ""}
+  </section>`;
+}
+
+/** The headline figure at the right of a page's header. */
+function pageHero(value: string, sub: string, tone: "" | "up" | "down" | "none" = ""): string {
+  return `<div class="tokprice"><div class="tp-v${tone ? ` ${tone}` : ""}">${value}</div><div class="tp-s"><span>${sub}</span></div></div>`;
 }
 
 function doorBlock(opts: {
@@ -2269,9 +2381,15 @@ type Quote = { symbol: string; decimals: number; native: boolean };
  * "$1.98K (0.8 ETH)" with bare "0.4 ETH". Every figure keeps its raw amount
  * on the element, and refreshMoney() rewrites them all when the price lands.
  */
-function mny(v: bigint, decimals: number, symbol: string, native: boolean, opts: { plus?: boolean; price?: boolean } = {}): string {
+function mny(v: bigint, decimals: number, symbol: string, native: boolean, opts: { plus?: boolean; price?: boolean; split?: boolean } = {}): string {
   const text = moneyText(v, decimals, symbol, native ? quoteUsdNow(true) : null, opts);
-  return `<span class="m" data-raw="${v}" data-dec="${decimals}" data-sym="${esc(symbol)}"${native ? ' data-n="1"' : ""}${opts.plus ? ' data-plus="1"' : ""}${opts.price ? ' data-price="1"' : ""}>${esc(text)}</span>`;
+  return `<span class="m" data-raw="${v}" data-dec="${decimals}" data-sym="${esc(symbol)}"${native ? ' data-n="1"' : ""}${opts.plus ? ' data-plus="1"' : ""}${opts.price ? ' data-price="1"' : ""}${opts.split ? ' data-split="1"' : ""}>${opts.split ? splitMoney(text) : esc(text)}</span>`;
+}
+
+/** "$494 (0.199 ETH)" as a headline and the coin under it, the way the metrics row prints money. */
+function splitMoney(text: string): string {
+  const pair = /^(\S+) \((.+)\)$/.exec(text);
+  return pair ? `${esc(pair[1])}<small class="fact-coin">${esc(pair[2])}</small>` : esc(text);
 }
 
 function moneyText(v: bigint, decimals: number, symbol: string, usd: number | null, opts: { plus?: boolean; price?: boolean }): string {
@@ -2285,7 +2403,9 @@ function rewriteMoney(): void {
   const usd = quoteUsdNow(true);
   if (usd === null) return;
   for (const el of document.querySelectorAll<HTMLElement>(".m[data-n]")) {
-    el.textContent = moneyText(BigInt(el.dataset.raw ?? "0"), Number(el.dataset.dec ?? 18), el.dataset.sym ?? "", usd, { plus: el.dataset.plus === "1", price: el.dataset.price === "1" });
+    const text = moneyText(BigInt(el.dataset.raw ?? "0"), Number(el.dataset.dec ?? 18), el.dataset.sym ?? "", usd, { plus: el.dataset.plus === "1", price: el.dataset.price === "1" });
+    if (el.dataset.split === "1") el.innerHTML = splitMoney(text);
+    else el.textContent = text;
   }
 }
 
@@ -4503,7 +4623,7 @@ function renderSlip(slip: DoorSlip, opts: { stage?: Stage; source?: Source } = {
     <dt>token code</dt><dd>${t.code.empty ? "empty (no contract)" : `${t.code.bytes} bytes`}<br>${idFlags(t)}</dd>
     ${slip.id.curve ? `<dt>curve code</dt><dd>${slip.id.curve.code.bytes} bytes<br>${idFlags(slip.id.curve)}</dd>` : ""}
     ${v1 ? `<dt>launchpad</dt><dd>Pons V1</dd><dt>deployer</dt><dd><span class="mono" title="${esc(v1.record.deployer.toLowerCase())}">${esc(shortAddress(v1.record.deployer))}</span></dd>` : ""}
-    ${slip.id.launch ? `<dt>deployer</dt><dd><a href="#/dev/${slip.id.launch.deployer.toLowerCase()}${routeChain()}" title="${esc(slip.id.launch.deployer.toLowerCase())}"><span class="mono">${esc(shortAddress(slip.id.launch.deployer))}</span></a> · their launch history ›</dd>` : ""}
+    ${slip.id.launch ? `<dt>deployer</dt><dd><a href="${devHref(slip.id.launch.deployer)}" title="${esc(slip.id.launch.deployer.toLowerCase())}"><span class="mono">${esc(shortAddress(slip.id.launch.deployer))}</span></a> · their launch history ›</dd>` : ""}
   </dl>`;
 
   let coverBody = "";
@@ -4570,7 +4690,7 @@ function renderSlip(slip: DoorSlip, opts: { stage?: Stage; source?: Source } = {
     keep: coverBody + (o ? controlBody(slip) : "") + rulesBody + (v1 ? `<h3 class="cap">Rules of a Pons V1 launch</h3><ol class="rules">${v1.rules.map((x) => `<li>${esc(x)}</li>`).join("")}</ol>` : ""),
     sell: o ? probeBody(slip) : "",
     exit: tradesText + exitBody + exitCalcBody(slip.id.meta?.totalSupply ?? null),
-    room: (o && (o.holders || o.deployer || o.activity) ? holdersBody(slip) : "") + roomBody + crewBody + (d ? devSection(d, slip.subject, false, true) : ""),
+    room: (o && (o.holders || o.deployer || o.activity) ? holdersBody(slip) : "") + roomBody + crewBody + (d ? devSection(d, slip.subject) : ""),
   };
 
   ensureQuoteUsd();
@@ -4879,21 +4999,51 @@ function holdersBody(slip: DoorSlip): string {
   ${h && h.top.length ? `<h3 class="cap">The biggest wallets</h3><div class="tbl"><table class="buys"><thead><tr><th>#</th><th>holder</th><th>share</th></tr></thead><tbody>${h.top.slice(0, 15).map((x, i) => `<tr><td>${i + 1}</td><td>${explorer && mode !== "demo" ? `<a href="${esc(explorer)}/address/${esc(x.address)}" target="_blank" rel="noopener"><span class="mono">${shortAddress(x.address)}</span></a>` : `<span class="mono">${shortAddress(x.address)}</span>`} ${role(x)}</td><td>${pctText(x.bps)}</td></tr>`).join("")}</tbody></table></div>` : ""}`;
 }
 
-function devSection(d: DevReport, subject: string | null, standalone: boolean, bodyOnly = false): string {
+function devSection(d: DevReport, subject: string | null): string {
   // The window is said as a length and as blocks, every time: "in window"
   // with no window named was a count of an unknown stretch of chain.
   const span = d.window.toBlock - d.window.fromBlock;
   const hours = chain().blocksPerSecond > 0 ? span / chain().blocksPerSecond / 3600 : null;
   const windowText = `${hours !== null ? `last ${hours >= 1 ? Math.round(hours) : Math.max(1, Math.round(hours * 60))}${hours >= 1 ? " h" : " min"} · ` : ""}blocks ${d.window.fromBlock.toLocaleString("en-US")}–${d.window.toBlock.toLocaleString("en-US")}`;
-  const inner = `<dl class="kv"><dt>deployer</dt><dd><button class="vaddr tokact" type="button" data-copy="${esc(d.deployer)}" title="Copy ${esc(d.deployer)}"><span class="mono">${esc(shortAddress(d.deployer))}</span><span class="tokact-i" aria-hidden="true">⧉</span></button>${standalone ? "" : ` <a href="#/dev/${esc(d.deployer)}${routeChain()}">full history ›</a>`}</dd><dt>window</dt><dd>${esc(windowText)}</dd><dt>in it</dt><dd>${esc(devReportLine(d))}</dd></dl>
+  const inner = `<dl class="kv"><dt>deployer</dt><dd><button class="vaddr tokact" type="button" data-copy="${esc(d.deployer)}" title="Copy ${esc(d.deployer)}"><span class="mono">${esc(shortAddress(d.deployer))}</span><span class="tokact-i" aria-hidden="true">⧉</span></button> <a href="${devHref(d.deployer)}">full history ›</a></dd><dt>window</dt><dd>${esc(windowText)}</dd><dt>in it</dt><dd>${esc(devReportLine(d))}</dd></dl>
     ${d.launches.length ? `<div class="tbl"><table class="buys"><thead><tr><th>ticker</th><th>launched</th><th>stage</th><th class="num">creator tax</th><th class="num">swept after</th></tr></thead><tbody>${d.launches
       .map((l) => `<tr><td><a href="#/${mode === "demo" ? "demo" : "t"}/${l.token}${routeChain()}">${esc(l.symbol)}</a>${l.token === subject ? " · this one" : ""}</td><td>${humanUtc(l.launchedAt)}</td><td>${PHASE_LABEL[l.phase]}</td><td class="num">${formatBps(l.creatorTaxBps)}</td><td class="num">${l.secondsToSweep === null ? "n/a" : formatDuration(l.secondsToSweep)}</td></tr>`)
       .join("")}</tbody></table></div>${d.truncated ? `<p style="color:var(--muted);font-size:13px">${d.counts.launched - d.launches.length} older launches counted but not listed.</p>` : ""}` : ""}`;
-  return bodyOnly ? inner : `<section class="sec wide"><h2>This dev before</h2>${inner}</section>`;
+  return inner;
+}
+
+/** A deployer's launches in the window, on the page's own frame. */
+function renderDev(d: DevReport): void {
+  const span = d.window.toBlock - d.window.fromBlock;
+  const hours = chain().blocksPerSecond > 0 ? span / chain().blocksPerSecond / 3600 : null;
+  const length = hours === null ? null : hours >= 1 ? `${Math.round(hours)} h` : `${Math.max(1, Math.round(hours * 60))} min`;
+  const c = d.counts;
+  const launches = d.launches.length
+    ? `<div class="tbl"><table class="buys"><thead><tr><th>token</th><th>launched</th><th>stage</th><th class="num">creator tax</th><th class="num">swept after</th></tr></thead><tbody>${d.launches
+        .map((l) => `<tr><td>${tokenCell(l.token, l.symbol)}</td><td>${humanUtc(l.launchedAt)}</td><td>${PHASE_LABEL[l.phase]}</td><td class="num">${formatBps(l.creatorTaxBps)}</td><td class="num">${l.secondsToSweep === null ? "n/a" : formatDuration(l.secondsToSweep)}</td></tr>`)
+        .join("")}</tbody></table></div>${d.truncated ? `<p class="pg-empty">${c.launched - d.launches.length} older launches counted but not listed.</p>` : ""}`
+    : `<p class="pg-empty">No launch from this address in the window.</p>`;
+  out.innerHTML = `<div class="slip">${pageCard({
+    kind: "dev",
+    avatar: pageIcon("dev"),
+    title: esc(shortAddress(d.deployer)),
+    name: "Deployer",
+    chips: d.repeatedSymbols.length ? `<span class="stamp warn" title="${esc(d.repeatedSymbols.join(", "))}">Reused a ticker ${d.repeatedSymbols.length}×</span>` : "",
+    acts: `${copyAct(d.deployer, shortAddress(d.deployer), "deployer address")}${explorerLink("address", d.deployer)}<span class="pg-meta">${length ? `last ${length} · ` : ""}blocks ${d.window.fromBlock.toLocaleString("en-US")}–${d.window.toBlock.toLocaleString("en-US")}</span>`,
+    stats: [
+      stat("Launched", `${c.launched}`, "in the window"),
+      stat("Graduated", `${c.graduated}`, "moved to a pool", c.launched > 1 && c.graduated === 0 ? "warn" : ""),
+      stat("Swept, no pool", `${c.swept}`, "nowhere to trade", c.swept ? "warn" : ""),
+      stat("On the curve", `${c.onCurve}`, "still selling"),
+      stat("Creator tax", d.taxRangeBps ? (d.taxRangeBps[0] === d.taxRangeBps[1] ? formatBps(d.taxRangeBps[0]) : `${formatBps(d.taxRangeBps[0])}–${formatBps(d.taxRangeBps[1])}`) : "—", "across these launches", d.taxRangeBps ? "" : "none"),
+      stat("Median sweep", d.medianSecondsToSweep === null ? "—" : formatDuration(d.medianSecondsToSweep), "launch to sold out", d.medianSecondsToSweep === null ? "none" : ""),
+    ],
+    main: panel("Launches", esc(devReportLine(d)), launches),
+  })}</div>`;
 }
 
 function renderPosition(p: Position, head: number, symbol: string | null, qd: Quote): void {
-  const money = (v: bigint) => mny(v, qd.decimals, qd.symbol, qd.native);
+  const money = (v: bigint, split = false) => mny(v, qd.decimals, qd.symbol, qd.native, { split });
   const whole = p.exit.quotes.find((x) => x.shareBps === 10_000);
   const buys = p.trades.filter((t) => t.kind === "buy");
   const sells = p.trades.filter((t) => t.kind === "sell");
@@ -4901,7 +5051,7 @@ function renderPosition(p: Position, head: number, symbol: string | null, qd: Qu
   const sold = sells.reduce((a, t) => a + t.tokens, 0n);
   // The sign on both units: "−$857 (0.345 ETH)" reads as a loss in one
   // and a gain in the other.
-  const signed = (v: bigint) => mny(v, qd.decimals, qd.symbol, qd.native, { plus: true });
+  const signed = (v: bigint, split = false) => mny(v, qd.decimals, qd.symbol, qd.native, { plus: true, split });
   // With nothing left the figure is what the trades made or lost, not a
   // paper gain on a bag that is still held.
   const resultWord = p.balance === 0n ? "result so far" : "if sold now";
@@ -4925,52 +5075,80 @@ function renderPosition(p: Position, head: number, symbol: string | null, qd: Qu
       : null;
   const resultLabel = !drift ? resultWord : "if sold now · only what was bought here";
   const tokenLabel = symbol ?? shortAddress(p.token);
-  const tokenHref = `#/${mode === "demo" ? "demo" : "t"}/${p.token}${routeChain()}`;
+  const tone = result === null || result === 0n ? "" : result > 0n ? "up" : "down";
+  const VENUE: Record<Position["exit"]["venue"], string> = { curve: "on the curve", pool: "in the pool", closed: "swept · no pool yet" };
   const rows = p.trades.slice(-20).reverse().map((t) => `<tr class="t-${t.kind}">
-      <td><a href="#/tx/${esc(t.tx)}?chain=${linkChain()}" title="the trade's receipt">${t.block}</a></td>
+      <td><a href="#/tx/${esc(t.tx)}?chain=${linkChain()}" title="the trade's receipt">${t.block.toLocaleString("en-US")}</a></td>
       <td><span class="t-side">${t.kind}</span></td>
       <td class="num">${money(t.quote)}</td>
       <td class="num">${esc(formatCoin(t.tokens, 18))}</td>
       <td class="num">${money(t.fee + t.tax)}</td>
     </tr>`).join("");
-  out.innerHTML = `<div class="slip">
-    <div class="stamp-row"><div class="who">
-        <div class="cap-l">Wallet in <a href="${tokenHref}">${esc(tokenLabel)}</a></div>
-        <div class="sym"><button class="vaddr tokact" type="button" data-copy="${esc(p.wallet)}" title="Copy ${esc(p.wallet)}"><span class="mono">${esc(shortAddress(p.wallet))}</span><span class="tokact-i" aria-hidden="true">⧉</span></button></div>
-        <div class="at">block ${head.toLocaleString("en-US")} · ${esc(p.exit.venue)}</div></div>
-      <div class="stamp ${result !== null && result < 0n ? "no" : ""}" title="${esc(resultLabel)}">${result === null ? "P&amp;L n/a" : signed(result)}</div></div>
-    <div class="grid">
-      <section class="sec"><h2>Position</h2><dl class="kv">
-        <dt>holds now</dt><dd class="num">${esc(formatCoin(p.balance, 18))} ${esc(tokenLabel)}</dd>
-        ${drift ? `<dt></dt><dd><small style="color:var(--dim)">Bought ${esc(formatCoin(bought, 18))} and sold ${esc(formatCoin(sold, 18))} on the curve; the rest moved by plain transfer. The balance is what the chain holds now.</small></dd>` : ""}
-        <dt>spent</dt><dd>${money(p.spentQuote)} over ${plural(buys.length, "buy")}</dd>
-        <dt>received</dt><dd>${money(p.receivedQuote)} over ${plural(sells.length, "sell")}</dd>
-        <dt>fees paid</dt><dd>${money(p.feesPaid)}</dd>
-        <dt>taxes paid</dt><dd>${money(p.taxesPaid)} <small style="color:var(--dim)">creator tax plus any door tax</small></dd>
-        <dt>net in</dt><dd>${money(p.costBasis)}${p.costBasis < 0n ? " · took out more than put in" : ""}</dd>
-        <dt>sell it all now</dt><dd>${p.balance === 0n ? "nothing left to sell" : whole ? money(whole.net) : "n/a"}</dd>
-        <dt>${esc(resultLabel)}</dt><dd>${result === null ? "not computable: what was bought here has all moved out by transfer" : signed(result)}</dd>
-      </dl><p style="margin:10px 0 0;color:var(--dim);font-size:12px">${esc(p.exit.note)}</p></section>
-      <section class="sec"><h2>Trades</h2>${p.trades.length ? `<div class="tbl"><table class="buys trades"><thead><tr><th>block</th><th>side</th><th class="num">paid / received</th><th class="num">tokens</th><th class="num">fee + tax</th></tr></thead><tbody>${rows}</tbody></table></div>` : `<p style="color:var(--muted);margin:0">No curve trades by this wallet on this launch.</p>`}</section>
-    </div></div>`;
+  out.innerHTML = `<div class="slip">${pageCard({
+    kind: "wallet",
+    tone: tone || undefined,
+    avatar: tokenAvatar(p.token, tokenLabel),
+    title: esc(shortAddress(p.wallet)),
+    name: `bag in <a href="${tokenHref(p.token)}">${esc(tokenLabel)}</a>`,
+    chips: `<span class="stage">${VENUE[p.exit.venue]}</span>`,
+    acts: `${copyAct(p.wallet, shortAddress(p.wallet), "wallet address")}<a class="tokact" href="${tokenHref(p.token)}">Open ${esc(tokenLabel)}<span aria-hidden="true"> ›</span></a>${explorerLink("address", p.wallet)}<span class="pg-meta">block ${head.toLocaleString("en-US")}</span>`,
+    right: pageHero(result === null ? "Not computable" : signed(result, true), esc(resultLabel), result === null ? "none" : tone),
+    stats: [
+      stat("Holds now", esc(formatCoin(p.balance, 18)), esc(tokenLabel)),
+      stat("Spent", money(p.spentQuote, true), plural(buys.length, "buy")),
+      stat("Received", money(p.receivedQuote, true), plural(sells.length, "sell")),
+      stat("Fees and taxes", money(p.feesPaid + p.taxesPaid, true), "fee, creator tax, door tax"),
+      stat("Sell it all now", p.balance === 0n ? "—" : whole ? money(whole.net, true) : "n/a", p.balance === 0n ? "nothing left to sell" : "after fees, at this block", p.balance === 0n || !whole ? "none" : ""),
+    ],
+    main: panel("Trades", p.trades.length > 20 ? `newest 20 of ${p.trades.length}` : plural(p.trades.length, "trade"), p.trades.length ? `<div class="tbl"><table class="buys trades"><thead><tr><th>block</th><th>side</th><th class="num">paid / received</th><th class="num">tokens</th><th class="num">fee + tax</th></tr></thead><tbody>${rows}</tbody></table></div>` : `<p class="pg-empty">No curve trades by this wallet on this launch.</p>`),
+    side: panel("Position", "", `${infoList([
+      ["Fees paid", money(p.feesPaid)],
+      ["Taxes paid", `${money(p.taxesPaid)} <small>creator tax plus any door tax</small>`],
+      ["Net in", `${money(p.costBasis)}${p.costBasis < 0n ? " <small>took out more than put in</small>" : ""}`],
+      [labelCase(resultWord), result === null ? "<small>not computable: what was bought here has all moved out by transfer</small>" : `${signed(result)}${drift ? " <small>only what was bought here</small>" : ""}`],
+    ])}${drift ? `<p class="pg-p">Bought ${esc(formatCoin(bought, 18))} and sold ${esc(formatCoin(sold, 18))} on the curve; the rest moved by plain transfer. The balance is what the chain holds now.</p>` : ""}<p class="pg-p">${esc(p.exit.note)}</p>`),
+  })}</div>`;
 }
 
 function receiptSection(r: TradeReceipt, qd: Quote): string {
-  const amt = (v: bigint) => mny(v, qd.decimals, qd.symbol, qd.native);
+  const amt = (v: bigint, split = false) => mny(v, qd.decimals, qd.symbol, qd.native, { split });
   // One precision for a share of the trade: 1%, 10%, 60% — never "10.0%".
   const share = (v: bigint) => (r.quote === 0n ? "0%" : formatBps((v * 10_000n) / r.quote));
-  const token = r.launch ? `<a href="#/${mode === "demo" ? "demo" : "t"}/${r.launch.token.toLowerCase()}${routeChain()}">${esc(r.symbol ?? shortAddress(r.launch.token))}</a>` : `curve ${shortAddress(r.curve)} (no factory record)`;
-  return `<div class="stamp-row"><div class="who"><div class="cap-l">Trade receipt</div><div class="sym"><span class="t-${r.kind}"><span class="t-side">${r.kind}</span></span> ${token}</div><div class="name">by <span class="mono">${shortAddress(r.wallet)}</span> · block ${r.block.toLocaleString("en-US")}</div><button class="vaddr tokact" type="button" data-copy="${esc(r.hash)}" title="Copy ${esc(r.hash)}"><span class="mono">${esc(shortHash(r.hash))}</span><span class="tokact-i" aria-hidden="true">⧉</span></button></div>
-      <div class="stamp ${r.coverChargePart > 0n ? "no" : ""}">${r.coverChargePart > 0n ? `${share(r.coverChargePart)} DOOR TAX` : "NO DOOR TAX"}</div></div>
-    <section class="sec wide"><h2>Itemised</h2><dl class="kv">
-      <dt>${r.kind === "buy" ? "paid" : "received"}</dt><dd>${amt(r.quote)}</dd>
-      <dt>tokens</dt><dd><span class="mono">${esc(formatCoin(r.tokens, 18))}</span></dd>
-      <dt>protocol fee</dt><dd>${amt(r.fee)} · ${share(r.fee)}</dd>
-      <dt>creator tax</dt><dd>${amt(r.creatorTaxPart)} · ${share(r.creatorTaxPart)}</dd>
-      <dt>door tax</dt><dd>${amt(r.coverChargePart)} · ${share(r.coverChargePart)}<small class="gloss-line">the part of the tax above the creator's own rate</small></dd>
-      <dt>effective price</dt><dd>${mny(r.effectivePrice, qd.decimals, qd.symbol, qd.native, { price: true })} per token, fees included</dd>
-      <dt>curve price after</dt><dd>${r.marginalPriceAfter === null ? "not served by this RPC for that block" : `${mny(r.marginalPriceAfter, qd.decimals, qd.symbol, qd.native, { price: true })} per token`}</dd>
-    </dl></section>`;
+  const sym = r.symbol ?? (r.launch ? shortAddress(r.launch.token) : "unknown curve");
+  const side = r.kind === "buy" ? "Buy" : "Sell";
+  const door = r.coverChargePart > 0n;
+  const price = (v: bigint) => mny(v, qd.decimals, qd.symbol, qd.native, { price: true });
+  return pageCard({
+    kind: "tx",
+    avatar: tokenAvatar(r.launch?.token ?? r.curve, sym),
+    title: `<span class="t-${r.kind}"><span class="t-side">${side}</span></span> ${esc(sym)}`,
+    name: "trade receipt",
+    chips: `<span class="stamp ${door ? "no" : "yes"}">${door ? `${share(r.coverChargePart)} door tax` : "No door tax"}</span>`,
+    acts: `${copyAct(r.hash, shortHash(r.hash), "transaction hash")}${r.launch ? `<a class="tokact" href="${tokenHref(r.launch.token)}">Open ${esc(sym)}<span aria-hidden="true"> ›</span></a><a class="tokact" href="#/wallet/${r.launch.token.toLowerCase()}/${r.wallet.toLowerCase()}?chain=${linkChain()}">Wallet's bag<span aria-hidden="true"> ›</span></a>` : ""}${explorerLink("tx", r.hash)}`,
+    right: pageHero(amt(r.quote, true), r.kind === "buy" ? "paid" : "received"),
+    stats: [
+      stat("Tokens", esc(formatCoin(r.tokens, 18)), r.kind === "buy" ? "bought" : "sold"),
+      stat("Protocol fee", amt(r.fee, true), `${share(r.fee)} of the trade`),
+      stat("Creator tax", amt(r.creatorTaxPart, true), `${share(r.creatorTaxPart)} of the trade`),
+      stat("Door tax", amt(r.coverChargePart, true), `${share(r.coverChargePart)} · above the creator's rate`, door ? "stop" : ""),
+      stat("Effective price", mny(r.effectivePrice, qd.decimals, qd.symbol, qd.native, { price: true, split: true }), "per token, fees included"),
+    ],
+    main: panel("Itemised", "", infoList([
+      [r.kind === "buy" ? "Paid" : "Received", amt(r.quote)],
+      ["Tokens", `<span class="mono">${esc(formatCoin(r.tokens, 18))}</span>`],
+      ["Protocol fee", `${amt(r.fee)} <small>${share(r.fee)}</small>`],
+      ["Creator tax", `${amt(r.creatorTaxPart)} <small>${share(r.creatorTaxPart)}</small>`],
+      ["Door tax", `${amt(r.coverChargePart)} <small>${share(r.coverChargePart)} · the part of the tax above the creator's own rate</small>`],
+      ["Effective price", `${price(r.effectivePrice)} <small>per token, fees included</small>`],
+      ["Curve price after", r.marginalPriceAfter === null ? "<small>not served by this RPC for that block</small>" : `${price(r.marginalPriceAfter)} <small>per token</small>`],
+    ])),
+    side: panel("Trade", "", infoList([
+      ["Wallet", copyAct(r.wallet, shortAddress(r.wallet), "wallet address")],
+      ["Block", r.block.toLocaleString("en-US")],
+      ["Transaction", copyAct(r.hash, shortHash(r.hash), "transaction hash")],
+      ["Curve", r.launch ? copyAct(r.curve, shortAddress(r.curve), "curve address") : `${copyAct(r.curve, shortAddress(r.curve), "curve address")} <small>no factory record</small>`],
+    ])),
+  });
 }
 
 /** A transaction hash short enough to read: 0x3f2a…9c1d. */
@@ -4981,41 +5159,56 @@ function shortHash(hash: string): string {
 function renderPlan(plan: LaunchPlan): void {
   const qd = plan.quote;
   const c = chain();
-  const u = (v: bigint) => mny(v, qd.decimals, qd.symbol, qd.native);
+  const u = (v: bigint, split = false) => mny(v, qd.decimals, qd.symbol, qd.native, { split });
   const price = (v: bigint) => mny(v, qd.decimals, qd.symbol, qd.native, { price: true });
   const tokens = (v: bigint) => `<span class="mono">${esc(formatCoin(v, 18))}</span>`;
-  out.innerHTML = `<div class="slip">
-    <div class="stamp-row"><div class="who"><div class="cap-l">Launch planner</div><div class="sym">Plan a launch</div><div class="name">${esc(c.name)} · ${esc(c.launchpad ?? "no launchpad")}${plan.configEnabled ? "" : " · this config is disabled"} · quote ${esc(qd.symbol)} · block ${plan.block.toLocaleString("en-US")}</div>
-      <form class="plan-form" id="plan-form">
-        <label>creator tax, bps<input id="plan-tax" inputmode="numeric" value="${plan.creatorTaxBps}"></label>
-        <label>sample buy, ${esc(qd.symbol)}<input id="plan-buy" inputmode="decimal" value="${formatUnits(plan.sampleBuy, qd.decimals)}"></label>
-        <label class="wide">quote token <span>(blank = ${esc(c.native.symbol)})</span><input id="plan-quote" placeholder="0x…" value="${plan.pairToken === "0x0000000000000000000000000000000000000000" ? "" : plan.pairToken}"></label>
+  const multiple = (Number((plan.graduationPrice * 100n) / (plan.startPrice || 1n)) / 100).toFixed(1);
+  const curveShare = (Number((plan.tokensSoldOnCurve * 10_000n) / (plan.supply || 1n)) / 100).toFixed(1);
+  out.innerHTML = `<div class="slip">${pageCard({
+    kind: "plan",
+    avatar: pageIcon("plan"),
+    title: "Plan a launch",
+    name: `${esc(c.name)} · ${esc(c.launchpad ?? "no launchpad")}`,
+    chips: `<span class="stage">quote ${esc(qd.symbol)}</span><span class="stage">config ${plan.configId}</span>${plan.configEnabled ? "" : '<span class="stamp no">Config disabled</span>'}`,
+    acts: `<span class="pg-meta">read at block ${plan.block.toLocaleString("en-US")}</span>`,
+    right: pageHero(formatBps(plan.creatorTaxBps), "creator tax you picked"),
+    stats: [
+      stat("Launch fee", mny(plan.launchFee, c.native.decimals, c.native.symbol, true, { split: true }), "to the protocol"),
+      stat("Start price", mny(plan.startPrice, qd.decimals, qd.symbol, qd.native, { price: true, split: true }), "per token"),
+      stat("Graduation price", mny(plan.graduationPrice, qd.decimals, qd.symbol, qd.native, { price: true, split: true }), `${multiple}× the start`),
+      stat("Graduates at", u(plan.graduationThreshold, true), "raised on the curve"),
+      stat("FDV at graduation", u(plan.fdvAtGraduation, true), "price × supply"),
+      stat("Creator earns", u((plan.graduationThreshold * plan.creatorTaxBps) / 10_000n, true), "full curve, no sells"),
+    ],
+    main:
+      panel("Terms today", "set by the factory", infoList([
+        ["Launch fee", `${mny(plan.launchFee, c.native.decimals, c.native.symbol, true)} <small>to the protocol</small>`],
+        ["Supply", tokens(plan.supply)],
+        ["Curve", `graduates at ${u(plan.graduationThreshold)} <small>priced from a ${u(plan.phantomQuote)} virtual reserve</small>`],
+        ["Creator tax", `${formatBps(plan.creatorTaxBps)} of every curve trade <small>ceiling ${formatBps(plan.maxCreatorTaxBps)}</small>`],
+        ["Curve fee", `${formatBps(plan.curveFeeBps)} of every trade`],
+        ["Of which", `<small>${formatBps(plan.protocolFeeShareBps)} to the protocol; of the rest, ${formatBps(plan.buybackBurnBps)} to buyback and the remainder to the creator</small>`],
+        ["After graduation", `pool fee ${Number(plan.poolFeePpm) / 10_000}% · hook fee ${formatBps(plan.hookFeeBps)}`],
+        ["Door tax", `${formatBps(plan.snipe.startBps)} in the launch second <small>falling to 0% after ${plan.snipe.seconds} s</small>`],
+      ])) +
+      panel("What the curve does", "the contract's own arithmetic", infoList([
+        ["Start price", price(plan.startPrice)],
+        ["Graduation price", `${price(plan.graduationPrice)} <small>${multiple}× the start</small>`],
+        ["Sold on the curve", `${tokens(plan.tokensSoldOnCurve)} <small>${curveShare}% of supply</small>`],
+        ["Seeded into the pool", `${tokens(plan.tokensToPool)} + ${u(plan.graduationThreshold)} <small>locked</small>`],
+        ["FDV at graduation", u(plan.fdvAtGraduation)],
+      ])),
+    side:
+      panel("Try other terms", "", `<form class="plan-form" id="plan-form">
+        <label>Creator tax, bps<input id="plan-tax" inputmode="numeric" value="${plan.creatorTaxBps}"></label>
+        <label>Sample buy, ${esc(qd.symbol)}<input id="plan-buy" inputmode="decimal" value="${formatUnits(plan.sampleBuy, qd.decimals)}"></label>
+        <label class="wide">Quote token <span>(blank = ${esc(c.native.symbol)})</span><input id="plan-quote" placeholder="0x…" value="${plan.pairToken === "0x0000000000000000000000000000000000000000" ? "" : plan.pairToken}"></label>
         <button class="btn" type="submit">Recalculate</button>
-      </form></div>
-      <div class="stamp">${formatBps(plan.creatorTaxBps)} TAX</div></div>
-    <div class="grid">
-      <section class="sec"><h2>Terms today</h2><dl class="kv">
-        <dt>launch fee</dt><dd>${mny(plan.launchFee, c.native.decimals, c.native.symbol, true)} to the protocol</dd>
-        <dt>supply</dt><dd>${tokens(plan.supply)}</dd>
-        <dt>curve</dt><dd>graduates at ${u(plan.graduationThreshold)} · priced from a ${u(plan.phantomQuote)} virtual reserve</dd>
-        <dt>creator tax</dt><dd>${formatBps(plan.creatorTaxBps)} of every curve trade (ceiling ${formatBps(plan.maxCreatorTaxBps)})</dd>
-        <dt>curve fee</dt><dd>${formatBps(plan.curveFeeBps)} of every trade</dd>
-        <dt>of which</dt><dd>${formatBps(plan.protocolFeeShareBps)} to the protocol; of the rest, ${formatBps(plan.buybackBurnBps)} to buyback and the remainder to the creator</dd>
-        <dt>after graduation</dt><dd>pool fee ${Number(plan.poolFeePpm) / 10_000}% · hook fee ${formatBps(plan.hookFeeBps)}</dd>
-        <dt>door tax</dt><dd>${formatBps(plan.snipe.startBps)} in the launch second, falling to 0% after ${plan.snipe.seconds} s</dd>
-      </dl></section>
-      <section class="sec"><h2>What the curve does</h2><dl class="kv">
-        <dt>start price</dt><dd>${price(plan.startPrice)}</dd>
-        <dt>graduation price</dt><dd>${price(plan.graduationPrice)} · ${(Number((plan.graduationPrice * 100n) / (plan.startPrice || 1n)) / 100).toFixed(1)}× the start</dd>
-        <dt>sold on the curve</dt><dd>${tokens(plan.tokensSoldOnCurve)} tokens (${(Number((plan.tokensSoldOnCurve * 10_000n) / (plan.supply || 1n)) / 100).toFixed(1)}%)</dd>
-        <dt>seeded into the pool</dt><dd>${tokens(plan.tokensToPool)} tokens + ${u(plan.graduationThreshold)} · locked</dd>
-        <dt>FDV at graduation</dt><dd>${u(plan.fdvAtGraduation)}</dd>
-        <dt>creator earns</dt><dd>${u((plan.graduationThreshold * plan.creatorTaxBps) / 10_000n)} if the curve fills with no sells</dd>
-        <dt>a ${u(plan.sampleBuy)} buy in second 0</dt><dd>pays ${u(plan.sampleDoorCharge)} to the creator as door tax, unless the wallet is on the exemption list</dd>
-      </dl></section>
-    </div>
-    <p class="qdetail">Read from the factory and the hook at block ${plan.block.toLocaleString("en-US")}; the curve arithmetic is the contract's own. The factory owner can retune terms before you launch.</p>
-  </div>`;
+      </form>`) +
+      panel("A buy in the launch second", "", `<p class="pg-p lead-p">A ${u(plan.sampleBuy)} buy in second 0 pays <b>${u(plan.sampleDoorCharge)}</b> to the creator as door tax, unless the wallet is on the exemption list.</p>`),
+    note: `Read from the factory and the hook at block ${plan.block.toLocaleString("en-US")}; the curve arithmetic is the contract's own. The factory owner can retune terms before you launch.`,
+  })}</div>`;
+
   $("plan-form").addEventListener("submit", (e) => {
     e.preventDefault();
     const tax = $<HTMLInputElement>("plan-tax").value.trim() || "100";
