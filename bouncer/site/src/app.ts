@@ -33,6 +33,7 @@ import { lookalikeLine, registeredLookalikes } from "../../src/bouncer/lookalike
 import { MASCOT_SVG_INNER } from "../../src/bouncer/mascot.js";
 import { pageSubject } from "../../src/bouncer/pageSubject.js";
 import { oneCrewLine } from "../../src/bouncer/oneCrew.js";
+import { securityRows, type CheckRow } from "../../src/bouncer/security.js";
 import { moveProbes, POWER_MEANING, powerKinds, sellProbes } from "../../src/bouncer/openDoor.js";
 import { readLaunchPlan, type LaunchPlan } from "../../src/bouncer/planner.js";
 import { readPosition, type Position } from "../../src/bouncer/position.js";
@@ -1852,11 +1853,60 @@ function keyFindings(notes: DoorNote[], word: string): string {
   const loud = notes.filter((n) => (n.level === "stop" || n.level === "watch") && topicOf(n.code) !== "unread").sort((a, b) => RANK[a.level] - RANK[b.level]);
   if (!loud.length) return "";
   return `<div class="keyf">
-    <p class="whylead"><b>${esc(word)}</b> comes from ${loud.length === 1 ? "this finding" : `these ${loud.length} findings`}; everything else on the page is context.</p>
+    <p class="whylead">Why <b>${esc(word)}</b><span>${plural(loud.length, "finding")}</span></p>
     <ol class="whylist">${loud
       .map((n) => `<li><button class="keyf-row" type="button" data-q="${topicOf(n.code)}" data-code="${esc(n.code)}"><span class="whylvl ${n.level}">${LEVEL_WORD[n.level]}</span><span class="keyf-t">${esc(n.text)}</span></button></li>`)
       .join("")}</ol>
   </div>`;
+}
+
+/** "COPY · NOT A PONS V2 LAUNCH" → "Copy · not a Pons V2 launch": a label, not a shout. */
+function labelCase(text: string): string {
+  return text.toLowerCase().replace(/\bpons\b/g, "Pons").replace(/\bv(\d)\b/g, "V$1").replace(/\buniswap\b/g, "Uniswap").replace(/^./, (c) => c.toUpperCase());
+}
+
+const CHECK_MARK: Record<CheckRow["tone"], string> = { ok: "✓", warn: "!", stop: "✕", unknown: "?" };
+
+/** Every safety fact the slip read, one row each, with a mark a thumb can scan. */
+function securityPanel(slip: DoorSlip): string {
+  const rows = securityRows(slip);
+  if (!rows.length) return "";
+  const bad = rows.filter((r) => r.tone === "stop" || r.tone === "warn").length;
+  return `<section class="panel sec-panel" aria-labelledby="sec-h">
+    <div class="panel-head"><h3 id="sec-h">Security</h3><span class="panel-sub">${bad ? `${plural(bad, "flag")} of ${rows.length}` : `${rows.length} checks, nothing flagged`}</span></div>
+    <ul class="checks">${rows
+      .map((r) => `<li class="check ${r.tone}"${r.hint ? ` title="${esc(r.hint)}"` : ""}><span class="check-i" aria-hidden="true">${CHECK_MARK[r.tone]}</span><span class="check-l">${esc(r.label)}${r.hint && r.tone !== "ok" ? `<small>${esc(r.hint)}</small>` : ""}</span><span class="check-v">${esc(r.value)}</span></li>`)
+      .join("")}</ul>
+  </section>`;
+}
+
+/** The token's identity in one place: addresses, dates, supply, where it trades. */
+function infoPanel(slip: DoorSlip): string {
+  const l = slip.id.launch;
+  const meta = slip.id.meta;
+  const ex = (a: string) => (mode === "live" ? explorerAddress(chain(), a) : null);
+  const addr = (a: string, label = shortAddress(a)) => {
+    const href = ex(a);
+    return `<button class="vaddr tokact info-addr" type="button" data-copy="${esc(a)}" title="Copy ${esc(a)}"><span class="mono">${esc(label)}</span><span class="tokact-i" aria-hidden="true">⧉</span></button>${href ? ` <a class="info-x" href="${esc(href)}" target="_blank" rel="noopener" aria-label="Open on the explorer">↗</a>` : ""}`;
+  };
+  const created = slip.cover?.launch.timestamp ?? slip.open?.deployer?.createdAt ?? null;
+  const deployer = l?.deployer ?? slip.open?.deployer?.address ?? null;
+  const rows: [string, string][] = [];
+  rows.push(["Contract", addr(slip.subject)]);
+  if (deployer) rows.push(["Deployer", `${addr(deployer)} <a class="info-x" href="#/dev/${esc(deployer)}${routeChain()}">history ›</a>`]);
+  if (slip.rules) rows.push(["Creator tax to", addr(slip.rules.creatorFeeRecipient)]);
+  if (created) rows.push(["Created", `${esc(humanUtc(created))}${slip.launchBlock ? ` <small>block ${slip.launchBlock.toLocaleString("en-US")}</small>` : ""}`]);
+  if (meta) rows.push(["Supply", `${esc(formatCoin(meta.totalSupply, meta.decimals))} <small>${esc(meta.totalSupply === 0n ? "" : (meta.totalSupply / 10n ** BigInt(meta.decimals)).toLocaleString("en-US"))} · ${meta.decimals} decimals</small>`]);
+  if (slip.rules) rows.push(["Pair", `${esc(slip.rules.quote.symbol)}${slip.rules.quote.native ? " <small>the chain's coin</small>" : ""}`]);
+  if (l) rows.push(["Curve", addr(l.curve)]);
+  if (slip.exit?.pool) rows.push(["Pool", `Uniswap V4 <small class="mono">${esc(slip.exit.pool.poolId.slice(0, 10))}…</small>`]);
+  rows.push(["Chain", `${esc(slip.chain.name)}${slip.chain.launchpad && slip.id.registered ? ` · ${esc(slip.id.launchpad === "v1" ? "Pons V1" : slip.chain.launchpad)}` : ""}`]);
+  // Open beside the chart on a wide screen; one tap away on a narrow one,
+  // where it would otherwise sit between the reader and the questions.
+  return `<details class="panel info-panel"${window.matchMedia?.("(min-width:1061px)").matches ? " open" : ""}>
+    <summary class="panel-head"><h3>Token info</h3><span class="panel-sub">contract, deployer, supply, pair</span></summary>
+    <dl class="info">${rows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join("")}</dl>
+  </details>`;
 }
 
 /**
@@ -1942,6 +1992,11 @@ function doorBlock(opts: {
   venues?: string;
   /** A way out that belongs beside the verdict: the genuine token behind a fake copy. */
   alert?: string;
+  /** The checklist and the identity panel, under the findings in the rail. */
+  security?: string;
+  info?: string;
+  /** The live tape, under the chart, inside the card. */
+  tape?: string;
   /**
    * The completeness band and the what-changed band.
    *
@@ -1995,7 +2050,7 @@ function doorBlock(opts: {
           <div class="tokline">
             <span class="sym">${opts.sym}</span>
             <span class="name">${opts.name}</span>
-            <span class="stamp ${stampTone(opts.stampKind)}">${opts.stamp}</span>
+            <span class="stamp ${stampTone(opts.stampKind)}">${labelCase(opts.stamp)}</span>
             ${opts.stageTag ?? ""}
           </div>
           <div class="tokacts">
@@ -2008,21 +2063,24 @@ function doorBlock(opts: {
       ${opts.price ?? ""}
       ${opts.frames ?? ""}
     </div>
+    ${opts.facts?.length ? `<div class="stats">${factsBlock(opts.facts)}</div>` : ""}
     <aside class="doorman">
       <div class="stand">
-        <img class="mascot" src="${MASCOT_URL}" alt="" width="64" height="64">
         <div class="verdict">
+          <span class="vlabel">Verdict</span>
           <span class="vword ${v.kind}" aria-label="Verdict">${v.word}</span>
           <p class="lead">${esc(v.line)}${pending}</p>
         </div>
       </div>
-      ${opts.alert ?? ""}
       ${opts.bands ?? ""}
+      ${opts.alert ?? ""}
       ${stage === "done" ? keyFindings(opts.notes, v.word) : ""}
-      ${opts.facts?.length ? factsBlock(opts.facts) : ""}
+      ${opts.security ?? ""}
+      ${opts.info ?? ""}
       ${opts.venues ?? ""}
     </aside>
     ${opts.chart ?? ""}
+    ${opts.tape ?? ""}
     <div class="list">
       <div class="list-head">
         <h2>Guest list</h2>
@@ -2842,7 +2900,7 @@ function tradeRow(x: Trade, t: TapeView): string {
   const share = x.shareBps === null ? "n/a" : shareText(x.shareBps);
   const big = x.shareBps !== null && x.shareBps >= 500;
   return `<tr class="t-${x.side}${t.fresh.has(key) ? " fresh" : ""}">
-    <td class="t-ago">${esc(agoOf(x.block, t.head))}</td>
+    <td class="t-ago">${t.source.kind === "curve" && x.tx ? `<a href="#/tx/${esc(x.tx)}?chain=${linkChain()}" title="block ${x.block} — the trade's receipt">${esc(agoOf(x.block, t.head))}</a>` : `<span title="block ${x.block}">${esc(agoOf(x.block, t.head))}</span>`}</td>
     <td><span class="t-side">${x.side}</span></td>
     ${usd !== null ? `<td class="t-num" title="${esc(formatCoin(x.quote, t.quote.decimals))} ${esc(t.quote.symbol)}">${esc(formatUsd(usd))}</td>` : ""}
     <td class="t-num${usd !== null ? " c-coin" : ""}">${esc(formatCoin(x.quote, t.quote.decimals))}</td>
@@ -3217,7 +3275,7 @@ function factsBlock(facts: Fact[]): string {
   const pendingTape = (f: Fact) => f.value === null && /tape below/.test(f.why ?? "");
   const cells = rail.filter((f) => f.value !== null || pendingTape(f));
   const missing = rail.filter((f) => f.value === null && !pendingTape(f));
-  return `<div class="facts">${cells.map(factCell).join("")}${
+  return `<div class="facts" style="--n:${Math.max(1, cells.length)}">${cells.map(factCell).join("")}${
     missing.length
       ? `<div class="fact-miss"><b>Not read</b> ${missing.map((f) => `${esc(f.label.toLowerCase())} <span>— ${esc(f.why ?? "no reading")}</span>`).join(" · ")}</div>`
       : ""
@@ -4490,6 +4548,9 @@ function renderSlip(slip: DoorSlip, opts: { stage?: Stage; source?: Source } = {
       frames: "",
       venues: venueList(slip.open?.pools, slip.rules?.quote ?? slip.chain.native, slip.id.meta?.decimals ?? 18, slipNative(slip)),
       alert: realOne(slip),
+      security: stage0 === "done" ? securityPanel(slip) : "",
+      info: infoPanel(slip),
+      tape: stage0 === "done" ? ("why" in picked ? tapeNone(picked.why) : `<section class="tape" id="tape"></section>`) : "",
       bands: `${coverage ? coverageBand(coverage, stage0) : ""}${changes ?? ""}`,
       evidence,
       more: moreStack([
@@ -4500,7 +4561,6 @@ function renderSlip(slip: DoorSlip, opts: { stage?: Stage; source?: Source } = {
     })}
     <div class="card-wrap" id="card"></div>
     ${stage0 === "done" ? buyStrip(mode === "demo" ? "" : slip.chain.key, slip.subject, Boolean(slip.id.meta) && slip.open?.transferFunction !== false, verdictOf(slip.notes, "done", coverage).kind) : ""}
-    ${stage0 === "done" ? ("why" in picked ? tapeNone(picked.why) : `<section class="tape" id="tape"></section>`) : ""}
   </div>`;
 
   paintMinibar();

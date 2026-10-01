@@ -34,7 +34,13 @@ const WIDTHS = [
 // Measured on the ordinary-token demo slip: 2070 px at 1280, 2666 at 768,
 // 3863 at 390. A narrow window is taller for the same content, so the
 // ceiling follows the width rather than pretending one number fits.
-const TALL = { 390: 4400, 768: 3050, 1280: 2400 };
+// Raised once, on purpose, for the redesign that put a Security checklist
+// (up to fifteen rows) and a Token info panel on the page because readers
+// asked to see every fact in one place. Measured after it: the impostor slip
+// at 2885 px on a laptop, the launch with the column open at 4620 on a phone
+// and 3856 on a tablet. The ceiling sits a little above those, so the next
+// spread still trips it.
+const TALL = { 390: 4900, 768: 4100, 1280: 3100 };
 
 const ROUTES = [
   { hash: "", what: "the first load" },
