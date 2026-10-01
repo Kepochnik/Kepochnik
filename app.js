@@ -5803,7 +5803,7 @@
         wallets2.set(who, w);
       }
       if (isBuy) {
-        const spent = log.args.quoteIn - log.args.fee - log.args.tax;
+        const spent = log.args.quoteIn;
         buys++;
         w.buys++;
         w.quoteIn += spent;
@@ -7730,6 +7730,7 @@
     const curveNative = /* @__PURE__ */ new Map();
     let launches = 0;
     let graduations = 0;
+    let graduatedEarlierLaunches = 0;
     for (const l of ledger.logs) {
       const token = String(l.args.token).toLowerCase();
       if (l.name === "TokenLaunched") {
@@ -7749,6 +7750,7 @@
         graduations++;
         const d = tokenToDeployer.get(token);
         if (d) byDeployer.get(d).graduated++;
+        else graduatedEarlierLaunches++;
       }
     }
     const rows = [...byDeployer.values()];
@@ -7819,7 +7821,7 @@
       topPayers = [...perPayer.values()].sort((a, b) => b.coverPaid > a.coverPaid ? 1 : -1).slice(0, top);
       otherPairCurves = otherPairs.size;
     }
-    return { window: { fromBlock: options.fromBlock, toBlock: options.toBlock }, launches, graduations, deployers: rows.length, topDeployers, serial, coverTotal, taxedBuys, topCurves, topPayers, otherPairCurves, chunks };
+    return { window: { fromBlock: options.fromBlock, toBlock: options.toBlock }, launches, graduations, deployers: rows.length, topDeployers, serial, coverTotal, taxedBuys, topCurves, topPayers, otherPairCurves, graduatedEarlierLaunches, chunks };
   }
 
   // src/bouncer/watch.ts
@@ -8540,7 +8542,7 @@
     );
     const supply = meta?.totalSupply ?? null;
     facts2.push(
-      spot !== null && supply ? { label: "Market cap", value: formatMoney(spot * supply / 10n ** BigInt(decimals), quote.decimals, quote.symbol, quoteUsd), note: "price \xD7 supply", source: "derived" } : { label: "Market cap", value: null, note: "price \xD7 supply", source: "derived", why: spot === null ? "no price to multiply" : "the supply could not be read" }
+      spot !== null && supply ? { label: "Market cap", value: formatMoney(spot * supply / 10n ** BigInt(decimals), quote.decimals, quote.symbol, quoteUsd), note: `spot at block ${slip.at.block} \xD7 supply`, source: "derived" } : { label: "Market cap", value: null, note: "price \xD7 supply", source: "derived", why: spot === null ? "no price to multiply" : "the supply could not be read" }
     );
     const fill = !found && exit?.venue === "curve" ? slip.rules?.fill ?? null : null;
     const liquid = found?.quoteReserve ?? fill?.real ?? null;
@@ -9133,11 +9135,11 @@
     }
   });
   var toastTimer = null;
-  function showToast(text) {
+  function showToast(text, ms = 1600) {
     toast.textContent = text;
     toast.classList.add("on");
     if (toastTimer) clearTimeout(toastTimer);
-    toastTimer = window.setTimeout(() => toast.classList.remove("on"), 1600);
+    toastTimer = window.setTimeout(() => toast.classList.remove("on"), ms);
   }
   function busy(text) {
     go.disabled = true;
@@ -9540,11 +9542,11 @@
     <div class="grid">
       <section class="sec"><h2>Tonight</h2><div class="exit-grid">
         <div><span>launches</span><b class="num">${b.launches}</b></div>
-        <div><span>graduations</span><b class="num">${b.graduations}</b></div>
+        <div><span>graduations</span><b class="num">${b.graduations}</b>${b.graduatedEarlierLaunches ? `<span>${b.graduatedEarlierLaunches} launched before the window</span>` : ""}</div>
         <div><span>deployers</span><b class="num">${b.deployers}</b></div>
         <div><span>door tax paid</span><b class="num">${amt(b.coverTotal)}</b><span>${b.taxedBuys} buy${b.taxedBuys === 1 ? "" : "s"}</span></div>
       </div><p class="qdetail">Door tax = the extra a buyer paid to the creator in a launch's first seconds, on top of the normal fees \u2014 read from each curve's own CurveBuy events. Counts, not scores.${b.otherPairCurves ? ` ${plural(b.otherPairCurves, "curve")} paired with another token also took door tax; ${b.otherPairCurves === 1 ? "its amounts are" : "their amounts are"} in that token's units, so ${b.otherPairCurves === 1 ? "it is" : "they are"} left out of these totals rather than added to ${esc2(qd.symbol)}.` : ""}</p></section>
-      <section class="sec"><h2>Deployers</h2>${b.topDeployers.length ? `<div class="tbl"><table class="buys"><thead><tr><th>deployer</th><th class="num">launched</th><th class="num">graduated</th><th class="num">swept</th></tr></thead><tbody>${b.topDeployers.map((r) => `<tr><td>${dev(r.deployer)}</td><td class="num">${r.launched}</td><td class="num">${r.graduated}</td><td class="num">${Math.max(0, r.swept - r.graduated)}</td></tr>`).join("")}</tbody></table></div>` : none("No launches in the window.")}
+      <section class="sec"><h2>Deployers</h2>${b.topDeployers.length ? `<div class="tbl"><table class="buys"><thead><tr><th>deployer</th><th class="num">launched</th><th class="num" title="of the launches in this window">graduated</th><th class="num">swept</th></tr></thead><tbody>${b.topDeployers.map((r) => `<tr><td>${dev(r.deployer)}</td><td class="num">${r.launched}</td><td class="num">${r.graduated}</td><td class="num">${Math.max(0, r.swept - r.graduated)}</td></tr>`).join("")}</tbody></table></div>` : none("No launches in the window.")}
         ${b.serial.length ? `<h2 style="margin-top:14px">Serial, no graduation</h2><div class="tbl"><table class="buys"><tbody>${b.serial.map((r) => `<tr><td>${dev(r.deployer)}</td><td>${r.launched} launched, none graduated</td></tr>`).join("")}</tbody></table></div>` : ""}</section>
       <section class="sec wide"><h2>Door tax by token</h2>${b.topCurves.length ? `<div class="tbl"><table class="buys"><thead><tr><th>token</th><th class="num">collected</th><th class="num">buys</th><th class="num">highest</th><th class="num">creator tax</th></tr></thead><tbody>${b.topCurves.map((r) => `<tr><td>${link(r.token ?? r.curve)}</td><td class="num">${amt(r.coverCollected)}</td><td class="num">${r.taxedBuys}</td><td class="num">${(r.highestBps / 100).toFixed(1)}%</td><td class="num">${formatBps(r.creatorTaxBps)}</td></tr>`).join("")}</tbody></table></div>` : none("No buy in the window paid above the creator rate.")}</section>
       <section class="sec"><h2>Door tax by wallet</h2>${b.topPayers.length ? `<div class="tbl"><table class="buys"><thead><tr><th>wallet</th><th class="num">door tax paid</th><th class="num">buys</th></tr></thead><tbody>${b.topPayers.map((r) => `<tr><td><span class="mono">${shortAddress(r.wallet)}</span></td><td class="num">${amt(r.coverPaid)}</td><td class="num">${r.buys}</td></tr>`).join("")}</tbody></table></div>` : none("Nobody paid door tax in the window.")}</section>
@@ -9593,19 +9595,22 @@
     <div class="watch-state" id="watch-state"></div>
     <div class="events"></div>`;
   }
+  var watchMemo = /* @__PURE__ */ new WeakMap();
   function startWatch(slip, plan, panel, button) {
     const list = panel.querySelector(".events");
     const state = panel.querySelector(".watch-state");
     const everyMs = mode === "demo" ? 5e3 : 15e3;
     const back = plan.mode === "launch" ? mode === "demo" ? 3e5 : -1 : Math.round(600 * chain().blocksPerSecond);
     const from = back < 0 ? slip.at.block + 1 : Math.max(0, slip.at.block - back);
-    let cursor = from;
+    const memo = watchMemo.get(panel) ?? { cursor: from, keys: /* @__PURE__ */ new Set(), seen: 0 };
+    watchMemo.set(panel, memo);
+    let cursor = memo.cursor;
     let rounds = 0;
     let lastAt = Date.now();
     let head = null;
     let lag = null;
     let failing = null;
-    let seen = 0;
+    let seen = memo.seen;
     let clock = 0;
     const add = (html, quiet = false) => {
       const el = document.createElement("div");
@@ -9639,10 +9644,15 @@
         if (at >= cursor) {
           const events = plan.mode === "launch" ? await readWatchEvents(rpc, slip.id.launch, { fromBlock: cursor, toBlock: at, crew: plan.crew, factory: factoryFor(), quote: slip.rules?.quote ?? chain().native, chunkSize: mode === "demo" ? 1e5 : void 0 }) : await readTokenWatchEvents(rpc, slip.subject, { fromBlock: cursor, toBlock: at, pools: plan.pools, watch: plan.wallets, supply: plan.supply, decimals: plan.decimals, minShareBps: plan.minShareBps, chunkSize: mode === "demo" ? 5e3 : void 0 });
           cursor = at + 1;
+          memo.cursor = cursor;
           for (const e of events) {
+            const key = `${e.block}:${e.kind}:${e.text}`;
+            if (memo.keys.has(key)) continue;
+            memo.keys.add(key);
             const label = WATCH_LABEL[e.kind] ?? e.kind;
             add(`<span class="b">${e.block}</span><span class="k">${esc2(label)}</span><span>${esc2(e.text)}</span>`);
             seen++;
+            memo.seen = seen;
             try {
               if (Notification.permission === "granted") new Notification(`BOUNCER \xB7 ${slip.id.meta?.symbol ?? "watch"}`, { body: `${label}: ${e.text}` });
             } catch {
@@ -9705,6 +9715,7 @@
   }
   function verdictOf(notes, stage = "done", coverage) {
     const v = readVerdict(notes, coverage ?? null, stage);
+    if (stage === "done" && coverage?.state === "thin" && v.kind !== "incomplete") return { word: v.word, kind: v.kind, line: readVerdict(notes, null, stage).line };
     return { word: v.word, kind: v.kind, line: v.line };
   }
   var HISTORY_KEY = "bouncer.seen.v1";
@@ -9789,9 +9800,9 @@
     const retry = coverage.retryable ? `<button class="ghost" id="act-retry" type="button">Read the missing parts again</button>` : "";
     const n = coverage.gaps.length + coverage.limits.length;
     return `<section class="band gap" data-coverage="${coverage.state}">
-    <span class="bandword">${coverage.state === "thin" ? "Incomplete" : "Partial"}</span>
+    <span class="bandword">${coverage.state === "thin" ? "Not fully read" : "Gaps"}</span>
     <div class="bandtext">
-      <b>${coverage.read} of ${coverage.asked} checks answered.</b> ${esc2(coverage.line)}
+      <b>${coverage.read} of ${coverage.asked} checks answered.</b> ${esc2(coverage.line.replace(/^./, (c) => c.toUpperCase()))}
       ${n ? `<details class="bandmore"><summary>${n} thing${n === 1 ? "" : "s"} it did not tell you</summary><ul class="chgrows">${rows}</ul></details>` : ""}
       ${retry ? `<span class="bandact">${retry}</span>` : ""}
     </div>
@@ -9813,17 +9824,30 @@
     <ol class="whylist">${loud.map((n) => `<li><button class="keyf-row" type="button" data-q="${topicOf(n.code)}" data-code="${esc2(n.code)}"><span class="whylvl ${n.level}">${LEVEL_WORD[n.level]}</span><span class="keyf-t">${esc2(n.text)}</span></button></li>`).join("")}</ol>
   </div>`;
   }
+  var TERMS = [
+    ["on the curve", "the launchpad sells the token itself from a price curve that rises with every buy"],
+    ["graduated", "the curve sold out and trading moved to a Uniswap V4 pool"],
+    ["swept", "the curve sold out and its money was collected, but no pool exists yet \u2014 nowhere to trade"],
+    ["door tax", "for the first seconds after launch a buy pays up to 99% extra to the creator, falling to zero"],
+    ["creator tax", "a cut of every buy and sell, paid to whoever the creator names"],
+    ["N\xD7 dev", "the same wallet launched N tokens in the window being shown"],
+    ["the tape", "every buy and sell as it happens, read from the chain"]
+  ];
+  var TERM = Object.fromEntries(TERMS);
+  function glossary() {
+    return `<details class="gloss"><summary>What the words mean</summary><dl>${TERMS.map(([k, v]) => `<dt>${esc2(k)}</dt><dd>${esc2(v)}</dd>`).join("")}</dl></details>`;
+  }
   function stageTag(slip) {
     const phase = slip.rules?.phase ?? slip.id.launch?.phase ?? null;
     if (phase === null || slip.id.v1) return "";
     if (phase === 0 /* NotGraduated */) {
       const fill = slip.rules?.fill;
-      if (!fill) return `<span class="stage curve">on the curve</span>`;
+      if (!fill) return `<span class="stage curve" title="${esc2(TERM["on the curve"])}">on the curve</span>`;
       const pct3 = Math.min(100, fill.bps / 100);
-      return `<span class="stage curve" title="${(fill.bps / 100).toFixed(1)}% of the way to graduating"><span class="stage-bar" aria-hidden="true"><i style="width:${Math.max(3, pct3).toFixed(1)}%"></i></span>on the curve \xB7 ${pct3.toFixed(0)}%</span>`;
+      return `<span class="stage curve" title="${(fill.bps / 100).toFixed(1)}% of the way to graduating \u2014 ${esc2(TERM["on the curve"])}"><span class="stage-bar" aria-hidden="true"><i style="width:${Math.max(3, pct3).toFixed(1)}%"></i></span>on the curve \xB7 ${pct3.toFixed(0)}%</span>`;
     }
-    if (phase === 1 /* Swept */) return `<span class="stage swept">swept \xB7 no pool yet</span>`;
-    return `<span class="stage grad">graduated \xB7 Uniswap V4</span>`;
+    if (phase === 1 /* Swept */) return `<span class="stage swept" title="${esc2(TERM.swept)}">swept \xB7 no pool yet</span>`;
+    return `<span class="stage grad" title="${esc2(TERM.graduated)}">graduated \xB7 Uniswap V4</span>`;
   }
   function tokenAvatar(address, sym) {
     const hex = address.replace(/^0x/i, "").toLowerCase();
@@ -9895,6 +9919,7 @@
         <span>the five questions asked before any money moves</span>
       </div>
       <div class="qs">${rows}${gap}</div>
+      ${stage === "done" ? glossary() : ""}
       ${opts.more ?? ""}
     </div>
   </section>
@@ -9932,7 +9957,7 @@
     const change = series && series.points.length > 1 ? seriesChangeBps(series) : null;
     const tone = change === null ? "flat" : change > 50 ? "up" : change < -50 ? "down" : "flat";
     const move = change === null || !series ? "" : `<span class="move ${tone}">${change > 0 ? "+" : ""}${(change / 100).toFixed(1)}%</span><span class="move-basis">${esc2(moveBasis(series))}</span>`;
-    const sub = lastPoint ? `last trade ${agoOf(lastPoint.block, t.head)} ago` : value !== null ? `read at block ${block}` : "no price read";
+    const sub = lastPoint ? `last trade ${agoOf(lastPoint.block, t.head)} ago` : value !== null ? `read at block ${block}` : shown?.slip.open?.pools === null ? "the pool read did not finish" : shown?.slip.open && !(shown.slip.open.pools ?? []).length ? "no pool on this chain's known DEXes" : "nothing to price it against";
     const usd2 = value !== null && m.quoteUsd !== null ? Number(value) / 10 ** m.quoteDecimals * m.quoteUsd : null;
     const coin = value === null ? "\u2014" : `${formatPrice(value, m.quoteDecimals)} ${m.quoteSymbol}`;
     return `<div class="tokprice" id="tokprice">
@@ -10123,6 +10148,12 @@
     }
   }
   var feedOn = false;
+  var unseenLaunches = 0;
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden || !unseenLaunches) return;
+    unseenLaunches = 0;
+    document.title = pageTitle;
+  });
   var feedState = null;
   var feedTimer = null;
   var feedClock = null;
@@ -10226,6 +10257,10 @@
           const added = feed.rows.filter((r) => !known.has(r.token));
           f.fresh = new Set(added.map((r) => r.token));
           f.rows = [...added, ...f.rows].slice(0, 60);
+          if (added.length && document.hidden) {
+            unseenLaunches += added.length;
+            document.title = `(${unseenLaunches} new) ${pageTitle}`;
+          }
         } else {
           f.fresh = /* @__PURE__ */ new Set();
         }
@@ -10266,7 +10301,7 @@
         return;
       }
       const when = feedBox.querySelector(".feed-when");
-      if (when) when.textContent = `${Math.max(0, Math.round((Date.now() - feedState.lastAt) / 1e3))} s ago`;
+      if (when) when.textContent = `${shortAge(Math.max(0, Math.round((Date.now() - feedState.lastAt) / 1e3)))} ago`;
     }, 1e3);
   }
   function paintFeed() {
@@ -10277,12 +10312,15 @@
     const here = openToken();
     const stalled = Boolean(f.failing);
     const kept = f.rows.filter(keepRow);
-    const body = kept.length ? `<div class="feed-rows">${kept.map((r) => feedRow(r, here)).join("")}</div>` : f.rows.length ? `<div class="feed-empty"><b>Nothing matches "${esc2(FEED_FILTERS.find((x) => x.key === feedFilter).label)}"</b>${f.rows.length} launch${f.rows.length === 1 ? "" : "es"} in the window, none of them ${esc2(FEED_FILTERS.find((x) => x.key === feedFilter).hint.replace(/^the |^every /, ""))}.</div>` : `<div class="feed-empty">${f.opening ? "<b>Reading the factory\u2026</b>walking back from the head for the launches that just happened" : f.head === null ? `<b>Could not read the launches</b>the chain did not answer, so this says nothing about whether anything launched. The column keeps trying every fifteen seconds.${mode === "demo" ? "" : `<a class="feed-demo" href="#/demo/${DEMO.tokens.fresh.token}">See how the board works on the invented demo chain</a>`}` : `<b>No launch in the window</b>nothing was launched between block ${f.from ?? "?"} and ${f.head}. The column keeps looking.`}</div>`;
+    const body = kept.length ? `<div class="feed-rows">${(() => {
+      const seen = new Map(loadHistory().filter((h) => h.chain === historyChain(chain().key)).map((h) => [h.address.toLowerCase(), h]));
+      return kept.map((r) => feedRow(r, here, seen.get(r.token.toLowerCase()) ?? null)).join("");
+    })()}</div>` : f.rows.length ? `<div class="feed-empty"><b>Nothing matches "${esc2(FEED_FILTERS.find((x) => x.key === feedFilter).label)}"</b>${f.rows.length} launch${f.rows.length === 1 ? "" : "es"} in the window, none of them ${esc2(FEED_FILTERS.find((x) => x.key === feedFilter).hint.replace(/^the |^every /, ""))}.</div>` : `<div class="feed-empty">${f.opening ? "<b>Reading the factory\u2026</b>walking back from the head for the launches that just happened" : f.head === null ? `<b>Launches not reachable right now</b>retrying every 15 s. This says nothing about whether anything launched \u2014 the chain's public endpoint did not answer this page.${mode === "demo" ? "" : `<a class="feed-demo" href="#/demo/${DEMO.tokens.fresh.token}">Meanwhile, see a check on the invented demo chain</a>`}` : `<b>No launch in the window</b>nothing was launched between block ${f.from ?? "?"} and ${f.head}. The column keeps looking.`}</div>`;
     feedBox.innerHTML = `<div class="feed-head">
       <h2>New launches</h2>
       <span class="feed-chain">${mode === "demo" ? "demo chain" : esc2(chain().name)}</span>
       ${livePill(stalled)}
-      <span class="fr-age feed-when">0 s ago</span>
+      <span class="fr-age feed-when">0s ago</span>
     </div>
     <div class="feed-filters" role="group" aria-label="Which launches">${FEED_FILTERS.map(
       (x) => `<button class="fchip${x.key === feedFilter ? " on" : ""}" type="button" data-filter="${x.key}" aria-pressed="${x.key === feedFilter}" title="${esc2(x.hint)}">${esc2(x.label)}</button>`
@@ -10311,17 +10349,17 @@
     <p class="pick-keys"><kbd>Ctrl</kbd><kbd>V</kbd> anywhere checks an address <kbd>/</kbd> search <kbd>j</kbd><kbd>k</kbd> move down the column <kbd>Enter</kbd> open</p>
   </div>`;
   }
-  function feedRow(r, here) {
+  function feedRow(r, here, seen = null) {
     const tags = [
-      r.graduated ? '<span class="ftag grad">graduated</span>' : "",
-      r.swept && !r.graduated ? '<span class="ftag swept">swept, no pool</span>' : "",
-      r.deployerLaunches > 1 ? `<span class="ftag serial">${r.deployerLaunches}\xD7 dev</span>` : ""
+      r.graduated ? `<span class="ftag grad" title="${esc2(TERM.graduated)}">graduated</span>` : "",
+      r.swept && !r.graduated ? `<span class="ftag swept" title="${esc2(TERM.swept)}">swept, no pool</span>` : "",
+      r.deployerLaunches > 1 ? `<span class="ftag serial" title="${esc2(TERM["N\xD7 dev"].replace(/N/g, String(r.deployerLaunches)))}">${r.deployerLaunches}\xD7 dev</span>` : ""
     ].filter(Boolean).join("");
     const sym = r.symbol ?? "no ticker";
     const name = r.name ?? shortAddress(r.token);
     const fill = r.fill && !r.graduated && !r.swept ? `<span class="fr-fill${r.fill.bps >= 7e3 ? " near" : ""}" role="img" aria-label="${(r.fill.bps / 100).toFixed(0)}% of the way to graduating"><i style="width:${Math.max(2, r.fill.bps / 100).toFixed(1)}%"></i></span><span class="fr-pct">${(r.fill.bps / 100).toFixed(0)}%</span>` : `<span class="fr-fill hold" aria-hidden="true"></span><span class="fr-pct" aria-hidden="true"></span>`;
     return `<button class="fr${here === r.token ? " on" : ""}${feedState?.fresh.has(r.token) ? " fresh" : ""}" type="button" data-token="${esc2(r.token)}">
-    <span class="fr-sym">${esc2(sym)}</span>
+    <span class="fr-sym">${esc2(sym)}${seen ? ` <span class="vmini ${kindOf(seen.verdict)} fr-seen" title="you read ${esc2(seen.verdict)} ${esc2(ago(Math.floor(Date.now() / 1e3) - seen.at))} ago \u2014 not a reading of now">${esc2(seen.verdict.slice(0, 1))}</span>` : ""}</span>
     <span class="fr-age">${esc2(r.ageSeconds === null ? `block ${r.block}` : shortAge(r.ageSeconds))}</span>
     <span class="fr-name">${esc2(name)}</span>
     <span class="fr-tags">${tags}</span>
@@ -10420,7 +10458,7 @@
     const explorer = mode === "live" ? explorerAddress(chain(), x.wallet) : null;
     const link = t.source.kind === "curve" && token ? `<a class="t-w" href="#/wallet/${esc2(token)}/${esc2(x.wallet)}?chain=${linkChain()}" title="${esc2(x.wallet)} \u2014 their bag in this token">${esc2(short2)}</a>` : explorer ? `<a class="t-w" href="${esc2(explorer)}" target="_blank" rel="noopener" title="${esc2(x.wallet)}">${esc2(short2)}</a>` : `<span class="t-w" title="${esc2(x.wallet)}">${esc2(short2)}</span>`;
     const who = tapeRole(x.wallet);
-    return who ? `${link} <span class="flag t-role ${who === "dev" ? "bad" : ""}">${who}</span>` : link;
+    return who ? `${link} <span class="flag t-role${who.bad ? " bad" : ""}" title="${esc2(who.why)}">${esc2(who.tag)}</span>` : link;
   }
   function blockCell(x, t) {
     return t.source.kind === "curve" && x.tx ? `<a href="#/tx/${esc2(x.tx)}?chain=${linkChain()}" title="the trade's receipt">${x.block}</a>` : String(x.block);
@@ -10430,9 +10468,14 @@
     if (!slip) return null;
     const w = wallet.toLowerCase();
     const dev = slip.id.launch?.deployer.toLowerCase() ?? slip.open?.deployer?.address.toLowerCase() ?? null;
-    if (dev && w === dev) return "dev";
+    if (dev && w === dev) return { tag: "dev", bad: true, why: "the wallet that deployed this token" };
     const recipient = slip.rules?.creatorFeeRecipient.toLowerCase() ?? null;
-    if (recipient && w === recipient) return "creator";
+    if (recipient && w === recipient) return { tag: "creator", bad: false, why: "the wallet the creator tax is paid to" };
+    const crew = slip.crew;
+    if (crew?.fundedByCreator.some((a) => a.toLowerCase() === w)) return { tag: "dev-funded", bad: true, why: "funded by the creator's own wallets before it bought" };
+    const group = crew?.crews.find((c) => c.wallets.some((a) => a.toLowerCase() === w));
+    if (group) return { tag: "bundle", bad: true, why: `one of ${group.wallets.length} first buyers all funded by ${shortAddress(group.funder)} before the launch` };
+    if (slip.room?.first.some((a) => a.toLowerCase() === w)) return { tag: "early", bad: false, why: "one of the first buyers after launch" };
     return null;
   }
   function shareText(bps3) {
@@ -10706,7 +10749,7 @@
         <polygon points="${area}" fill="url(#chart-wash)"/>
         <polyline points="${line}" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" vector-effect="non-scaling-stroke"/>
       </svg>
-      ${flat ? `<span class="chart-hi" style="top:50%">${esc2(px(range.high))} \xB7 flat</span>` : `<span class="chart-hi">${esc2(px(range.high))}</span>
+      ${flat ? `<span class="chart-hi" style="top:50%">${esc2(px(range.high))}</span>` : `<span class="chart-hi">${esc2(px(range.high))}</span>
       <span class="chart-lo">${esc2(px(range.low))}</span>`}
       <span class="chart-dot" style="top:${(last[1] / H * 100).toFixed(2)}%"></span>
       <span class="chart-xh" hidden></span>
@@ -10714,7 +10757,7 @@
     </div>
     <div class="chart-axis" aria-hidden="true"><span>${esc2(agoOf(x0, tape?.head ?? null))} ago</span><span>now</span></div>
     <div class="chart-foot">
-      <span>${plural(series.swaps, "trade")} \xB7 ${esc2(series.venue)}</span>
+      <span>${plural(series.swaps, "trade")} \xB7 ${esc2(series.venue)}${flat ? " \xB7 flat over the window" : ""}</span>
       <span class="hint-hover">hover or use the arrow keys to read a point</span><span class="hint-touch">tap or drag along the line to read a point</span>
     </div>
   </div>`;
@@ -11023,7 +11066,7 @@
       }
     });
     $("act-link").addEventListener("click", async () => {
-      const url = `${location.origin}${location.pathname}#/t/${slip.subject}?chain=${chain().key}`;
+      const url = `${location.origin}${location.pathname}#/t/${slip.subject}?chain=${chain().key}&w=${frame}`;
       try {
         await navigator.clipboard.writeText(url);
         showToast("Link copied");
@@ -11310,11 +11353,11 @@
         <div class="wallet-row"><input id="wallet-q" placeholder="your wallet 0x\u2026 to see your own bag on this token" spellcheck="false"><button class="ghost" id="wallet-go" type="button">Show my bag</button></div>` : "";
     const roomBody = room ? `<dl class="kv">
         <dt>since launch</dt><dd>${esc2(roomLine(room))}</dd>
-        <dt>bought</dt><dd>${amt(room.totalQuoteIn)} after fees \xB7 ${plural(room.buys, "buy")} \xB7 ${plural(room.sells, "sell")}</dd></dl>
-        ${room.wallets.length ? `<div class="tbl"><table class="buys"><thead><tr><th>wallet</th><th>in, after fees</th><th>out</th><th>buys</th></tr></thead><tbody>${[...room.wallets].sort((a, b) => Number(b.creatorWallet) - Number(a.creatorWallet) || (b.quoteIn > a.quoteIn ? 1 : b.quoteIn < a.quoteIn ? -1 : 0)).slice(0, 8).map((w) => `<tr><td>${shortAddress(w.address)}${w.creatorWallet ? ' <span class="flag">creator</span>' : ""}</td><td>${amt(w.quoteIn)}</td><td>${w.quoteOut ? amt(w.quoteOut) : "\u2014"}</td><td>${w.buys}</td></tr>`).join("")}</tbody></table></div>${moreRows(room.wallets.length, 8, "wallet")}` : ""}` : "";
+        <dt>bought</dt><dd>${amt(room.totalQuoteIn)} paid in \xB7 ${plural(room.buys, "buy")} \xB7 ${plural(room.sells, "sell")}</dd></dl>
+        ${room.wallets.length ? `<div class="tbl"><table class="buys"><thead><tr><th>wallet</th><th>paid in</th><th>out</th><th>buys</th></tr></thead><tbody>${[...room.wallets].sort((a, b) => Number(b.creatorWallet) - Number(a.creatorWallet) || (b.quoteIn > a.quoteIn ? 1 : b.quoteIn < a.quoteIn ? -1 : 0)).slice(0, 8).map((w) => `<tr><td>${shortAddress(w.address)}${w.creatorWallet ? ' <span class="flag">creator</span>' : ""}</td><td>${amt(w.quoteIn)}</td><td>${w.quoteOut ? amt(w.quoteOut) : "\u2014"}</td><td>${w.buys}</td></tr>`).join("")}</tbody></table></div>${moreRows(room.wallets.length, 8, "wallet")}` : ""}` : "";
     const crewBody = crew ? `<dl class="kv"><dt>first buyers</dt><dd>${esc2(oneCrewLine(crew))}</dd>
         ${crew.crews.slice(0, 3).map((cr, i) => `<dt>group ${i + 1}</dt><dd>${plural(cr.wallets.length, "wallet")} ${cr.wallets.length === 1 ? "was" : "were all"} funded by <span class="mono">${shortAddress(cr.funder)}</span> before the launch \xB7 together ${(cr.shareBps / 100).toFixed(1)}% of all buys</dd>`).join("")}</dl>
-        <div class="tbl"><table class="buys"><thead><tr><th>wallet</th><th>got its money from</th><th>bought, after fees</th></tr></thead><tbody>${crew.wallets.slice(0, 10).map((w) => `<tr><td>${shortAddress(w.address)}</td><td>${w.creatorWallet ? '<span class="flag">creator wallet</span>' : w.funder ? `<span class="mono">${shortAddress(w.funder)}</span> <small style="color:var(--dim)">block ${w.fundedAtBlock}</small>` : '<span style="color:var(--dim)">not traced</span>'}</td><td>${amt(w.quoteIn)}</td></tr>`).join("")}</tbody></table></div>${moreRows(crew.wallets.length, 10, "wallet", "first")}` : "";
+        <div class="tbl"><table class="buys"><thead><tr><th>wallet</th><th>got its money from</th><th>paid in</th></tr></thead><tbody>${crew.wallets.slice(0, 10).map((w) => `<tr><td>${shortAddress(w.address)}</td><td>${w.creatorWallet ? '<span class="flag">creator wallet</span>' : w.funder ? `<span class="mono">${shortAddress(w.funder)}</span> <small style="color:var(--dim)">block ${w.fundedAtBlock}</small>` : '<span style="color:var(--dim)">not traced</span>'}</td><td>${amt(w.quoteIn)}</td></tr>`).join("")}</tbody></table></div>${moreRows(crew.wallets.length, 10, "wallet", "first")}` : "";
     const lookBody = l ? `<h3 class="cap">Tokens carrying this ticker</h3><dl class="kv"><dt>${esc2(l.query)}</dt><dd>${esc2(lookalikeLine(l))}</dd></dl>
         <h3 class="cap">Every one found <b>\xB7 the factory decides, not the name</b></h3><div class="tbl"><table class="buys"><thead><tr><th>address</th><th>from the factory?</th><th>stage</th><th>launch block</th></tr></thead><tbody>${l.candidates.slice(0, 8).map((x) => `<tr><td><a href="#/${mode === "demo" ? "demo" : "t"}/${x.address}${routeChain()}">${shortAddress(x.address)}</a>${x.address === l.subject ? " \xB7 this one" : ""}</td><td>${x.registered ? '<span class="flag ok">yes</span>' : '<span class="flag bad">no</span>'}</td><td>${x.phase !== null ? PHASE_LABEL[x.phase] : "\u2014"}</td><td>${x.launchBlock ?? "\u2014"}</td></tr>`).join("")}</tbody></table></div>` : "";
     const offer = doorWatch(slip);
@@ -11396,7 +11439,7 @@
       }
     });
     $("act-link").addEventListener("click", async () => {
-      const url = `${location.origin}${location.pathname}#/${mode === "demo" ? "demo" : "t"}/${slip.subject}${routeChain()}`;
+      const url = `${location.origin}${location.pathname}#/${mode === "demo" ? "demo" : "t"}/${slip.subject}${routeChain() ? `${routeChain()}&` : "?"}w=${frame}`;
       try {
         await navigator.clipboard.writeText(url);
         showToast("Link copied");
@@ -11687,6 +11730,18 @@
       if (run === doorRun) go.disabled = false;
     });
   }
+  function paintIntro(isToken) {
+    const box = document.getElementById("intro");
+    if (!box) return;
+    const show = isToken && !loadHistory().length && storage("bouncer.intro") !== "0";
+    box.hidden = !show;
+    if (!show) return;
+    box.innerHTML = `<span><b>BOUNCER</b> reads this token straight from the chain and answers five questions before you buy. <b class="s">STOP</b> can cost you money \xB7 <b class="w">WATCH</b> read first \xB7 <b class="c">CLEAR</b> nothing stood out. Nothing is signed.</span><button class="intro-x" type="button" aria-label="Hide this">\u2715</button>`;
+    box.querySelector("button")?.addEventListener("click", () => {
+      storage("bouncer.intro", "0");
+      box.hidden = true;
+    });
+  }
   function home() {
     document.body.classList.add("front");
     setPageTitle(BASE_TITLE);
@@ -11708,8 +11763,12 @@
     const [path, query = ""] = raw.split("?");
     const params = new URLSearchParams(query);
     const parts = path.split("/").filter(Boolean);
-    if (!parts.length) return home();
+    if (!parts.length) {
+      paintIntro(false);
+      return home();
+    }
     document.body.classList.remove("front");
+    paintIntro(parts[0] === "t" || parts[0] === "demo");
     const chainParam = params.get("chain");
     const wantDemo = parts[0] === "demo" || chainParam === "demo";
     if (wantDemo && mode !== "demo") setMode("demo", true);
@@ -11831,6 +11890,13 @@
         const next = `#/t/${isSolanaAddress(showing) && !ADDR.test(showing) ? showing : showing.toLowerCase()}?chain=${to}`;
         if (location.hash !== next) location.hash = next;
         else void route();
+      } else if (view !== "door" && out.innerHTML.trim()) {
+        const [path, query = ""] = location.hash.split("?");
+        const params = new URLSearchParams(query);
+        params.set("chain", chainSelect.value === "auto" ? chain().key : chainSelect.value);
+        const next = `${path}?${params.toString()}`;
+        if (location.hash !== next) location.hash = next;
+        else void route();
       }
     });
     settingsToggle.addEventListener("click", () => {
@@ -11923,6 +11989,29 @@
         const next = rows[Math.max(0, Math.min(rows.length - 1, from + (event.key === "j" ? 1 : -1)))] ?? rows[0];
         next.focus();
         next.scrollIntoView({ block: "nearest" });
+        event.preventDefault();
+        return;
+      }
+      const slipOpen = Boolean(shown && out.querySelector(".doorway"));
+      if (event.key === "c" && slipOpen) {
+        const address = shown.slip.subject;
+        void navigator.clipboard.writeText(address).then(() => showToast(`Copied ${shortAddress(address)}`), () => showToast(address));
+        event.preventDefault();
+      } else if (event.key === "w" && slipOpen) {
+        document.getElementById("act-watch")?.click();
+        document.getElementById("s-watch")?.setAttribute("open", "");
+        event.preventDefault();
+      } else if (/^[1-4]$/.test(event.key) && slipOpen) {
+        setFrame(FRAMES[Number(event.key) - 1]);
+        event.preventDefault();
+      } else if ((event.key === "[" || event.key === "]") && feedOn) {
+        const rows = [...feedBox.querySelectorAll(".fr")];
+        const at = rows.findIndex((r) => r.classList.contains("on"));
+        const to = rows[Math.max(0, Math.min(rows.length - 1, (at < 0 ? -1 : at) + (event.key === "]" ? 1 : -1)))];
+        to?.click();
+        event.preventDefault();
+      } else if (event.key === "?") {
+        showToast("/ search \xB7 Ctrl+V check \xB7 j k move \xB7 [ ] prev/next launch \xB7 c copy CA \xB7 w watch \xB7 1\u20134 window", 5e3);
         event.preventDefault();
       }
     });
