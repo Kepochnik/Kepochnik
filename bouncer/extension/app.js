@@ -9150,11 +9150,30 @@
     if (!rail) return;
     railWatch.observe(rail);
     rail.classList.toggle("fits", rail.scrollHeight <= window.innerHeight - 76);
+    const card = rail.closest(".doorway");
+    if (!card) return;
+    const wide = window.matchMedia?.("(min-width:1100px) and (min-height:620px)").matches ?? false;
+    if (!wide) {
+      card.classList.remove("fit");
+      return;
+    }
+    card.classList.add("fit");
+    const top = card.getBoundingClientRect().top + window.scrollY;
+    const foot = (document.querySelector(".vfoot")?.offsetHeight ?? 0) + 14;
+    const fit = Math.max(520, Math.floor(window.innerHeight - top - foot));
+    card.style.setProperty("--fit", `${fit}px`);
+    requestAnimationFrame(() => railMore(rail));
   }
   window.addEventListener("resize", () => {
     fitRail();
     markScrollers();
   });
+  function railMore(rail) {
+    rail.classList.toggle("more", rail.scrollTop + rail.clientHeight < rail.scrollHeight - 4);
+  }
+  document.addEventListener("scroll", (event) => {
+    if (event.target instanceof HTMLElement && event.target.classList.contains("doorman")) railMore(event.target);
+  }, true);
   function markScrollers() {
     for (const box of document.querySelectorAll(".tbl")) {
       const scrolls = box.scrollWidth > box.clientWidth + 2;
@@ -9884,7 +9903,7 @@
     return `<section class="band gap" data-coverage="${coverage.state}">
     <span class="bandword">${coverage.state === "thin" ? "Not fully read" : "Gaps"}</span>
     <div class="bandtext">
-      <b>${coverage.read} of ${coverage.asked} checks answered.</b> ${esc2(coverage.line.replace(/^./, (c) => c.toUpperCase()))}
+      <b>${coverage.read} of ${coverage.asked} checks answered.</b> <span class="band-line">${esc2(coverage.line.replace(/^./, (c) => c.toUpperCase()))}</span>
       ${n ? `<details class="bandmore"><summary>${n} thing${n === 1 ? "" : "s"} it did not tell you</summary><ul class="chgrows">${rows}</ul></details>` : ""}
       ${retry ? `<span class="bandact">${retry}</span>` : ""}
     </div>
@@ -9909,6 +9928,22 @@
   function labelCase(text) {
     return text.toLowerCase().replace(/\bpons\b/g, "Pons").replace(/\bv(\d)\b/g, "V$1").replace(/\buniswap\b/g, "Uniswap").replace(/^./, (c) => c.toUpperCase());
   }
+  var activeTab = ["trades", "questions", "findings", "info"].includes(storage("bouncer.tab")) ? storage("bouncer.tab") : "trades";
+  function tabsBar(notes, hasTape) {
+    const loud = notes.filter((n) => (n.level === "stop" || n.level === "watch") && topicOf(n.code) !== "unread").length;
+    const tab = (key, label, count) => `<button class="tab" role="tab" type="button" data-tab="${key}" aria-selected="${activeTab === key || key === "questions" && !hasTape && activeTab === "trades"}">${label}${count ? `<span class="tab-n">${count}</span>` : ""}</button>`;
+    return `<div class="tabs" role="tablist" aria-label="Details">${hasTape ? tab("trades", "Trades") : ""}${tab("questions", "Five questions")}${tab("findings", "Findings", loud)}${tab("info", "Token info")}</div>`;
+  }
+  function showTab(key) {
+    activeTab = key;
+    storage("bouncer.tab", key);
+    for (const b of document.querySelectorAll(".doorway .tab")) b.setAttribute("aria-selected", String(b.dataset.tab === key));
+    for (const p of document.querySelectorAll(".doorway .tabpanel")) p.hidden = p.dataset.panel !== key;
+  }
+  document.addEventListener("click", (event) => {
+    const b = event.target?.closest(".doorway .tab");
+    if (b?.dataset.tab) showTab(b.dataset.tab);
+  });
   var CHECK_MARK = { ok: "\u2713", warn: "!", stop: "\u2715", unknown: "?" };
   function securityPanel(slip) {
     const rows = securityRows(slip);
@@ -9939,10 +9974,9 @@
     if (l) rows.push(["Curve", addr(l.curve)]);
     if (slip.exit?.pool) rows.push(["Pool", `Uniswap V4 <small class="mono">${esc2(slip.exit.pool.poolId.slice(0, 10))}\u2026</small>`]);
     rows.push(["Chain", `${esc2(slip.chain.name)}${slip.chain.launchpad && slip.id.registered ? ` \xB7 ${esc2(slip.id.launchpad === "v1" ? "Pons V1" : slip.chain.launchpad)}` : ""}`]);
-    return `<details class="panel info-panel"${window.matchMedia?.("(min-width:1061px)").matches ? " open" : ""}>
-    <summary class="panel-head"><h3>Token info</h3><span class="panel-sub">contract, deployer, supply, pair</span></summary>
+    return `<section class="panel info-panel">
     <dl class="info">${rows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join("")}</dl>
-  </details>`;
+  </section>`;
   }
   var TERMS = [
     ["on the curve", "the launchpad sells the token itself from a price curve that rises with every buy"],
@@ -9997,6 +10031,7 @@
       },
       opts.evidence.unread ?? ""
     ) : "";
+    const hasTrades = Boolean(opts.tape) && !/class="tape-empty"/.test(opts.tape ?? "") || Boolean(opts.tape?.includes('id="tape"></section>'));
     return `<section class="doorway head v-${v.kind}"${stage === "done" ? "" : ' data-pending="1"'}>
     <div class="tokbar">
       <div class="tokid">
@@ -10029,21 +10064,25 @@
       </div>
       ${opts.bands ?? ""}
       ${opts.alert ?? ""}
-      ${stage === "done" ? keyFindings(opts.notes, v.word) : ""}
       ${opts.security ?? ""}
-      ${opts.info ?? ""}
       ${opts.venues ?? ""}
+      ${opts.buy ?? ""}
     </aside>
-    ${opts.chart ?? ""}
-    ${opts.tape ?? ""}
-    <div class="list">
-      <div class="list-head">
-        <h2>Guest list</h2>
-        <span>the five questions asked before any money moves</span>
+    <div class="center">
+      ${opts.chart ?? ""}
+      ${tabsBar(stage === "done" ? opts.notes : [], hasTrades)}
+      <div class="tabpanel" data-panel="trades"${activeTab === "trades" && hasTrades ? "" : " hidden"}>${opts.tape ?? ""}</div>
+      <div class="tabpanel list" data-panel="questions"${activeTab === "questions" || activeTab === "trades" && !hasTrades ? "" : " hidden"}>
+        <div class="list-head">
+          <h2>Guest list</h2>
+          <span>the five questions asked before any money moves</span>
+        </div>
+        <div class="qs">${rows}${gap}</div>
+        ${stage === "done" ? glossary() : ""}
+        ${opts.more ?? ""}
       </div>
-      <div class="qs">${rows}${gap}</div>
-      ${stage === "done" ? glossary() : ""}
-      ${opts.more ?? ""}
+      <div class="tabpanel" data-panel="info"${activeTab === "info" ? "" : " hidden"}>${opts.info ?? ""}</div>
+      <div class="tabpanel" data-panel="findings"${activeTab === "findings" ? "" : " hidden"}>${stage === "done" ? keyFindings(opts.notes, v.word) || '<p class="qdetail tab-empty">Nothing loud was found: no STOP and no WATCH finding.</p>' : ""}</div>
     </div>
   </section>
   <div class="vfoot"><span class="vat">${opts.at}</span><div class="vacts">${opts.actions}</div></div>`;
@@ -11260,7 +11299,7 @@
     const real = impostorOf(slip);
     if (!real) return "";
     return `<a class="realone" href="#/${mode === "demo" ? "demo" : "t"}/${esc2(real.address)}${routeChain()}">
-    <span>The ${esc2(slip.chain.launchpad ?? "launchpad")}'s own ${esc2(slip.lookalikes.query)} is <b class="mono">${esc2(shortAddress(real.address))}</b>, launched earlier.</span>
+    <span>Real ${esc2(slip.lookalikes.query)}: <b class="mono">${esc2(shortAddress(real.address))}</b></span>
     <span class="realone-go">Check that one <span aria-hidden="true">\u2192</span></span>
   </a>`;
   }
@@ -11519,6 +11558,7 @@
       alert: realOne(slip),
       security: stage0 === "done" ? securityPanel(slip) : "",
       info: infoPanel(slip),
+      buy: stage0 === "done" ? buyStrip(mode === "demo" ? "" : slip.chain.key, slip.subject, Boolean(slip.id.meta) && slip.open?.transferFunction !== false, verdictOf(slip.notes, "done", coverage).kind) : "",
       tape: stage0 === "done" ? "why" in picked ? tapeNone(picked.why) : `<section class="tape" id="tape"></section>` : "",
       bands: `${coverage ? coverageBand(coverage, stage0) : ""}${changes ?? ""}`,
       evidence,
@@ -11529,7 +11569,7 @@
       actions: `<button class="ghost primary" id="act-share" type="button">Copy card</button><button class="ghost" id="act-card" type="button">Preview</button><button class="ghost" id="act-link" type="button">Copy link</button><button class="ghost" id="act-json" type="button">JSON</button>`
     })}
     <div class="card-wrap" id="card"></div>
-    ${stage0 === "done" ? buyStrip(mode === "demo" ? "" : slip.chain.key, slip.subject, Boolean(slip.id.meta) && slip.open?.transferFunction !== false, verdictOf(slip.notes, "done", coverage).kind) : ""}
+
   </div>`;
     paintMinibar();
     if (stage0 === "done") setPageTitle(`${meta?.symbol ?? shortAddress(slip.subject)} \xB7 ${verdictOf(slip.notes, "done", coverage).word} \xB7 BOUNCER`);
@@ -11847,12 +11887,14 @@
   function routeChain() {
     return mode === "demo" ? "" : `?chain=${chain().key}`;
   }
+  var routeRun = 0;
   function start(begin) {
-    const run = ++doorRun;
+    doorRun++;
+    const run = ++routeRun;
     void begin().catch((error) => {
-      if (run === doorRun) failed(error, q.value.trim());
+      if (run === routeRun) failed(error, q.value.trim());
     }).finally(() => {
-      if (run === doorRun) go.disabled = false;
+      if (run === routeRun) go.disabled = false;
     });
   }
   function paintIntro(isToken) {
@@ -12143,6 +12185,7 @@
     out.addEventListener("click", (event) => {
       const row = event.target.closest("[data-q]");
       if (!row?.dataset.q) return;
+      showTab("questions");
       const q2 = document.getElementById(`q-${row.dataset.q}`);
       if (!q2) return;
       q2.open = true;

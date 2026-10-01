@@ -140,6 +140,11 @@ async function waitForVerdict(page, ms = 40_000) {
  * waiting for the render the reader actually keeps.
  */
 /** The column is on by default now; this opens it only if a remembered choice turned it off. */
+/** The five questions live in a tab now; a journey that works in them opens it first. */
+async function openQuestions(page) {
+  await page.evaluate(() => document.querySelector('.doorway .tab[data-tab="questions"]')?.click());
+}
+
 async function openFeed(page) {
   const pressed = await page.$eval("#feed-toggle", (el) => el.getAttribute("aria-pressed"));
   if (pressed !== "true") await page.click("#feed-toggle");
@@ -494,6 +499,7 @@ await walk("the exit calculator answers for a size, or says why it cannot", asyn
   // matters. A token with a healthy price over a thin pool is not an exit.
   await page.goto(`${url}#/demo/0x00000000000000000000000000000000000f2e54`, { waitUntil: "load" });
   await waitForDone(page);
+  await openQuestions(page);
   await page.evaluate(() => document.querySelector("#q-exit")?.setAttribute("open", ""));
   if (!(await page.$("#calc-size"))) throw new Error("no exit calculator on a slip that has a priceable venue");
 
@@ -524,6 +530,7 @@ await walk("the exit calculator answers for a size, or says why it cannot", asyn
   // quotes zero — the failure this whole release is about.
   await page.goto(`${url}#/demo/0x0000000000000000000000000000000000f1a1a1`, { waitUntil: "load" });
   await waitForDone(page);
+  await openQuestions(page);
   await page.evaluate(() => document.querySelector("#q-exit")?.setAttribute("open", ""));
   await page.fill("#calc-size", "1000");
   await page.click("#calc-go");
@@ -676,6 +683,7 @@ await walk("an ordinary token can be watched, and the watch says what it cannot 
   // than "this page was only wired up for one kind of token".
   await page.goto(`${url}#/demo/0x0000000000000000000000000000000000f1a1a1`, { waitUntil: "load" });
   await waitForDone(page);
+  await openQuestions(page);
   const sec = await page.$("#s-watch");
   if (!sec) throw new Error("an ordinary token was offered no watch at all");
   await page.evaluate(() => document.querySelector("#s-watch")?.setAttribute("open", ""));
@@ -753,7 +761,9 @@ await walk("the column of launches opens a token without losing itself", async (
   await openFeed(page);
   await page.waitForFunction(() => document.querySelectorAll("#feed .fr").length > 0, null, { timeout: 30_000 });
 
-  const first = await page.$eval("#feed .fr .fr-sym", (el) => el.textContent.trim());
+  // The ticker alone: a launch already checked carries a small verdict mark beside it.
+  const symOf = (el) => (el.firstChild?.textContent ?? el.textContent).trim();
+  const first = await page.$eval("#feed .fr .fr-sym", symOf);
   const note = await page.$eval("#feed .feed-note", (el) => el.textContent.replace(/\s+/g, " ").trim());
   if (!/between block \d+ and \d+/.test(note)) throw new Error(`the column does not say which blocks it read: "${note}"`);
 
@@ -765,7 +775,7 @@ await walk("the column of launches opens a token without losing itself", async (
 
   const stillThere = await page.$$eval("#feed .fr", (els) => els.length);
   if (!stillThere) throw new Error("clicking a row emptied the column it was clicked in");
-  const marked = await page.$eval("#feed .fr.on .fr-sym", (el) => el.textContent.trim()).catch(() => null);
+  const marked = await page.$eval("#feed .fr.on .fr-sym", symOf).catch(() => null);
   if (!marked) throw new Error("the column does not mark the launch now open");
   if (marked === first) throw new Error("clicking the last row marked the first one");
   const shown = await page.$eval(".who2 .sym", (el) => el.textContent.trim());

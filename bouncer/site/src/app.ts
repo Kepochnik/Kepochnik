@@ -571,8 +571,31 @@ function fitRail(): void {
   if (!rail) return;
   railWatch.observe(rail);
   rail.classList.toggle("fits", rail.scrollHeight <= window.innerHeight - 76);
+  // One screen on a desktop: the card takes the height left under the
+  // search box, and its panels share it. Below a usable height it stays a
+  // page that scrolls, rather than squeezing everything into slits.
+  const card = rail.closest<HTMLElement>(".doorway");
+  if (!card) return;
+  const wide = window.matchMedia?.("(min-width:1100px) and (min-height:620px)").matches ?? false;
+  if (!wide) { card.classList.remove("fit"); return; }
+  // The class first: it shrinks what is above the card, and the height is
+  // measured from where the card starts once that has happened.
+  card.classList.add("fit");
+  const top = card.getBoundingClientRect().top + window.scrollY;
+  const foot = (document.querySelector<HTMLElement>(".vfoot")?.offsetHeight ?? 0) + 14;
+  const fit = Math.max(520, Math.floor(window.innerHeight - top - foot));
+  card.style.setProperty("--fit", `${fit}px`);
+  requestAnimationFrame(() => railMore(rail));
 }
 window.addEventListener("resize", () => { fitRail(); markScrollers(); });
+
+/** A rail with more under its fold fades at the foot until it is scrolled there. */
+function railMore(rail: HTMLElement): void {
+  rail.classList.toggle("more", rail.scrollTop + rail.clientHeight < rail.scrollHeight - 4);
+}
+document.addEventListener("scroll", (event) => {
+  if (event.target instanceof HTMLElement && event.target.classList.contains("doorman")) railMore(event.target);
+}, true);
 
 /** A table wider than its box fades at the edge, so a hidden column is visibly there. */
 function markScrollers(): void {
@@ -1776,7 +1799,7 @@ function coverageBand(coverage: Coverage, stage: Stage): string {
   return `<section class="band gap" data-coverage="${coverage.state}">
     <span class="bandword">${coverage.state === "thin" ? "Not fully read" : "Gaps"}</span>
     <div class="bandtext">
-      <b>${coverage.read} of ${coverage.asked} checks answered.</b> ${esc(coverage.line.replace(/^./, (c) => c.toUpperCase()))}
+      <b>${coverage.read} of ${coverage.asked} checks answered.</b> <span class="band-line">${esc(coverage.line.replace(/^./, (c) => c.toUpperCase()))}</span>
       ${n ? `<details class="bandmore"><summary>${n} thing${n === 1 ? "" : "s"} it did not tell you</summary><ul class="chgrows">${rows}</ul></details>` : ""}
       ${retry ? `<span class="bandact">${retry}</span>` : ""}
     </div>
@@ -1865,6 +1888,33 @@ function labelCase(text: string): string {
   return text.toLowerCase().replace(/\bpons\b/g, "Pons").replace(/\bv(\d)\b/g, "V$1").replace(/\buniswap\b/g, "Uniswap").replace(/^./, (c) => c.toUpperCase());
 }
 
+/**
+ * One screen, not a scroll. The trades, the five questions and the findings
+ * share the space under the chart as tabs; the verdict and the checklist sit
+ * beside them. The tab a reader chose stays chosen across tokens.
+ */
+type Tab = "trades" | "questions" | "findings" | "info";
+let activeTab: Tab = (["trades", "questions", "findings", "info"] as Tab[]).includes(storage("bouncer.tab") as Tab) ? (storage("bouncer.tab") as Tab) : "trades";
+
+function tabsBar(notes: DoorNote[], hasTape: boolean): string {
+  const loud = notes.filter((n) => (n.level === "stop" || n.level === "watch") && topicOf(n.code) !== "unread").length;
+  const tab = (key: Tab, label: string, count?: number) =>
+    `<button class="tab" role="tab" type="button" data-tab="${key}" aria-selected="${activeTab === key || (key === "questions" && !hasTape && activeTab === "trades")}">${label}${count ? `<span class="tab-n">${count}</span>` : ""}</button>`;
+  return `<div class="tabs" role="tablist" aria-label="Details">${hasTape ? tab("trades", "Trades") : ""}${tab("questions", "Five questions")}${tab("findings", "Findings", loud)}${tab("info", "Token info")}</div>`;
+}
+
+function showTab(key: Tab): void {
+  activeTab = key;
+  storage("bouncer.tab", key);
+  for (const b of document.querySelectorAll<HTMLElement>(".doorway .tab")) b.setAttribute("aria-selected", String(b.dataset.tab === key));
+  for (const p of document.querySelectorAll<HTMLElement>(".doorway .tabpanel")) p.hidden = p.dataset.panel !== key;
+}
+
+document.addEventListener("click", (event) => {
+  const b = (event.target as HTMLElement | null)?.closest<HTMLElement>(".doorway .tab");
+  if (b?.dataset.tab) showTab(b.dataset.tab as Tab);
+});
+
 const CHECK_MARK: Record<CheckRow["tone"], string> = { ok: "✓", warn: "!", stop: "✕", unknown: "?" };
 
 /** Every safety fact the slip read, one row each, with a mark a thumb can scan. */
@@ -1903,10 +1953,9 @@ function infoPanel(slip: DoorSlip): string {
   rows.push(["Chain", `${esc(slip.chain.name)}${slip.chain.launchpad && slip.id.registered ? ` · ${esc(slip.id.launchpad === "v1" ? "Pons V1" : slip.chain.launchpad)}` : ""}`]);
   // Open beside the chart on a wide screen; one tap away on a narrow one,
   // where it would otherwise sit between the reader and the questions.
-  return `<details class="panel info-panel"${window.matchMedia?.("(min-width:1061px)").matches ? " open" : ""}>
-    <summary class="panel-head"><h3>Token info</h3><span class="panel-sub">contract, deployer, supply, pair</span></summary>
+  return `<section class="panel info-panel">
     <dl class="info">${rows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join("")}</dl>
-  </details>`;
+  </section>`;
 }
 
 /**
@@ -1997,6 +2046,8 @@ function doorBlock(opts: {
   info?: string;
   /** The live tape, under the chart, inside the card. */
   tape?: string;
+  /** The venue buttons, at the foot of the rail. */
+  buy?: string;
   /**
    * The completeness band and the what-changed band.
    *
@@ -2040,6 +2091,9 @@ function doorBlock(opts: {
       )
     : "";
 
+  // A token with no pool has no trades to show: its trades tab would be an
+  // apology in the best seat, so the questions take it.
+  const hasTrades = Boolean(opts.tape) && !/class="tape-empty"/.test(opts.tape ?? "") || Boolean(opts.tape?.includes('id="tape"></section>'));
   // `data-pending` is a contract with speed-check and stage-check: a slip is
   // COMPLETE by the absence of this marker.
   return `<section class="doorway head v-${v.kind}"${stage === "done" ? "" : ' data-pending="1"'}>
@@ -2074,21 +2128,25 @@ function doorBlock(opts: {
       </div>
       ${opts.bands ?? ""}
       ${opts.alert ?? ""}
-      ${stage === "done" ? keyFindings(opts.notes, v.word) : ""}
       ${opts.security ?? ""}
-      ${opts.info ?? ""}
       ${opts.venues ?? ""}
+      ${opts.buy ?? ""}
     </aside>
-    ${opts.chart ?? ""}
-    ${opts.tape ?? ""}
-    <div class="list">
-      <div class="list-head">
-        <h2>Guest list</h2>
-        <span>the five questions asked before any money moves</span>
+    <div class="center">
+      ${opts.chart ?? ""}
+      ${tabsBar(stage === "done" ? opts.notes : [], hasTrades)}
+      <div class="tabpanel" data-panel="trades"${activeTab === "trades" && hasTrades ? "" : " hidden"}>${opts.tape ?? ""}</div>
+      <div class="tabpanel list" data-panel="questions"${activeTab === "questions" || (activeTab === "trades" && !hasTrades) ? "" : " hidden"}>
+        <div class="list-head">
+          <h2>Guest list</h2>
+          <span>the five questions asked before any money moves</span>
+        </div>
+        <div class="qs">${rows}${gap}</div>
+        ${stage === "done" ? glossary() : ""}
+        ${opts.more ?? ""}
       </div>
-      <div class="qs">${rows}${gap}</div>
-      ${stage === "done" ? glossary() : ""}
-      ${opts.more ?? ""}
+      <div class="tabpanel" data-panel="info"${activeTab === "info" ? "" : " hidden"}>${opts.info ?? ""}</div>
+      <div class="tabpanel" data-panel="findings"${activeTab === "findings" ? "" : " hidden"}>${stage === "done" ? keyFindings(opts.notes, v.word) || '<p class="qdetail tab-empty">Nothing loud was found: no STOP and no WATCH finding.</p>' : ""}</div>
     </div>
   </section>
   <div class="vfoot"><span class="vat">${opts.at}</span><div class="vacts">${opts.actions}</div></div>`;
@@ -4111,7 +4169,7 @@ function realOne(slip: DoorSlip): string {
   const real = impostorOf(slip);
   if (!real) return "";
   return `<a class="realone" href="#/${mode === "demo" ? "demo" : "t"}/${esc(real.address)}${routeChain()}">
-    <span>The ${esc(slip.chain.launchpad ?? "launchpad")}'s own ${esc(slip.lookalikes!.query)} is <b class="mono">${esc(shortAddress(real.address))}</b>, launched earlier.</span>
+    <span>Real ${esc(slip.lookalikes!.query)}: <b class="mono">${esc(shortAddress(real.address))}</b></span>
     <span class="realone-go">Check that one <span aria-hidden="true">→</span></span>
   </a>`;
 }
@@ -4550,6 +4608,7 @@ function renderSlip(slip: DoorSlip, opts: { stage?: Stage; source?: Source } = {
       alert: realOne(slip),
       security: stage0 === "done" ? securityPanel(slip) : "",
       info: infoPanel(slip),
+      buy: stage0 === "done" ? buyStrip(mode === "demo" ? "" : slip.chain.key, slip.subject, Boolean(slip.id.meta) && slip.open?.transferFunction !== false, verdictOf(slip.notes, "done", coverage).kind) : "",
       tape: stage0 === "done" ? ("why" in picked ? tapeNone(picked.why) : `<section class="tape" id="tape"></section>`) : "",
       bands: `${coverage ? coverageBand(coverage, stage0) : ""}${changes ?? ""}`,
       evidence,
@@ -4560,7 +4619,7 @@ function renderSlip(slip: DoorSlip, opts: { stage?: Stage; source?: Source } = {
       actions: `<button class="ghost primary" id="act-share" type="button">Copy card</button><button class="ghost" id="act-card" type="button">Preview</button><button class="ghost" id="act-link" type="button">Copy link</button><button class="ghost" id="act-json" type="button">JSON</button>`,
     })}
     <div class="card-wrap" id="card"></div>
-    ${stage0 === "done" ? buyStrip(mode === "demo" ? "" : slip.chain.key, slip.subject, Boolean(slip.id.meta) && slip.open?.transferFunction !== false, verdictOf(slip.notes, "done", coverage).kind) : ""}
+
   </div>`;
 
   paintMinibar();
@@ -5010,17 +5069,21 @@ function routeChain(): string {
  * and the new one, which means before the call, which means the call
  * has to still be in our hands when we get here.
  */
+/** Bumped by every route; a route's own reads may bump doorRun again, so this one is separate. */
+let routeRun = 0;
+
 function start(begin: () => Promise<void>): void {
-  const run = ++doorRun;
+  doorRun++;
+  const run = ++routeRun;
   void begin()
     .catch((error: unknown) => {
       // A view that throws past its own handling still has to say so
       // rather than leave a spinner and a dead button — unless a newer
       // route has taken the page, which it must not be painted over.
-      if (run === doorRun) failed(error, q.value.trim());
+      if (run === routeRun) failed(error, q.value.trim());
     })
     .finally(() => {
-      if (run === doorRun) go.disabled = false;
+      if (run === routeRun) go.disabled = false;
     });
 }
 
@@ -5399,6 +5462,7 @@ function boot(): void {
   out.addEventListener("click", (event) => {
     const row = (event.target as HTMLElement).closest<HTMLElement>("[data-q]");
     if (!row?.dataset.q) return;
+    showTab("questions");
     const q = document.getElementById(`q-${row.dataset.q}`) as HTMLDetailsElement | null;
     if (!q) return;
     q.open = true;

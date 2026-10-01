@@ -348,7 +348,7 @@ td .m{white-space:nowrap}
 /* The price line: the widest thing on the token, because on a trading
    screen it is the thing the eye goes to. 2px line, a 20% wash under it,
    hairline grid, the latest point pulsing, a crosshair that finds the X. */
-.doorway>.chartbox{grid-area:chart;min-width:0;padding:18px 24px 16px;border-bottom:1px solid var(--line)}
+.doorway>.chartbox,.center>.chartbox{grid-area:chart;min-width:0;padding:18px 24px 16px;border-bottom:1px solid var(--line)}
 .chart-head{display:flex;align-items:center;gap:10px}
 .chart-win{color:var(--dimmer);font-size:12px}
 .chart-head .move{margin-left:auto;font-family:var(--num);font-size:12.5px;font-weight:600}
@@ -1075,7 +1075,7 @@ table.buys tr.exempt td:first-child{box-shadow:inset 2px 0 0 var(--line-3)}
   .buy{padding:16px}
   .buy-link{grid-template-columns:auto minmax(0,1fr)}
   .buy-go{grid-column:1/-1;justify-content:center;min-height:44px}
-  .doorway>.chartbox{padding-left:16px;padding-right:16px}
+  .doorway>.chartbox,.center>.chartbox{padding-left:16px;padding-right:16px}
   .doorman{border-right:0;border-bottom:1px solid var(--line)}
   .stand{display:flex;align-items:center;gap:16px;text-align:left;padding:16px}
   .mascot{width:56px;height:56px;flex:none}
@@ -1175,13 +1175,35 @@ body{background:var(--bg);background-image:none;font-variant-numeric:tabular-num
 
 /* the card */
 .doorway{border-radius:18px;border:1px solid var(--line);background:var(--surface)!important;box-shadow:0 1px 0 rgba(255,255,255,.03) inset,0 20px 40px -24px rgba(0,0,0,.7)}
-.doorway{grid-template-columns:minmax(0,1fr) 372px;grid-template-rows:auto auto auto auto 1fr;grid-template-areas:"bar bar" "stats stats" "chart door" "tape door" "list door"}
-.doorway>.tape{grid-area:tape;margin:0;border:0;border-top:1px solid var(--line);border-radius:0;box-shadow:none;background:none;min-width:0}
-.doorway>.tape .tape-rows{max-height:320px}
-.doorway>.tape .tape-rows{overflow-x:auto}
-.doorway>.tape table.trades .c-blk{display:none}
-.doorway>.tape table.trades th,.doorway>.tape table.trades td{padding-left:12px;padding-right:12px}
-.doorway>.list{align-self:start}
+.doorway{grid-template-columns:minmax(0,1fr) 380px;grid-template-rows:auto auto minmax(0,1fr);grid-template-areas:"bar bar" "stats stats" "center door"}
+.center{grid-area:center;min-width:0;display:flex;flex-direction:column}
+.tabs{display:flex;gap:4px;padding:8px 16px 0;border-top:1px solid var(--line);border-bottom:1px solid var(--line);flex:none}
+.tab{position:relative;display:inline-flex;align-items:center;gap:6px;min-height:36px;padding:0 12px;background:none;border:0;cursor:pointer;
+  color:var(--dim);font:500 13px var(--sans);border-radius:8px 8px 0 0}
+.tab:hover{color:var(--text)}
+.tab[aria-selected="true"]{color:var(--text)}
+.tab[aria-selected="true"]::after{content:"";position:absolute;left:10px;right:10px;bottom:-1px;height:2px;border-radius:2px;background:var(--brand)}
+.tab-n{display:inline-flex;align-items:center;justify-content:center;min-width:18px;height:18px;padding:0 5px;border-radius:999px;background:var(--warn-bg);color:var(--warn);font-size:11px;font-weight:600}
+.tabpanel{min-height:0;min-width:0}
+.tabpanel[hidden]{display:none}
+.tabpanel>.tape{margin:0;border:0;border-radius:0;box-shadow:none;background:none;min-width:0}
+.tabpanel>.tape .tape-rows{overflow-x:auto}
+.tabpanel>.tape table.trades .c-blk{display:none}
+.tabpanel>.tape table.trades th,.tabpanel>.tape table.trades td{padding-left:12px;padding-right:12px}
+.tabpanel>.keyf{border:0;padding:14px 24px}
+.tab-empty{padding:18px 24px}
+.info-panel{border-bottom:0;padding:16px 24px}
+@media (max-width:720px){.tab{min-height:44px}.tabs{overflow-x:auto;scrollbar-width:none}.info-panel{padding:14px 16px}}
+.doorman .buy{margin:0;padding:16px 22px;border:0;border-radius:0;box-shadow:none;background:none;border-bottom:1px solid var(--line)}
+/* The checklist in two columns: fifteen facts in the height of eight. */
+.sec-panel .checks{display:grid;grid-template-columns:1fr 1fr;column-gap:14px}
+.sec-panel .check{grid-template-columns:18px minmax(0,1fr);row-gap:0;padding:6px 0;border-top:1px solid var(--line)}
+.sec-panel .check:nth-child(2){border-top:0}
+.sec-panel .check-l{font-size:12px;color:var(--dim);grid-column:2}
+.sec-panel .check-l small{display:none}
+.sec-panel .check-v{grid-column:2;text-align:left;font-size:13px;white-space:normal}
+.sec-panel .check-i{grid-row:1/span 2;width:16px;height:16px;font-size:9.5px}
+
 .doorway>.tokbar{border-bottom:1px solid var(--line);background:none}
 .tokline .sym{font-size:26px;font-weight:700;letter-spacing:-.025em}
 .tp-v{font-size:32px;font-weight:700;letter-spacing:-.03em}
@@ -1233,7 +1255,7 @@ details.panel[open]>summary{margin-bottom:8px}
 .check-l small{display:block;font-size:11.5px;color:var(--dim);line-height:1.4;margin-top:1px;overflow-wrap:anywhere}
 .check-v{font:600 13px var(--num);text-align:right;white-space:nowrap;color:var(--text)}
 .check.warn .check-v{color:var(--warn)} .check.stop .check-v{color:var(--stop)} .check.unknown .check-v{color:var(--dim)}
-.info{display:grid;grid-template-columns:auto 1fr;gap:6px 14px;margin:0;font-size:13px;align-items:center}
+.info{display:grid;grid-template-columns:auto 1fr;gap:8px 24px;max-width:720px;margin:0;font-size:13px;align-items:center}
 .info dt{color:var(--dim);font-size:12.5px}
 .info dd{margin:0;color:var(--text);min-width:0;display:flex;align-items:center;flex-wrap:wrap;gap:4px 6px;justify-content:flex-end;text-align:right}
 .info dd small{color:var(--dim);font-size:11.5px}
@@ -1243,7 +1265,7 @@ details.panel[open]>summary{margin-bottom:8px}
 .doorman .venues{padding:16px 22px}
 
 /* the left column */
-.doorway>.chartbox{padding:20px 24px 16px}
+.center>.chartbox{padding:16px 24px 12px;border-bottom:0}
 .list-head{padding:16px 24px 10px}
 .q>summary{padding:14px 24px}
 .qv{font-size:14.5px}
@@ -1276,12 +1298,10 @@ table.trades tr:hover td{background:rgba(255,255,255,.02)}
   .doorman>.realone{order:4;margin:12px 16px 0}
   .doorman>.keyf{order:5}
   .doorway>.stats{order:6}
-  .doorway>.chartbox{order:7}
-  .doorway>.tape{order:8}
-  .doorway>.list{order:9}
+  .doorway>.center{order:7}
   .doorman>.sec-panel{order:10;border-top:1px solid var(--line)}
-  .doorman>.info-panel{order:11}
   .doorman>.venues{order:12}
+  .doorman>.buy{order:13}
   .doorman>*{background:var(--surface-2)}
   .doorman>.stand{background:linear-gradient(180deg,var(--tone-wash),transparent 85%)}
   .stats .fact:last-of-type:nth-of-type(odd){grid-column:1/-1;border-right:0}
@@ -1296,10 +1316,83 @@ table.trades tr:hover td{background:rgba(255,255,255,.02)}
   .keyf,.panel{padding-left:16px;padding-right:16px}
   .stats .fact{padding:12px 16px}
   .stats .fact-v{font-size:17px}
-  .doorway>.chartbox{padding-left:16px;padding-right:16px}
+  .doorway>.chartbox,.center>.chartbox{padding-left:16px;padding-right:16px}
   .list-head,.q>summary{padding-left:16px;padding-right:16px}
   .info-addr{min-height:44px}
   .check{padding:8px 0}
+}
+
+/* ONE SCREEN. On a desktop the slip is sized to the window: the panels
+   share the height and the long lists scroll inside their own box, so the
+   page itself does not need scrolling to see any of it. --fit is measured
+   by the script from where the card starts. */
+@media (min-width:1100px) and (min-height:620px){
+  .doorway.fit{height:var(--fit,auto)}
+  .doorway.fit .center{min-height:0;overflow:hidden}
+  .doorway.fit .tabpanel:not([hidden]){flex:1;overflow-y:auto;overscroll-behavior:contain}
+  .doorway.fit .tabpanel>.tape .tape-rows{max-height:none;overflow:visible}
+  .doorway.fit .doorman{align-self:stretch;min-height:0;overflow-y:auto;overscroll-behavior:contain;position:static;scrollbar-width:thin}
+  .doorway.fit .chart-plot{height:clamp(96px,17vh,200px);margin-top:8px}
+  .doorway.fit .center>.chartbox{padding:12px 20px 6px}
+  .doorway.fit .chart-foot{display:none}
+  .doorway.fit .chart-axis{margin-top:2px}
+  /* The chart's window tabs govern the tape too; one set is enough. */
+  .doorway.fit .tabpanel>.tape .tape-head .frames{display:none}
+  .doorway.fit .tabpanel>.tape .tape-head{padding-top:8px;padding-bottom:8px}
+  .doorway.fit .tabpanel>.tape .flow{padding-top:8px;padding-bottom:8px}
+  .doorway.fit .tabs{padding-top:4px}
+  .doorway.fit .tab{min-height:32px}
+  .doorway.fit .tokline .name{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:220px}
+  .doorway.fit .stats .fact-n{display:none}
+  .doorway.fit .stats .fact{padding:10px 16px}
+  .doorway.fit>.tokbar{padding-top:14px;padding-bottom:14px}
+  .doorway.fit .stand{padding:16px 20px 14px}
+  .doorway.fit .vword{font-size:22px;padding:4px 14px}
+  .doorway.fit .lead{font-size:13px;line-height:1.5}
+  .doorway.fit .panel{padding:12px 20px}
+  .doorway.fit .sec-panel .check{padding:5px 0}
+  .doorway.fit .doorman .buy{padding:12px 20px}
+  /* Everything above the card gives way to it: the search shrinks to a bar
+     and the strips that explain the page are said by the card itself. */
+  body:has(.doorway.fit) .door{padding-top:10px}
+  body:has(.doorway.fit) .door input,body:has(.doorway.fit) .door .btn{min-height:40px}
+  body:has(.doorway.fit) .source,body:has(.doorway.fit) .intro,body:has(.doorway.fit) .qhint:not([hidden]){display:none}
+  body:has(.doorway.fit) .deck{margin-top:12px}
+  body:has(.doorway.fit) .feed{top:66px;max-height:calc(100vh - 80px)}
+  body:has(.doorway.fit) footer{margin-top:24px}
+  body:has(.doorway.fit) .deck.two{grid-template-columns:280px minmax(0,1fr)}
+  body:has(.doorway.fit) #status:empty{display:none}
+  body:has(.doorway.fit) .vfoot{padding-top:6px;padding-bottom:6px}
+  body:has(.doorway.fit) .vfoot .ghost{min-height:30px}
+  .doorway.fit .flow-keys{flex-wrap:nowrap;white-space:nowrap;overflow:hidden}
+  /* Compact qualifiers: the band and the real-token link stay beside the
+     verdict, in a line or two each. */
+  .doorway.fit .band{padding:10px 20px;font-size:12px}
+  .doorway.fit .band .bandtext{font-size:12px;line-height:1.45}
+  .doorway.fit .band .bandact .ghost{min-height:28px;font-size:12px;padding:0 10px}
+  .doorway.fit .realone{margin:8px 16px 0;padding:8px 12px;font-size:12.5px}
+  .doorway.fit .chart-empty{min-height:56px;padding:10px;margin-top:8px}
+  .doorway.fit .stats .fact-miss{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding:7px 16px}
+  .doorway.fit .band .band-line{display:none}
+  .doorway.fit .band .bandact{display:inline;margin:0 0 0 6px}
+  .doorway.fit .bandmore{display:inline;margin:0 0 0 6px}
+  /* What does not fit fades at the foot of the panel, so a reader can see
+     there is more under it rather than meet a hard edge. */
+  .doorway.fit .doorman.more{-webkit-mask-image:linear-gradient(180deg,#000 calc(100% - 28px),transparent);mask-image:linear-gradient(180deg,#000 calc(100% - 28px),transparent)}
+  .doorway.fit .flow-keys .net{margin-left:auto}
+}
+@media (min-width:1100px) and (min-height:620px) and (max-height:880px){
+  .doorway.fit .stats .fact{padding:8px 14px}
+  .doorway.fit .stats .fact-v{font-size:17px}
+  .doorway.fit .tokline .sym{font-size:22px}
+  .doorway.fit .tp-v{font-size:26px}
+  .doorway.fit .vlabel{display:none}
+  .doorway.fit .lead{font-size:12.5px}
+  .doorway.fit .stand{padding:12px 20px 10px}
+  .doorway.fit .sec-panel .check{padding:3px 0}
+  .doorway.fit .sec-panel .check-l{font-size:11.5px}
+  .doorway.fit .sec-panel .check-v{font-size:12.5px}
+  .doorway.fit .panel-head{margin-bottom:4px}
 }
 </style>
 </head>
