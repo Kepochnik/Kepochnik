@@ -26,6 +26,7 @@
  * exists to avoid.
  */
 import { curveAmountOut } from "../chain/pons.js";
+import { formatCoin } from "../format.js";
 import { quoteCurveSale, quotePoolSale, type SolanaMarket, type SolanaPool } from "../chain/solanaPools.js";
 import { quoteSale, type MarketPool } from "../chain/market.js";
 import type { DoorSlip } from "./door.js";
@@ -106,7 +107,13 @@ export function evmExitFor(slip: DoorSlip, tokensIn: bigint): SizeAnswer {
   // pool: the exit door already read the reserves and both levies.
   const exit = slip.exit;
   if (exit && exit.venue !== "closed" && exit.reserves.token > 0n && exit.reserves.quote > 0n) {
-    const gross = curveAmountOut(tokensIn, exit.reserves.token, exit.reserves.quote, 0n);
+    // Only what is outside the curve can be sold into it.
+    const supply = slip.id?.meta?.totalSupply ?? null;
+    if (exit.venue === "curve" && supply !== null && supply > exit.reserves.token && tokensIn > supply - exit.reserves.token) {
+      return { ok: false, why: `that is more than exists outside the curve (${formatCoin(supply - exit.reserves.token, 18)} tokens), so it could never be sold into it` };
+    }
+    const raw = curveAmountOut(tokensIn, exit.reserves.token, exit.reserves.quote, 0n);
+    const gross = exit.realQuote !== undefined && raw > exit.realQuote ? exit.realQuote : raw;
     const out = gross - (gross * exit.feeBps) / 10_000n - (gross * exit.creatorTaxBps) / 10_000n;
     const spotOut = (tokensIn * exit.spot) / 10n ** 18n;
     return {

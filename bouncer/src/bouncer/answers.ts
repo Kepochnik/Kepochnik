@@ -322,7 +322,7 @@ function exitAnswer(slip: DoorSlip, notes: DoorNote[], quoteUsd: number | null =
     return plain("exit", "Not checked — the pool read did not finish", "unknown", "so nothing can be said about getting out; this is worth one retry", mine);
   }
   if (slip.open && (slip.open.pools ?? []).length === 0) {
-    return plain("exit", "Nowhere to sell it that this can see", toneOf(mine), "no pool on this chain's known DEX factories. It may trade on a venue this does not read, against another pair, or not at all.", mine, "no pool");
+    return plain("exit", "Nowhere to sell it that this can see", toneOf(mine, "unknown"), "no pool on this chain's known DEX factories. It may trade on a venue this does not read, against another pair, or not at all.", mine, "no pool");
   }
   return plain("exit", "A pool exists but nothing in it could be priced", "unknown", "the reserves did not come back, so a sale cannot be quoted", mine);
 }

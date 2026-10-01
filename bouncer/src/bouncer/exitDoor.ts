@@ -41,6 +41,12 @@ export interface ExitDoor {
    * can name it: the open-door pool search is not run for a launch.
    */
   pool?: { manager: string; poolId: Hex; tokenIsCurrency0: boolean; hooks: string; feePpm: bigint };
+  /**
+   * On a curve: the quote it actually holds. Its pricing reserve carries a
+   * virtual amount on top, and constant product on that can promise a large
+   * sale more than the curve could ever pay out.
+   */
+  realQuote?: bigint;
 }
 
 export interface PoolState {
@@ -97,11 +103,13 @@ export function fullRangeReserves(state: PoolState): { token: bigint; quote: big
   return state.tokenIsCurrency0 ? { token: amount0, quote: amount1 } : { token: amount1, quote: amount0 };
 }
 
-export function quoteExit(position: bigint, reserves: { token: bigint; quote: bigint }, feeBps: bigint, creatorTaxBps: bigint, shares: number[] = [1_000, 2_500, 5_000, 10_000]): ExitQuote[] {
+export function quoteExit(position: bigint, reserves: { token: bigint; quote: bigint }, feeBps: bigint, creatorTaxBps: bigint, shares: number[] = [1_000, 2_500, 5_000, 10_000], realQuote?: bigint): ExitQuote[] {
   const spot = reserves.token === 0n ? 0n : (reserves.quote * 10n ** 18n) / reserves.token;
   return shares.map((shareBps) => {
     const tokensIn = (position * BigInt(shareBps)) / 10_000n;
-    const gross = curveAmountOut(tokensIn, reserves.token, reserves.quote, 0n);
+    const raw = curveAmountOut(tokensIn, reserves.token, reserves.quote, 0n);
+    // Never more than the curve actually holds.
+    const gross = realQuote !== undefined && raw > realQuote ? realQuote : raw;
     const fee = (gross * feeBps) / 10_000n;
     const tax = (gross * creatorTaxBps) / 10_000n;
     const net = gross - fee - tax;
@@ -130,7 +138,11 @@ export async function readExitDoor(rpc: RpcClient, launch: LaunchedToken, option
     const [feeBps] = decodeOutputs(CURVE_FUNCTIONS.feeBps, feeRaw) as [bigint];
     const [ready] = decodeOutputs(CURVE_FUNCTIONS.readyToGraduate, readyRaw) as [boolean];
     const reserves = { token, quote };
-    const quotes = quoteExit(options.position, reserves, feeBps, launch.creatorTaxBps);
+    const realQuote = await rpc
+      .callBatch([{ to: launch.curve, data: encodeCall(CURVE_FUNCTIONS.realQuoteReserve, []) }], options.block)
+      .then(([raw]) => (decodeOutputs(CURVE_FUNCTIONS.realQuoteReserve, raw) as [bigint])[0])
+      .catch(() => undefined);
+    const quotes = quoteExit(options.position, reserves, feeBps, launch.creatorTaxBps, undefined, realQuote);
     return {
       venue: ready ? "closed" : "curve",
       position: options.position,
@@ -139,6 +151,7 @@ export async function readExitDoor(rpc: RpcClient, launch: LaunchedToken, option
       creatorTaxBps: launch.creatorTaxBps,
       spot: token === 0n ? 0n : (quote * 10n ** 18n) / token,
       quotes,
+      realQuote,
       note: ready
         ? "The curve is full and waiting for graduate(); sells revert until the pool exists. Anyone can call graduate()."
         : "Priced with the curve's own sell arithmetic on reserves at this block: constant product, then protocol fee and creator tax on the quote leg.",

@@ -192,6 +192,17 @@ export function marketFacts(slip: DoorSlip, options: MarketFactsOptions = {}): M
   // ordinary tokens — so "the explorer did not answer" was a failure claimed
   // for a question nobody asked. What a launch HAS read is who bought on its
   // curve, and that is said as what it is: buyers, not holders.
+  // What the deployer still holds, on the first screen: the dev wallet at a
+  // glance is half of what a trader checks, and it sat in a folded answer.
+  const devBps = slip.rules ? slip.rules.deployerShareBps : (o?.deployer?.bps ?? null);
+  if (slip.rules || o) {
+    facts.push(
+      devBps !== null
+        ? { label: "Dev holds", value: `${(devBps / 100).toFixed(devBps < 1_000 ? 1 : 0)}%`, note: `of supply · the deployer's wallet at block ${slip.at.block}`, source: "chain", warn: devBps >= 2_000 }
+        : { label: "Dev holds", value: null, note: "of supply", source: "chain", why: o?.deployer ? "the deployer's balance did not read" : "the deployer could not be found" },
+    );
+  }
+
   const holders = o?.holders?.count ?? null;
   const room = !o ? slip.room : null;
   facts.push(

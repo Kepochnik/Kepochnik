@@ -6,6 +6,7 @@
  * trusted deployers. The bytecode scan is the second question, asked of
  * every address, Pons or not: can this contract change or disappear?
  */
+import { shortAddress } from "../format.js";
 import { decodeOutputs, encodeCall, isAddress, normalizeAddress, selector, type FunctionAbi, type Hex } from "../chain/abi.js";
 import { EIP1967_BEACON_SLOT, EIP1967_IMPLEMENTATION_SLOT, pushedSelectors, scanBytecode, storageWordAddress, storageWordIsSet, type CodeScan } from "../chain/code.js";
 import { CURVE_FUNCTIONS, ERC20_FUNCTIONS, FACTORY_FUNCTIONS, PONS_V2_FACTORY, V1_FACTORY_FUNCTIONS, ZERO_ADDRESS, decodeLaunchedToken, decodeV1LaunchedToken, type LaunchedToken } from "../chain/pons.js";
@@ -282,9 +283,9 @@ export function idFindings(id: IdCheck): string[] {
   const out: string[] = [];
   const t = id.token;
   if (t.code.empty) out.push("no bytecode at this address");
-  if (t.proxyImplementation) out.push(`upgradeable proxy (EIP-1967 implementation ${t.proxyImplementation})`);
-  if (t.proxyBeacon) out.push(`beacon proxy (EIP-1967 beacon ${t.proxyBeacon})`);
-  if (t.code.minimalProxyTarget) out.push(`minimal proxy (EIP-1167) to ${t.code.minimalProxyTarget}`);
+  if (t.proxyImplementation) out.push(`upgradeable proxy (EIP-1967 implementation ${shortAddress(t.proxyImplementation)})`);
+  if (t.proxyBeacon) out.push(`beacon proxy (EIP-1967 beacon ${shortAddress(t.proxyBeacon)})`);
+  if (t.code.minimalProxyTarget) out.push(`minimal proxy (EIP-1167) to ${shortAddress(t.code.minimalProxyTarget)}`);
   if (t.code.opcodes.selfdestruct) out.push(`SELFDESTRUCT ×${t.code.opcodes.selfdestruct}`);
   if (t.code.opcodes.delegatecall) out.push(`DELEGATECALL ×${t.code.opcodes.delegatecall}`);
   if (t.code.opcodes.callcode) out.push(`CALLCODE ×${t.code.opcodes.callcode}`);

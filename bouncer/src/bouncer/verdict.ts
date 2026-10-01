@@ -94,6 +94,29 @@ export function readVerdict(notes: DoorNote[], coverage?: Coverage | null, stage
           watch,
         };
 
+  // The lead says the one thing that matters most in words, not a count.
+  //
+  // A fake copy is a STOP because it is not the token you meant, and "2
+  // things here can cost you money" buries that under a number. An open door
+  // tax is a WATCH that is really "do not buy for six seconds", and "Nothing
+  // outright dangerous" over it read as permission.
+  const impostor = notes.find((n) => n.code === "lookalike-impostor");
+  const doorOpen = notes.find((n) => n.code === "cover-open");
+  if (base.kind === "stop" && impostor) {
+    const rest = stop - 1;
+    // "A real Pons V2 launch is called SPRINT (0x…, block N) and …" → the
+    // short form; the full sentence, address and block, is the finding below.
+    const m = /^A real (.+?) launch is called (.+?) \(/.exec(impostor.text);
+    const head = m ? `Not the real ${m[2]} — a copy of an older ${m[1]} launch.` : "Not the token it is named after.";
+    const line = `${head}${rest ? ` ${rest} more thing${rest === 1 ? "" : "s"} here can cost you money outright.` : ""}`;
+    base.line = line;
+    base.short = "not the token it is named after";
+  } else if (base.kind === "watch" && doorOpen) {
+    const rest = watch - 1;
+    base.line = `${doorOpen.text}${rest ? ` After that, ${rest} more thing${rest === 1 ? "" : "s"} worth reading.` : ""}`;
+    base.short = "do not buy while the door tax is on";
+  }
+
   if (!coverage) return base;
   const kind = qualify(base.kind, coverage);
 

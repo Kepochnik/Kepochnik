@@ -163,6 +163,7 @@ const TOPIC_OF: Record<string, Topic> = {
   "one-crew": "room",
   "owner-holds": "room",
   "room-wide": "room",
+  "dev-sold": "room",
   spread: "room",
 
   // ---- what could not be read

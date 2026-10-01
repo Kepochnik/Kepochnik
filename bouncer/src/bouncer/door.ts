@@ -65,7 +65,9 @@ export function stampLabel(stamp: Stamp, launchpad: string | null, v1 = false): 
   // chain's current launchpad named a mechanism the same page says it lacks.
   if (stamp === "ON THE LIST" && v1) return "PONS V1 LAUNCH";
   if (stamp === "ON THE LIST") return launchpad ? `${launchpad.toUpperCase()} LAUNCH` : "ON THE LIST";
-  if (stamp === "NOT ON THE LIST") return "NOT ON THE LIST";
+  // "Not on the list" asked the reader to know which list. What it means on
+  // a launchpad chain is that this is a copy wearing a real launch's name.
+  if (stamp === "NOT ON THE LIST") return launchpad ? `COPY · NOT A ${launchpad.toUpperCase()} LAUNCH` : "NOT ON THE LIST";
   // Where there is a launchpad, "not one of its launches" is worth
   // saying, because the reader may have been told it was. Where there is
   // none, saying it is noise, and the honest label is the check that
@@ -406,7 +408,7 @@ export function doorNotes(slip: DoorSlip): DoorNote[] {
 
   const r = slip.rules;
   if (r) {
-    if (r.totalTradeBps >= 1_000n) notes.push({ level: "watch", code: "high-tax", text: `Every trade pays ${formatBps(r.totalTradeBps)} in fees, ${formatBps(r.creatorTaxBps)} of it to the creator.` });
+    if (r.totalTradeBps >= 1_000n) notes.push({ level: "watch", code: "high-tax", text: `Every trade pays ${formatBps(r.totalTradeBps)} in fees; ${formatBps(r.creatorTaxBps)} of the trade goes to the creator.` });
     if (r.creatorFeeRecipientChanges.length) notes.push({ level: "watch", code: "fee-recipient-moved", text: `The creator changed where their cut is paid ${r.creatorFeeRecipientChanges.length}× since launch, last to ${shortAddress(r.creatorFeeRecipientChanges[r.creatorFeeRecipientChanges.length - 1].to)}.` });
     if (r.deployerShareBps >= 2_000) notes.push({ level: "watch", code: "dev-holds", text: `The deployer holds ${(r.deployerShareBps / 100).toFixed(1)}% of supply.` });
     if (r.buybackEnabled) notes.push({ level: "info", code: "buyback-vests", text: "Buyback is on. It does not burn anything: bought-back tokens are locked and released to the creator and the protocol over five years." });
@@ -416,6 +418,15 @@ export function doorNotes(slip: DoorSlip): DoorNote[] {
 
   const room = slip.room;
   if (room && room.buys > 0) {
+    // The creator selling into its own curve is the first thing a trader asks
+    // about a dev, and the page only showed it as a row in a folded table.
+    const devSold = room.wallets.filter((w) => w.creatorWallet && w.sells > 0);
+    if (devSold.length) {
+      const times = devSold.reduce((a, w) => a + w.sells, 0);
+      const out = devSold.reduce((a, w) => a + w.quoteOut, 0n);
+      const q = slip.rules?.quote ?? slip.chain.native;
+      notes.push({ level: "watch", code: "dev-sold", text: `The creator's own wallets have sold on the curve ${times === 1 ? "once" : `${times} times`}, taking out ${formatUnits(out, q.decimals, 4)} ${q.symbol}.` });
+    }
     if (room.devShareBps >= 5_000) notes.push({ level: "watch", code: "dev-funded", text: `The creator's own wallets paid for ${(room.devShareBps / 100).toFixed(0)}% of everything bought so far.` });
     if (room.sharedBlocks.length >= 3) notes.push({ level: "watch", code: "bundled-blocks", text: `${room.sharedBlocks.length} times, several different wallets bought in the very same block: the shape of a bundled launch.` });
     if (room.buyers >= 25 && room.devShareBps < 2_000) notes.push({ level: "info", code: "room-wide", text: `${room.buyers} distinct buyers and the creator funded ${(room.devShareBps / 100).toFixed(0)}%.` });
@@ -565,9 +576,9 @@ function openDoorNotes(slip: DoorSlip, findings: string[]): DoorNote[] {
 
   const o = slip.open;
   for (const f of findings) {
-    if (f.startsWith("SELFDESTRUCT") || f.startsWith("CALLCODE")) notes.push({ level: "stop", code: "code", text: `Code can vanish: ${f}.` });
+    if (f.startsWith("SELFDESTRUCT") || f.startsWith("CALLCODE")) notes.push({ level: "stop", code: "code", text: `The contract can delete itself (${f}): if it does, the token stops working and whatever you hold in it is stuck.` });
     else if (f.startsWith("upgradeable proxy") || f.startsWith("beacon proxy") || f.startsWith("minimal proxy")) notes.push({ level: "watch", code: "code", text: `Code can be replaced: ${f}. Whoever controls the proxy decides what this token does tomorrow${o?.surfaceFrom === "implementation" ? "; the functions below were read from the current implementation" : ""}.` });
-    else if (f.startsWith("DELEGATECALL")) notes.push({ level: "watch", code: "code", text: `Runs other contracts' code in its own storage: ${f}.` });
+    else if (f.startsWith("DELEGATECALL")) notes.push({ level: "watch", code: "code", text: `It runs another contract's code as its own (${f}), so what it does can change without the address changing.` });
     else notes.push({ level: "info", code: "code", text: `${f.charAt(0).toUpperCase()}${f.slice(1)}.` });
   }
   if (!o) return withSkipped(slip, notes);

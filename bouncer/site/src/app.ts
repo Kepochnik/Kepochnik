@@ -99,6 +99,9 @@ const sourcePill = $("source-pill");
 const sourceText = $("source-text");
 const settingsToggle = $<HTMLButtonElement>("settings-toggle");
 const toast = $("toast");
+// Before anything draws: a link straight to a report should not paint the
+// front page's furniture first. See .deep in the stylesheet.
+if (/^#\/(demo|t|tx|wallet|dev|board|plan)\//.test(location.hash) || /^#\/(board|plan)/.test(location.hash)) document.documentElement.classList.add("deep");
 const deck = $("deck");
 const feedBox = $("feed");
 const feedToggle = $<HTMLButtonElement>("feed-toggle");
@@ -178,6 +181,11 @@ function setView(next: View): void {
     board: "Tonight's board",
   };
   $("door-label").textContent = labels[next];
+}
+
+/** A phone-width box clips a long placeholder mid-word; there it says only what to do. */
+function narrow(): boolean {
+  try { return window.matchMedia("(max-width:600px)").matches; } catch { return false; }
 }
 
 /** One box, any input: a token or curve, a transaction hash, or "token wallet". */
@@ -431,6 +439,11 @@ const EXAMPLES: { label: string; hint: string; hash: string }[] = [
  * than in a tooltip. Re-checking is one click, and that is the point: the
  * list is a way back to the question, not an answer to it.
  */
+/** The verdict word as a tone class. */
+function kindOf(word: string): string {
+  return word === "STOP" ? "stop" : word === "WATCH" ? "watch" : word === "CLEAR" ? "clear" : "unknown";
+}
+
 function renderSeen(): void {
   const host = document.getElementById("seen");
   if (!host) return;
@@ -461,12 +474,14 @@ function renderSeen(): void {
     <ul class="seen-list">${rows
       .map((sn) => {
         const href = `#/${mode === "demo" ? "demo" : "t"}/${sn.address}${mode === "demo" ? "" : `?chain=${esc(sn.chain)}`}`;
+        // A fake copy in the history reads as the token it copied unless it says so.
+        const fake = sn.codes.some((c) => c.code === "lookalike-impostor");
         return `<li class="seen-row">
           <a href="${href}">
             ${mark(sn.chain)}
-            <span class="seen-sym">${esc(sn.symbol || shortAddress(sn.address))}</span>
+            <span class="seen-sym${fake ? " fake" : ""}">${esc(sn.symbol || shortAddress(sn.address))}${fake ? ` <small>not the real one</small>` : ""}</span>
             <span class="seen-addr mono">${esc(shortAddress(sn.address))}</span>
-            <span class="seen-was">read ${esc(sn.verdict)} ${esc(ago(now - sn.at))} ago</span>
+            <span class="seen-was">read <span class="vmini ${kindOf(sn.verdict)}">${esc(sn.verdict)}</span> ${esc(ago(now - sn.at))} ago</span>
             <span class="seen-go">check again</span>
           </a>
         </li>`;
@@ -484,11 +499,14 @@ function renderSeen(): void {
 function renderChips(): void {
   const chips = $("chips");
   chips.innerHTML = "";
-  if (mode === "demo") {
+  // Examples in both modes: in live mode they are the one way to see what a
+  // finished check looks like without knowing a token address, and each is
+  // labelled as invented.
+  {
     const label = document.createElement("span");
-    label.textContent = "Try an example:";
+    label.textContent = mode === "demo" ? "Try an example:" : "New here? Open an invented example:";
     chips.appendChild(label);
-    for (const e of EXAMPLES) {
+    for (const e of mode === "demo" ? EXAMPLES : EXAMPLES.slice(0, 3)) {
       const b = document.createElement("button");
       b.type = "button";
       b.className = "chip";
@@ -864,13 +882,13 @@ async function runSearch(query: string): Promise<void> {
 /** The placeholder and the hint line, for whatever the menu is set to. */
 function paintSelectedChain(): void {
   if (chainSelect.value === "auto") {
-    q.placeholder = "0x… or a Solana mint — BOUNCER finds the chain";
+    q.placeholder = narrow() ? "Paste a token address" : "0x… or a Solana mint — BOUNCER finds the chain";
     $("chain-hint").textContent = `BOUNCER asks every chain it knows where this address lives: ${searchableChains().map((c) => c.name).join(", ")}, and Solana by the shape of the address. Pick one from the menu to skip the search and read it directly.`;
     return;
   }
   const c = chainByKey(chainSelect.value);
   // The box asks for a different thing on a chain that does not use hex addresses.
-  q.placeholder = c.family === "solana" ? "a Solana mint address (base58, like EPjFWdd5…yTDt1v)" : "0x… (a token, its curve, a wallet or a transaction hash)";
+  q.placeholder = narrow() ? (c.family === "solana" ? "Paste a Solana mint" : "Paste a token address") : c.family === "solana" ? "a Solana mint address (base58, like EPjFWdd5…yTDt1v)" : "0x… (a token, its curve, a wallet or a transaction hash)";
   $("chain-hint").textContent = `${c.name}${c.chainId ? ` (${c.chainId})` : ""}${c.launchpad ? ` · ${c.launchpad}` : " · no launchpad known here"} · RPC ${c.rpc[0]}${c.blockscout ? ` · explorer ${c.blockscout}` : " · no explorer known, the funder check and same-name search are off"}${c.notes ? ` · ${c.notes}` : ""}`;
 }
 
@@ -1125,6 +1143,8 @@ async function runDoor(address: string): Promise<void> {
 }
 
 async function runDev(address: string): Promise<void> {
+  // A newer route may have started while this one read; it must not paint over it.
+  const run = doorRun;
   if (refuseFeature("dev", "The deployer's history")) return;
   if (!ADDR.test(address)) return bad("Paste the deployer's address.");
   busy("reading the deployer's launches…");
@@ -1133,16 +1153,20 @@ async function runDev(address: string): Promise<void> {
     const head = await rpc.getBlock("latest");
     const fromBlock = mode === "demo" ? Math.max(0, head.number - 300_000) : await findBlockByTimestamp(rpc, head.timestamp - 24 * 3600, head.number);
     const d = await readDevReport(rpc, address, { fromBlock, toBlock: head.number, factory: factoryFor(), chunking: mode === "demo" ? { startChunk: 100_000, maxChunk: 100_000 } : undefined });
+    if (run !== doorRun) return;
     done(`block ${head.number} · last ${mode === "demo" ? "8" : "24"} h`);
     out.innerHTML = `<div class="slip">${devSection(d, null, true)}</div>`;
   } catch (error) {
+    if (run !== doorRun) return;
     failed(error, address);
   } finally {
-    go.disabled = false;
+    if (run === doorRun) go.disabled = false;
   }
 }
 
 async function runWallet(token: string, wallet: string): Promise<void> {
+  // A newer route may have started while this one read; it must not paint over it.
+  const run = doorRun;
   if (refuseFeature("wallet", "A wallet's bag")) return;
   if (!ADDR.test(token) || !ADDR.test(wallet)) return bad("Paste the token address and the wallet address.");
   busy("reading the wallet's trades…");
@@ -1161,16 +1185,20 @@ async function runWallet(token: string, wallet: string): Promise<void> {
       symbol = (decodeOutputs(ERC20_FUNCTIONS.symbol, raw) as [string])[0].trim() || null;
     } catch { /* the heading falls back to the address */ }
     const quote = await quoteOfLaunch(rpc, launch.pairToken, head);
+    if (run !== doorRun) return;
     done(`block ${head}`);
     renderPosition(p, head, symbol, quote);
   } catch (error) {
+    if (run !== doorRun) return;
     failed(error, token);
   } finally {
-    go.disabled = false;
+    if (run === doorRun) go.disabled = false;
   }
 }
 
 async function runTx(hash: string): Promise<void> {
+  // A newer route may have started while this one read; it must not paint over it.
+  const run = doorRun;
   if (refuseFeature("tx", "A transaction receipt")) return;
   if (!hash.startsWith("0x")) return bad("Paste a transaction hash.");
   busy("decoding the trade…");
@@ -1180,16 +1208,20 @@ async function runTx(hash: string): Promise<void> {
     // Each trade in the coin its own curve trades against: a curve paired
     // with a 6-decimal token read as ETH was off by twelve orders.
     const quotes = await Promise.all(receipts.map((r) => (r.launch ? quoteOfLaunch(rpc, r.launch.pairToken, r.block) : Promise.resolve({ ...chain().native, native: true }))));
+    if (run !== doorRun) return;
     done(`block ${receipts[0].block}`);
     out.innerHTML = `<div class="slip">${receipts.map((r, i) => receiptSection(r, quotes[i])).join("")}</div>`;
   } catch (error) {
+    if (run !== doorRun) return;
     failed(error, hash);
   } finally {
-    go.disabled = false;
+    if (run === doorRun) go.disabled = false;
   }
 }
 
 async function runPlan(taxBps: number, params: URLSearchParams): Promise<void> {
+  // A newer route may have started while this one read; it must not paint over it.
+  const run = doorRun;
   if (refuseFeature("plan", "Plan a launch")) return;
   busy("reading the factory's terms…");
   try {
@@ -1205,16 +1237,20 @@ async function runPlan(taxBps: number, params: URLSearchParams): Promise<void> {
       pairToken: params.get("quote") ?? undefined,
       sampleBuy: buy ? BigInt(Math.round(Number(buy) * 1e6)) * 10n ** 12n : undefined,
     });
+    if (run !== doorRun) return;
     done(`block ${plan.block} · config ${plan.configId}`);
     renderPlan(plan);
   } catch (error) {
+    if (run !== doorRun) return;
     failed(error, "plan");
   } finally {
-    go.disabled = false;
+    if (run === doorRun) go.disabled = false;
   }
 }
 
 async function runBoard(hours: number): Promise<void> {
+  // A newer route may have started while this one read; it must not paint over it.
+  const run = doorRun;
   if (refuseFeature("board", "Tonight's board")) return;
   busy("reading the window…");
   try {
@@ -1225,19 +1261,38 @@ async function runBoard(hours: number): Promise<void> {
     // blocks — eight hours — under a heading that said "last 1 h".
     const fromBlock = mode === "demo" ? Math.max(0, head.number - Math.round(hours * 3600 * chain().blocksPerSecond)) : await findBlockByTimestamp(rpc, head.timestamp - hours * 3600, head.number);
     const b = await readBoard(rpc, { fromBlock, toBlock: head.number, factory: factoryFor(), top: 10, chunkSize: mode === "demo" ? 100_000 : undefined });
+    // Tickers beside the addresses: a column of 0x0000…2e54 is a list nobody
+    // can scan. One batched read; a token that will not say its name keeps
+    // its address.
+    const tokens = [...new Set(b.topCurves.map((r) => r.token).filter((t): t is string => Boolean(t)))];
+    const symbols = new Map<string, string>();
+    if (tokens.length) {
+      const raw = await rpc.callBatch(tokens.map((t) => ({ to: t, data: encodeCall(ERC20_FUNCTIONS.symbol, []) })), head.number).catch(() => null);
+      tokens.forEach((t, i) => {
+        try {
+          const sym = raw ? (decodeOutputs(ERC20_FUNCTIONS.symbol, raw[i]) as [string])[0].trim() : "";
+          if (sym) symbols.set(t.toLowerCase(), sym.slice(0, 16));
+        } catch { /* the address stands */ }
+      });
+    }
+    if (run !== doorRun) return;
     done(`blocks ${b.window.fromBlock}–${b.window.toBlock} · ${b.chunks} log reads`);
-    renderBoard(b, hours);
+    renderBoard(b, hours, symbols);
   } catch (error) {
+    if (run !== doorRun) return;
     failed(error, "board");
   } finally {
-    go.disabled = false;
+    if (run === doorRun) go.disabled = false;
   }
 }
 
-function renderBoard(b: Board, hours: number): void {
+function renderBoard(b: Board, hours: number, symbols: Map<string, string> = new Map()): void {
   const qd = chain().native;
   const amt = (v: bigint) => mny(v, qd.decimals, qd.symbol, true);
-  const link = (a: string) => `<a href="#/${mode === "demo" ? "demo" : "t"}/${a}${routeChain()}">${shortAddress(a)}</a>`;
+  const link = (a: string) => {
+    const sym = symbols.get(a.toLowerCase());
+    return `<a href="#/${mode === "demo" ? "demo" : "t"}/${a}${routeChain()}">${sym ? `${esc(sym)} <span class="mono dim">${shortAddress(a)}</span>` : shortAddress(a)}</a>`;
+  };
   const dev = (a: string) => `<a href="#/dev/${a}${routeChain()}">${shortAddress(a)}</a>`;
   const windows = [1, 6, 24].map((h) => `<a class="frame${h === hours ? " on" : ""}" href="#/board?hours=${h}&chain=${mode === "demo" ? "demo" : chain().key}" aria-current="${h === hours ? "true" : "false"}">${h}h</a>`).join("");
   const none = (text: string) => `<p class="qdetail">${text}</p>`;
@@ -1250,10 +1305,10 @@ function renderBoard(b: Board, hours: number): void {
         <div><span>graduations</span><b class="num">${b.graduations}</b></div>
         <div><span>deployers</span><b class="num">${b.deployers}</b></div>
         <div><span>door tax paid</span><b class="num">${amt(b.coverTotal)}</b><span>${b.taxedBuys} buy${b.taxedBuys === 1 ? "" : "s"}</span></div>
-      </div><p class="qdetail">Door tax = the part of a buy's tax above the curve's own creator rate, as the curve's CurveBuy event reports it. Counts, not scores.${b.otherPairCurves ? ` ${plural(b.otherPairCurves, "curve")} paired with another token also took door tax; ${b.otherPairCurves === 1 ? "its amounts are" : "their amounts are"} in that token's units, so ${b.otherPairCurves === 1 ? "it is" : "they are"} left out of these totals rather than added to ${esc(qd.symbol)}.` : ""}</p></section>
+      </div><p class="qdetail">Door tax = the extra a buyer paid to the creator in a launch's first seconds, on top of the normal fees — read from each curve's own CurveBuy events. Counts, not scores.${b.otherPairCurves ? ` ${plural(b.otherPairCurves, "curve")} paired with another token also took door tax; ${b.otherPairCurves === 1 ? "its amounts are" : "their amounts are"} in that token's units, so ${b.otherPairCurves === 1 ? "it is" : "they are"} left out of these totals rather than added to ${esc(qd.symbol)}.` : ""}</p></section>
       <section class="sec"><h2>Deployers</h2>${b.topDeployers.length ? `<div class="tbl"><table class="buys"><thead><tr><th>deployer</th><th class="num">launched</th><th class="num">graduated</th><th class="num">swept</th></tr></thead><tbody>${b.topDeployers.map((r) => `<tr><td>${dev(r.deployer)}</td><td class="num">${r.launched}</td><td class="num">${r.graduated}</td><td class="num">${Math.max(0, r.swept - r.graduated)}</td></tr>`).join("")}</tbody></table></div>` : none("No launches in the window.")}
         ${b.serial.length ? `<h2 style="margin-top:14px">Serial, no graduation</h2><div class="tbl"><table class="buys"><tbody>${b.serial.map((r) => `<tr><td>${dev(r.deployer)}</td><td>${r.launched} launched, none graduated</td></tr>`).join("")}</tbody></table></div>` : ""}</section>
-      <section class="sec"><h2>Door tax by token</h2>${b.topCurves.length ? `<div class="tbl"><table class="buys"><thead><tr><th>token</th><th class="num">collected</th><th class="num">buys</th><th class="num">highest</th><th class="num">creator tax</th></tr></thead><tbody>${b.topCurves.map((r) => `<tr><td>${link(r.token ?? r.curve)}</td><td class="num">${amt(r.coverCollected)}</td><td class="num">${r.taxedBuys}</td><td class="num">${(r.highestBps / 100).toFixed(1)}%</td><td class="num">${formatBps(r.creatorTaxBps)}</td></tr>`).join("")}</tbody></table></div>` : none("No buy in the window paid above the creator rate.")}</section>
+      <section class="sec wide"><h2>Door tax by token</h2>${b.topCurves.length ? `<div class="tbl"><table class="buys"><thead><tr><th>token</th><th class="num">collected</th><th class="num">buys</th><th class="num">highest</th><th class="num">creator tax</th></tr></thead><tbody>${b.topCurves.map((r) => `<tr><td>${link(r.token ?? r.curve)}</td><td class="num">${amt(r.coverCollected)}</td><td class="num">${r.taxedBuys}</td><td class="num">${(r.highestBps / 100).toFixed(1)}%</td><td class="num">${formatBps(r.creatorTaxBps)}</td></tr>`).join("")}</tbody></table></div>` : none("No buy in the window paid above the creator rate.")}</section>
       <section class="sec"><h2>Door tax by wallet</h2>${b.topPayers.length ? `<div class="tbl"><table class="buys"><thead><tr><th>wallet</th><th class="num">door tax paid</th><th class="num">buys</th></tr></thead><tbody>${b.topPayers.map((r) => `<tr><td><span class="mono">${shortAddress(r.wallet)}</span></td><td class="num">${amt(r.coverPaid)}</td><td class="num">${r.buys}</td></tr>`).join("")}</tbody></table></div>` : none("Nobody paid door tax in the window.")}</section>
     </div></div>`;
 }
@@ -1349,6 +1404,7 @@ function startWatch(slip: DoorSlip, plan: WatchPlan, panel: HTMLElement, button:
   let lag: ReturnType<typeof readLag> | null = null;
   let failing: string | null = null;
   let seen = 0;
+  let clock = 0;
 
   const add = (html: string, quiet = false) => {
     const el = document.createElement("div");
@@ -1359,7 +1415,8 @@ function startWatch(slip: DoorSlip, plan: WatchPlan, panel: HTMLElement, button:
   };
 
   const paint = () => {
-    if (!state.isConnected) { stopWatch(); return; }
+    // An orphaned clock stops itself, never the watch that replaced it.
+    if (!state.isConnected) { if (watchClock === clock) stopWatch(); else clearInterval(clock); return; }
     const since = Math.max(0, Math.round((Date.now() - lastAt) / 1000));
     const covered = head === null ? "nothing read yet" : `read up to block ${head}, from ${from}`;
     state.innerHTML = `<span class="watch-live">${failing ? "stalled" : "watching"}</span>
@@ -1415,7 +1472,8 @@ function startWatch(slip: DoorSlip, plan: WatchPlan, panel: HTMLElement, button:
   // A second timer, only to keep "last look 4 s ago" true. Without it the
   // line freezes at the moment of the last round and a stalled watch looks
   // exactly like a working one.
-  watchClock = window.setInterval(paint, 1_000);
+  clock = window.setInterval(paint, 1_000);
+  watchClock = clock;
 }
 
 /**
@@ -1920,9 +1978,9 @@ function doorBlock(opts: {
           <p class="lead">${esc(v.line)}${pending}</p>
         </div>
       </div>
+      ${opts.alert ?? ""}
       ${opts.bands ?? ""}
       ${stage === "done" ? keyFindings(opts.notes, v.word) : ""}
-      ${opts.alert ?? ""}
       ${opts.facts?.length ? factsBlock(opts.facts) : ""}
       ${opts.venues ?? ""}
     </aside>
@@ -2528,13 +2586,15 @@ function paintFeed(): void {
       (x) => `<button class="fchip${x.key === feedFilter ? " on" : ""}" type="button" data-filter="${x.key}" aria-pressed="${x.key === feedFilter}" title="${esc(x.hint)}">${esc(x.label)}</button>`,
     ).join("")}</div>
     ${body}
-    <div class="feed-note"${f.failing ? ` title="${esc(f.failing)}"` : ""}>${esc(
+    <div class="feed-note"${f.failing ? ` title="${esc(f.failing)}"` : ""}>${f.failing || f.head === null ? "" : `<span class="hint-hover">j / k to move, Enter to open. </span><span class="hint-touch">Tap a launch to check it. </span>`}${esc(
       f.failing
         // The whole reason is in the tooltip; a list of three endpoint URLs
         // in the column was the loudest thing on the page and said less than
         // the sentence above it.
         ? `Stalled: ${f.failing.length > 90 ? `${f.failing.slice(0, 88).replace(/\s+\S*$/, "")}…` : f.failing}`
-        : `j / k to move, Enter to open. ${chain().launchpad ?? "The launchpad"} on ${chain().name}. ${f.rows.length ? `${feedFilter === "all" ? `The newest ${f.rows.length}` : `${kept.length} of ${f.rows.length}`}` : "Nothing"} between block ${f.from ?? "?"} and ${f.head ?? "?"}${f.unread ? `; blocks ${f.unread.fromBlock}–${f.unread.toBlock} were not opened` : ""}.`,
+        : f.head === null
+          ? "Reading the newest blocks…"
+          : `${chain().launchpad ?? "The launchpad"} on ${chain().name}. ${f.rows.length ? `${feedFilter === "all" ? `The newest ${f.rows.length}` : `${kept.length} of ${f.rows.length}`}` : "Nothing"} between block ${f.from ?? "?"} and ${f.head ?? "?"}${f.unread ? `; blocks ${f.unread.fromBlock}–${f.unread.toBlock} were not opened` : ""}.`,
     )}</div>`;
   const rows = feedBox.querySelector<HTMLElement>(".feed-rows");
   if (rows && at > 0) rows.scrollTop = at;
@@ -2559,7 +2619,7 @@ function pickOne(): string {
       ? "There is no launchpad column on this chain, so paste any token address above — BOUNCER reads the chain itself and answers the five questions you would ask before buying."
       : "Every launch in the column opens here with its verdict, its figures and a live tape of who is buying and who is selling. Or paste any token address above."}</p>
     <ul class="pick-words">${words.map(([kind, word, meaning]) => `<li><span class="vmini ${kind}">${word}</span><span>${esc(meaning)}</span></li>`).join("")}</ul>
-    <p class="pick-keys"><kbd>/</kbd> search <kbd>j</kbd><kbd>k</kbd> move down the column <kbd>Enter</kbd> open</p>
+    <p class="pick-keys"><kbd>Ctrl</kbd><kbd>V</kbd> anywhere checks an address <kbd>/</kbd> search <kbd>j</kbd><kbd>k</kbd> move down the column <kbd>Enter</kbd> open</p>
   </div>`;
 }
 
@@ -2696,7 +2756,7 @@ function tapeBody(): string {
 
   const body = t.trades.length
     ? `<div class="tape-rows"><table class="trades">
-        <thead><tr><th>ago</th><th>side</th>${usdPer !== null ? "<th>value</th>" : ""}<th${usdPer !== null ? ' class="c-coin"' : ""}>${esc(sym)}</th><th class="c-tok">tokens</th><th>of supply</th><th>${t.source.kind === "curve" ? "trader" : t.source.pool.kind === "v4" ? "via" : "to"}</th><th class="c-blk">block</th></tr></thead>
+        <thead><tr><th>ago</th><th>side</th>${usdPer !== null ? "<th>value</th>" : ""}<th${usdPer !== null ? ' class="c-coin"' : ""}>${esc(sym)}</th><th class="c-tok">tokens</th><th class="c-share">of supply</th><th>${t.source.kind === "curve" ? "trader" : t.source.pool.kind === "v4" ? "via" : "to"}</th><th class="c-blk">block</th></tr></thead>
         <tbody>${t.trades.map((x) => tradeRow(x, t)).join("")}</tbody>
       </table></div>`
     : `<div class="tape-empty">${t.opening
@@ -4294,7 +4354,7 @@ function renderSlip(slip: DoorSlip, opts: { stage?: Stage; source?: Source } = {
     ? `<dl class="kv">
         <dt>since launch</dt><dd>${esc(roomLine(room))}</dd>
         <dt>bought</dt><dd>${amt(room.totalQuoteIn)} after fees · ${plural(room.buys, "buy")} · ${plural(room.sells, "sell")}</dd></dl>
-        ${room.wallets.length ? `<div class="tbl"><table class="buys"><thead><tr><th>wallet</th><th>in, after fees</th><th>out</th><th>buys</th></tr></thead><tbody>${[...room.wallets].sort((a, b) => (b.quoteIn > a.quoteIn ? 1 : b.quoteIn < a.quoteIn ? -1 : 0)).slice(0, 8).map((w) => `<tr><td>${shortAddress(w.address)}${w.creatorWallet ? ' <span class="flag">creator</span>' : ""}</td><td>${amt(w.quoteIn)}</td><td>${w.quoteOut ? amt(w.quoteOut) : "—"}</td><td>${w.buys}</td></tr>`).join("")}</tbody></table></div>${moreRows(room.wallets.length, 8, "wallet")}` : ""}`
+        ${room.wallets.length ? `<div class="tbl"><table class="buys"><thead><tr><th>wallet</th><th>in, after fees</th><th>out</th><th>buys</th></tr></thead><tbody>${[...room.wallets].sort((a, b) => Number(b.creatorWallet) - Number(a.creatorWallet) || (b.quoteIn > a.quoteIn ? 1 : b.quoteIn < a.quoteIn ? -1 : 0)).slice(0, 8).map((w) => `<tr><td>${shortAddress(w.address)}${w.creatorWallet ? ' <span class="flag">creator</span>' : ""}</td><td>${amt(w.quoteIn)}</td><td>${w.quoteOut ? amt(w.quoteOut) : "—"}</td><td>${w.buys}</td></tr>`).join("")}</tbody></table></div>${moreRows(room.wallets.length, 8, "wallet")}` : ""}`
     : "";
 
   const crewBody = crew
@@ -4423,7 +4483,16 @@ function renderSlip(slip: DoorSlip, opts: { stage?: Stage; source?: Source } = {
   if (watchButton && offer.ok) {
     const plan = offer.plan;
     watchButton.addEventListener("click", () => {
-      if (watcher) { stopWatch(); watchButton.setAttribute("aria-pressed", "false"); watchButton.textContent = "Start watching"; return; }
+      if (watcher) {
+        stopWatch();
+        watchButton.setAttribute("aria-pressed", "false");
+        watchButton.textContent = "Start watching";
+        // Stopped says stopped: the panel kept its "watching" line, so a
+        // watch that was off looked like one that was simply quiet.
+        const state = document.querySelector<HTMLElement>("#s-watch .watch-state");
+        if (state) state.innerHTML = `<span class="watch-live stalled">stopped</span><span>nothing is being read now · start again to resume</span>`;
+        return;
+      }
       startWatch(slip, plan, $("s-watch"), watchButton);
     });
     if (new URLSearchParams(location.hash.split("?")[1] ?? "").get("watch") === "1") startWatch(slip, plan, $("s-watch"), watchButton);
@@ -4432,32 +4501,49 @@ function renderSlip(slip: DoorSlip, opts: { stage?: Stage; source?: Source } = {
   if (slip.cover?.status === "open") {
     const cc = slip.cover;
     const started = Date.now();
+    // One countdown per page, owned by the read that drew it. A slip is drawn
+    // up to three times as its reads land, and each draw used to start a new
+    // timer without stopping the last; the orphans then wrote FRESH's door
+    // tax into whatever token was on screen next — a graduated token told
+    // the reader the creator could take their money on a buy.
+    if (ticker) { clearInterval(ticker); ticker = null; }
+    const run = doorRun;
+    const subject = slip.subject;
+    const id = window.setInterval(() => {
+      const row = document.getElementById("q-keep");
+      if (run !== doorRun || shown?.slip.subject !== subject || !row) {
+        clearInterval(id);
+        if (ticker === id) ticker = null;
+        return;
+      }
     // The countdown lives on the row it belongs to — "Can they take it from
     // you?" — and on the bar in its evidence. It used to look for an element
     // from an older layout, find nothing, and stop on its first tick, so the
     // row kept saying "6 more seconds" long after the tax had ended.
-    ticker = window.setInterval(() => {
       const left = Math.max(0, cc.secondsLeft - Math.floor((Date.now() - started) / 1000));
-      const row = document.getElementById("q-keep");
-      if (!row) { if (ticker) clearInterval(ticker); ticker = null; return; }
       const value = row.querySelector<HTMLElement>(".qv");
       const fig = row.querySelector<HTMLElement>(".qfig");
       const bar = document.getElementById("cd-bar");
       // The same finding under the stamp, or the page says two numbers.
       const key = document.querySelector<HTMLElement>('.keyf-row[data-code="cover-open"] .keyf-t');
+      // And the lead, which now opens with the same sentence.
+      const lead = document.querySelector<HTMLElement>(".doorway .lead");
       if (bar) bar.style.width = `${Math.round((left / cc.terms.seconds) * 100)}%`;
       if (left > 0) {
         if (value) value.textContent = `Yes, on a buy — the door tax is on for ${left} more second${left === 1 ? "" : "s"}`;
         if (fig) fig.textContent = `${left}s`;
         if (key) key.textContent = (key.textContent ?? "").replace(/for \d+ s\b/, `for ${left} s`);
+        if (lead) lead.textContent = (lead.textContent ?? "").replace(/still on for \d+ s\b/, `still on for ${left} s`);
         return;
       }
       if (value) value.textContent = "The door tax ended while you were looking — check again to see who paid it";
       if (fig) fig.textContent = "ended";
       if (key) key.textContent = "The door tax ended while you were looking — check again to see who paid it.";
-      if (ticker) clearInterval(ticker);
-      ticker = null;
+      if (lead) lead.textContent = (lead.textContent ?? "").replace(/The door tax is still on for \d+ s:.*?Wait for it to end\./, "The door tax ended while you were looking — check again to see who paid it.");
+      clearInterval(id);
+      if (ticker === id) ticker = null;
     }, 1000);
+    ticker = id;
   }
 }
 
@@ -4523,7 +4609,7 @@ function controlBody(slip: DoorSlip): string {
       ? `<p class="qdetail">The code this proxy points at could not be read, so no function list is shown. Its switches are unknown, not absent.</p>`
       : `<p class="qdetail">No mint, pause, blacklist, fee, limit, trading or upgrade function was seen among the ${o.selectors} four-byte selectors in the code.</p>`;
   return `<h3 class="cap">What the chain answered</h3><dl class="kv">
-    <dt>owner</dt><dd>${o.ownerUnread ? "owner() is in the code but the chain would not answer it" : o.owner === null ? "no owner() function in the code" : o.owner.renounced ? '<span class="flag ok">renounced</span> nobody can call owner-only functions' : `<span class="mono">${esc(o.owner.address)}</span>${o.owner.isContract ? " (a contract)" : ""}${o.ownerBalance?.bps != null ? ` · holds ${pctText(o.ownerBalance.bps)}` : ""}${o.ownable ? "" : " · no renounceOwnership()"}`}</dd>
+    <dt>owner</dt><dd>${o.surfaceFrom === "implementation-unreadable" ? "unknown — the proxy's implementation could not be read, so whether it has owner() is not known" : o.ownerUnread ? "owner() is in the code but the chain would not answer it" : o.owner === null ? "no owner() function in the code" : o.owner.renounced ? '<span class="flag ok">renounced</span> nobody can call owner-only functions' : `<span class="mono">${esc(o.owner.address)}</span>${o.owner.isContract ? " (a contract)" : ""}${o.ownerBalance?.bps != null ? ` · holds ${pctText(o.ownerBalance.bps)}` : ""}${o.ownable ? "" : " · no renounceOwnership()"}`}</dd>
     ${o.paused !== null ? `<dt>paused</dt><dd>${o.paused ? '<span class="flag bad">yes</span>' : '<span class="flag ok">no</span>'}</dd>` : ""}
     ${o.tradingOpen ? `<dt>${esc(o.tradingOpen.view)}</dt><dd>${o.tradingOpen.open ? '<span class="flag ok">true</span> trading is open' : '<span class="flag bad">false</span> trading is switched off'}</dd>` : ""}
     <dt>source</dt><dd>${o.verified === null ? "explorer not reachable" : o.verified ? '<span class="flag ok">verified</span> the code can be read on the explorer' : '<span class="flag bad">not verified</span> only the bytes can be read'}</dd>
@@ -4630,6 +4716,21 @@ function renderPosition(p: Position, head: number, symbol: string | null, qd: Qu
   // chain holds. They differ when tokens moved by plain transfer, and a 0
   // standing unexplained next to 158M bought reads as a broken page.
   const drift = bought - sold !== p.balance;
+  // With tokens moved by transfer, the whole cost basis cannot be set against
+  // what is left: 158M bought, 50M sold, 0 held because the rest was sent
+  // away is not a loss of everything spent. Only the part bought here and
+  // still held is priced against its share of the cost; with nothing of it
+  // left, there is no figure to give.
+  const onCurve = bought - sold;
+  const result: bigint | null = !drift
+    ? p.unrealised
+    : p.balance > 0n && onCurve > 0n && whole
+      ? (() => {
+          const held = p.balance < onCurve ? p.balance : onCurve;
+          return (whole.net * held) / p.balance - (p.costBasis * held) / onCurve;
+        })()
+      : null;
+  const resultLabel = !drift ? resultWord : "if sold now · only what was bought here";
   const tokenLabel = symbol ?? shortAddress(p.token);
   const tokenHref = `#/${mode === "demo" ? "demo" : "t"}/${p.token}${routeChain()}`;
   const rows = p.trades.slice(-20).reverse().map((t) => `<tr class="t-${t.kind}">
@@ -4644,7 +4745,7 @@ function renderPosition(p: Position, head: number, symbol: string | null, qd: Qu
         <div class="cap-l">Wallet in <a href="${tokenHref}">${esc(tokenLabel)}</a></div>
         <div class="sym"><button class="vaddr tokact" type="button" data-copy="${esc(p.wallet)}" title="Copy ${esc(p.wallet)}"><span class="mono">${esc(shortAddress(p.wallet))}</span><span class="tokact-i" aria-hidden="true">⧉</span></button></div>
         <div class="at">block ${head.toLocaleString("en-US")} · ${esc(p.exit.venue)}</div></div>
-      <div class="stamp ${p.unrealised < 0n ? "no" : ""}" title="${esc(resultWord)}">${signed(p.unrealised)}</div></div>
+      <div class="stamp ${result !== null && result < 0n ? "no" : ""}" title="${esc(resultLabel)}">${result === null ? "P&amp;L n/a" : signed(result)}</div></div>
     <div class="grid">
       <section class="sec"><h2>Position</h2><dl class="kv">
         <dt>holds now</dt><dd class="num">${esc(formatCoin(p.balance, 18))} ${esc(tokenLabel)}</dd>
@@ -4655,7 +4756,7 @@ function renderPosition(p: Position, head: number, symbol: string | null, qd: Qu
         <dt>taxes paid</dt><dd>${money(p.taxesPaid)} <small style="color:var(--dim)">creator tax plus any door tax</small></dd>
         <dt>net in</dt><dd>${money(p.costBasis)}${p.costBasis < 0n ? " · took out more than put in" : ""}</dd>
         <dt>sell it all now</dt><dd>${p.balance === 0n ? "nothing left to sell" : whole ? money(whole.net) : "n/a"}</dd>
-        <dt>${esc(resultWord)}</dt><dd>${signed(p.unrealised)}</dd>
+        <dt>${esc(resultLabel)}</dt><dd>${result === null ? "not computable: what was bought here has all moved out by transfer" : signed(result)}</dd>
       </dl><p style="margin:10px 0 0;color:var(--dim);font-size:12px">${esc(p.exit.note)}</p></section>
       <section class="sec"><h2>Trades</h2>${p.trades.length ? `<div class="tbl"><table class="buys trades"><thead><tr><th>block</th><th>side</th><th class="num">paid / received</th><th class="num">tokens</th><th class="num">fee + tax</th></tr></thead><tbody>${rows}</tbody></table></div>` : `<p style="color:var(--muted);margin:0">No curve trades by this wallet on this launch.</p>`}</section>
     </div></div>`;
@@ -4776,15 +4877,16 @@ function routeChain(): string {
  * has to still be in our hands when we get here.
  */
 function start(begin: () => Promise<void>): void {
-  doorRun++;
+  const run = ++doorRun;
   void begin()
     .catch((error: unknown) => {
       // A view that throws past its own handling still has to say so
-      // rather than leave a spinner and a dead button.
-      failed(error, q.value.trim());
+      // rather than leave a spinner and a dead button — unless a newer
+      // route has taken the page, which it must not be painted over.
+      if (run === doorRun) failed(error, q.value.trim());
     })
     .finally(() => {
-      go.disabled = false;
+      if (run === doorRun) go.disabled = false;
     });
 }
 
@@ -4796,6 +4898,7 @@ function start(begin: () => Promise<void>): void {
  * nothing was open.
  */
 function home(): void {
+  document.body.classList.add("front");
   setPageTitle(BASE_TITLE);
   stopTape();
   stopWatch();
@@ -4817,6 +4920,7 @@ function route(): void {
   const params = new URLSearchParams(query);
   const parts = path.split("/").filter(Boolean);
   if (!parts.length) return home();
+  document.body.classList.remove("front");
   const chainParam = params.get("chain");
   const wantDemo = parts[0] === "demo" || chainParam === "demo";
   if (wantDemo && mode !== "demo") setMode("demo", true);
@@ -4854,13 +4958,30 @@ function route(): void {
       setView("plan");
       // The planner has its own labelled inputs; the token box stays a token box.
       q.value = "";
-      start(() => runPlan(Number(params.get("tax") ?? 100), params));
+      {
+        // Checked before any read: "100abc" or 50000 became NaN or a revert
+        // from the factory, shown as "could not read the chain".
+        const tax = params.get("tax") ?? "100";
+        const buy = params.get("buy");
+        if (!/^\d{1,5}$/.test(tax) || Number(tax) > 10_000 || (buy !== null && !(Number(buy) > 0))) {
+          out.innerHTML = `<div class="error"><strong>The planner needs a creator tax in bps and a positive buy size.</strong><p>Creator tax is a whole number of basis points from 0 to 10000 (100 = 1%); the buy is an amount of ${esc(chain().native.symbol)} above zero. Got tax "${esc(tax)}"${buy !== null ? ` and buy "${esc(buy)}"` : ""}.</p><div class="err-acts"><a class="ghost" href="#/plan?tax=100&chain=${mode === "demo" ? "demo" : chain().key}">Open it with 1%</a></div></div>`;
+          break;
+        }
+        start(() => runPlan(Number(tax), params));
+      }
       break;
     case "board":
       setView("board");
       q.value = "";
-      start(() => runBoard(Number(params.get("hours") ?? 1) || 1));
+      // The board offers 1, 6 and 24 hours; a hand-typed 9999 asked the chain
+      // for a year of logs.
+      start(() => runBoard([1, 6, 24].includes(Number(params.get("hours"))) ? Number(params.get("hours")) : 1));
       break;
+    default:
+      // A link to a page that does not exist used to leave the old page up
+      // under the new address.
+      home();
+      showToast("That link is not a page here, so this is the front page");
   }
 }
 
@@ -4922,6 +5043,9 @@ function submit(): void {
   }
   if (location.hash === hash) route();
   else location.hash = hash;
+  // Out of the box once a check starts, so j and k move the column and the
+  // keys a trader reaches for next belong to the page, not the text field.
+  q.blur();
 }
 
 function boot(): void {
@@ -4973,6 +5097,25 @@ function boot(): void {
     settingsToggle.setAttribute("aria-expanded", String(open));
   });
   q.addEventListener("input", () => { qhint.hidden = true; });
+  // A paste is a request: an address dropped into the box is checked at once,
+  // the way every token page a trader uses behaves. A ticker still waits for
+  // Enter, because a half-typed name is not a question yet.
+  q.addEventListener("paste", () => {
+    setTimeout(() => {
+      const v = q.value.trim();
+      if (pastedSubject(v) || (detect(v) && /^(0x|[1-9A-HJ-NP-Za-km-z]{32,})/.test(v))) submit();
+    }, 0);
+  });
+  // Paste anywhere on the page: no need to find the box first.
+  document.addEventListener("paste", (event) => {
+    const t = event.target as HTMLElement | null;
+    if (t && (t.closest("input, textarea, select") || t.isContentEditable)) return;
+    const text = event.clipboardData?.getData("text") ?? "";
+    if (!pastedSubject(text)) return;
+    event.preventDefault();
+    q.value = text.trim();
+    submit();
+  });
   form.addEventListener("submit", (e) => {
     e.preventDefault();
     submit();
@@ -4982,7 +5125,19 @@ function boot(): void {
   // One delegated handler on the box rather than one per row: the rows are
   // replaced wholesale every fifteen seconds, and per-row listeners would be
   // re-attached fifteen times a minute for as long as the tab is open.
-  feedToggle.addEventListener("click", () => setFeed(!feedOn));
+  feedToggle.addEventListener("click", () => {
+    // On a phone the column sits below the report, so pressing Launches
+    // with it already on looked like nothing happened. It goes there first;
+    // a second press, with the column in view, turns it off.
+    if (feedOn) {
+      const box = feedBox.getBoundingClientRect();
+      if (box.top > window.innerHeight || box.bottom < 0) {
+        feedBox.scrollIntoView({ block: "start", behavior: "smooth" });
+        return;
+      }
+    }
+    setFeed(!feedOn);
+  });
   // The crosshair. Delegated, because the plot is replaced every round.
   out.addEventListener("pointermove", (event) => {
     const plot = (event.target as HTMLElement).closest<HTMLElement>(".chart-plot");
@@ -5091,6 +5246,7 @@ function boot(): void {
   setView("door");
   if (location.hash) route();
   else {
+    document.body.classList.add("front");
     // An empty box, and the cursor in it.
     //
     // It used to open on an invented token, which meant the first thing

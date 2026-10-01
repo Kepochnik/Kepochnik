@@ -166,3 +166,36 @@ test("the exit row states a share of the supply, not a share of the sample posit
   // scaled to whatever somebody actually holds.
   assert.match(exit.detail ?? "", /reference position of 1% of the supply/);
 });
+
+test("no pool to sell into is never a green row", () => {
+  const nowhere = {
+    chain: CHAINS.robinhood,
+    subject: "0x" + "22".repeat(20),
+    notes: [],
+    id: { registered: false, meta: { symbol: "X", name: "X", decimals: 18, totalSupply: 10n ** 24n }, launch: null, v1: null },
+    open: { surfaceFrom: "token", probes: [], probesSkipped: null, probesPending: false, transferFunction: true, pools: [], holders: null, deployer: null, owner: null, powers: [], ownerUnread: false, market: null },
+    rules: null, exit: null, room: null, crew: null, known: null,
+  } as unknown as DoorSlip;
+  const exit = doorAnswers(nowhere).find((r) => r.topic === "exit")!;
+  assert.match(exit.value, /Nowhere to sell/);
+  assert.notEqual(exit.tone, "ok");
+});
+
+test("a proxy whose code could not be read is UNREAD on the card, never NONE or 0", async () => {
+  const { doorCard } = await import("../src/bouncer/card.js");
+  const blind = {
+    chain: CHAINS.robinhood,
+    subject: "0x" + "33".repeat(20),
+    at: { block: 1, timestamp: 1 },
+    stamp: "not-on-the-list",
+    notes: [],
+    skipped: [],
+    id: { registered: false, token: { code: { empty: false, opcodes: {} } }, meta: { symbol: "X", name: "X", decimals: 18, totalSupply: 10n ** 24n }, launch: null, v1: null },
+    open: { surfaceFrom: "implementation-unreadable", probes: [], probesSkipped: null, probesPending: false, transferFunction: true, pools: null, holders: null, deployer: null, owner: null, powers: [], ownerUnread: false, market: null },
+    rules: null, exit: null, room: null, crew: null, known: null, lookalikes: null,
+  } as unknown as DoorSlip;
+  const svg = doorCard(blind, { repoUrl: "r", ticker: "t", mascotSvg: "" });
+  assert.match(svg, /UNREAD/);
+  assert.doesNotMatch(svg, />NONE</);
+  assert.doesNotMatch(svg, /nothing owner-only found/);
+});

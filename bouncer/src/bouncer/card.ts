@@ -89,16 +89,25 @@ function facts(slip: DoorSlip): Fact[] {
   const o = slip.open;
   const out: Fact[] = [];
   if (o) {
-    const owner = o.ownerUnread ? "UNREAD" : o.owner === null ? "NONE" : o.owner.renounced ? "RENOUNCED" : "HAS KEYS";
+    // A proxy whose implementation could not be read has no readable owner()
+    // and no readable function list: that is UNREAD and ?, never NONE and 0.
+    // The card is what gets pasted into chats, so it must not be the one
+    // place that turns "could not read" into "there is none".
+    const unreadable = o.surfaceFrom === "implementation-unreadable";
+    const owner = unreadable || o.ownerUnread ? "UNREAD" : o.owner === null ? "NONE" : o.owner.renounced ? "RENOUNCED" : "HAS KEYS";
     out.push({
       label: "OWNER",
       value: owner,
       bad: Boolean(o.owner && !o.owner.renounced),
-      note: o.ownerUnread ? "owner() would not answer" : o.owner === null ? "no owner() in the code" : o.owner.renounced ? "nobody can call owner-only code" : shortAddress(o.owner.address),
+      note: unreadable ? "the code that runs could not be read" : o.ownerUnread ? "owner() would not answer" : o.owner === null ? "no owner() in the code" : o.owner.renounced ? "nobody can call owner-only code" : shortAddress(o.owner.address),
     });
     const kinds = o.powers.filter((p) => p.kind !== "exempt" && p.kind !== "sweep");
     const names = [...new Set(kinds.map((p) => p.kind))];
-    out.push({ label: "CODE CAN", value: String(kinds.length), bad: kinds.length > 0, note: names.length ? names.join(", ") : "nothing owner-only found" });
+    out.push(
+      unreadable
+        ? { label: "CODE CAN", value: "?", bad: false, note: "implementation not readable" }
+        : { label: "CODE CAN", value: String(kinds.length), bad: kinds.length > 0, note: names.length ? names.join(", ") : "nothing owner-only found" },
+    );
     const sells = o.probes.filter((p) => p.target === "pool");
     const ok = sells.filter((p) => p.status === "ok").length;
     const sale = !sells.length ? "NOT RUN" : sells.every((p) => p.status === "ok") ? "ALL PASS" : sells.some((p) => p.status === "reverts") ? `${ok}/${sells.length}` : "UNREAD";
@@ -122,8 +131,12 @@ function facts(slip: DoorSlip): Fact[] {
       note: o.holders?.count ? `of supply · ${o.holders.count} holders` : "explorer not reachable",
     });
   } else if (slip.rules) {
-    out.push({ label: "TRADE FEE", value: formatBps(slip.rules.totalTradeBps), bad: slip.rules.totalTradeBps >= 1_000, note: "on every buy and sell" });
-    out.push({ label: "CREATOR TAX", value: formatBps(slip.rules.creatorTaxBps), bad: slip.rules.creatorTaxBps >= 500, note: "of the fee, to the creator" });
+    // The same fee the page's "Can you sell it" row states: after graduation
+    // that is the pool's fee plus the creator tax, not the curve's.
+    const e = slip.exit;
+    const fee = e?.venue === "pool" ? e.feeBps + e.creatorTaxBps : slip.rules.totalTradeBps;
+    out.push({ label: "TRADE FEE", value: formatBps(fee), bad: fee >= 1_000n, note: e?.venue === "pool" ? "on every trade, in the pool" : "on every buy and sell" });
+    out.push({ label: "CREATOR TAX", value: formatBps(slip.rules.creatorTaxBps), bad: slip.rules.creatorTaxBps >= 500, note: "of every trade, to the creator" });
     out.push({ label: "DEV HOLDS", value: `${(slip.rules.deployerShareBps / 100).toFixed(1)}%`, bad: slip.rules.deployerShareBps >= 2_000, note: "of supply" });
     out.push({ label: "BUYBACK", value: slip.rules.buybackEnabled ? "VESTS" : "NONE", bad: slip.rules.buybackEnabled, note: slip.rules.buybackEnabled ? "bought back, not burned" : "no buyback in the rules" });
   }
@@ -297,7 +310,7 @@ function renderCard(model: CardModel, options: CardOptions): string {
   // which appeared on BONK and on USDC. An ordinary token is a fact, not
   // a thing to watch, so it is drawn in the same grey as the rest of the
   // record line.
-  const stampColor = /NOT ON THE LIST/.test(stamp) ? c.stop : /ORDINARY TOKEN|^NOT A /.test(stamp) ? c.dim : c.ok;
+  const stampColor = /NOT ON THE LIST|^COPY/.test(stamp) ? c.stop : /ORDINARY TOKEN|^NOT A /.test(stamp) ? c.dim : c.ok;
   const stampW = stamp.length * 8.4 + 22;
   // Split the same way the page splits it. The card used to print one
   // total across findings AND the things that went unread, which is a

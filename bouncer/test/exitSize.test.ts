@@ -151,3 +151,19 @@ test("a range pool the slip priced is priced the same way here, with its caveat"
   assert.equal(answer.quote.shareOfPoolBps, null, "a range pool has no token side to be a share of");
   assert.match(answer.quote.caveat ?? "", /range/);
 });
+
+test("a curve never pays out more than it holds, and nobody sells what is still inside it", () => {
+  const slip = {
+    chain: { key: "robinhood", name: "Robinhood Chain", chainId: 1, launchpad: "Pons V2", native: { symbol: "ETH", decimals: 18 } },
+    id: { meta: { decimals: 18, totalSupply: 1_000n * E } },
+    // 800 tokens still in the curve; its pricing reserve says 2 ETH, it really holds 0.5.
+    exit: { venue: "curve", reserves: { token: 800n * E, quote: 2n * E }, feeBps: 100n, creatorTaxBps: 0n, spot: 0n, quotes: [], note: "", position: 0n, realQuote: E / 2n },
+    open: null,
+  } as unknown as DoorSlip;
+  const all = evmExitFor(slip, 200n * E);
+  assert.ok(all.ok);
+  assert.ok(all.quote.out <= E / 2n, `paid ${all.quote.out}, the curve holds ${E / 2n}`);
+  const more = evmExitFor(slip, 201n * E);
+  assert.equal(more.ok, false);
+  assert.ok(!more.ok && /outside the curve/.test(more.why));
+});

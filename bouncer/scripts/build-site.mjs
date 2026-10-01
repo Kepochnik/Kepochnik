@@ -40,6 +40,8 @@ const bundle = js.replace(/<\/script/g, "<\\/script");
 const inlined = html.replace('<script src="app.js"></script>', () => `<script>\n${bundle}\n</script>`);
 if (!inlined.includes(bundle)) throw new Error("the inlined page does not carry the bundle byte for byte");
 writeFileSync("site/dist/index.html", inlined);
+// The link-preview image the og:image tag points at.
+copyFileSync("site/og.png", "site/dist/og.png");
 
 // Privacy policy page for the Web Store listing, from extension/store/PRIVACY.md.
 const md = readFileSync("extension/store/PRIVACY.md", "utf8");
