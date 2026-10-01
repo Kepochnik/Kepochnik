@@ -537,6 +537,7 @@ new MutationObserver(() => {
   document.body.classList.toggle("answered", (document.getElementById("out")?.childElementCount ?? 0) > 0);
   fitRail();
   markScrollers();
+  paintMinibar();
 }).observe(document.getElementById("out") as Node, { childList: true });
 
 /**
@@ -1235,7 +1236,7 @@ async function runBoard(hours: number): Promise<void> {
 
 function renderBoard(b: Board, hours: number): void {
   const qd = chain().native;
-  const amt = (v: bigint) => esc(formatMoney(v, qd.decimals, qd.symbol, quoteUsdNow(true)));
+  const amt = (v: bigint) => mny(v, qd.decimals, qd.symbol, true);
   const link = (a: string) => `<a href="#/${mode === "demo" ? "demo" : "t"}/${a}${routeChain()}">${shortAddress(a)}</a>`;
   const dev = (a: string) => `<a href="#/dev/${a}${routeChain()}">${shortAddress(a)}</a>`;
   const windows = [1, 6, 24].map((h) => `<a class="frame${h === hours ? " on" : ""}" href="#/board?hours=${h}&chain=${mode === "demo" ? "demo" : chain().key}" aria-current="${h === hours ? "true" : "false"}">${h}h</a>`).join("");
@@ -1249,7 +1250,7 @@ function renderBoard(b: Board, hours: number): void {
         <div><span>graduations</span><b class="num">${b.graduations}</b></div>
         <div><span>deployers</span><b class="num">${b.deployers}</b></div>
         <div><span>door tax paid</span><b class="num">${amt(b.coverTotal)}</b><span>${b.taxedBuys} buy${b.taxedBuys === 1 ? "" : "s"}</span></div>
-      </div><p class="qdetail">Door tax = the part of a buy's tax above the curve's own creator rate, as the curve's CurveBuy event reports it. Counts, not scores.</p></section>
+      </div><p class="qdetail">Door tax = the part of a buy's tax above the curve's own creator rate, as the curve's CurveBuy event reports it. Counts, not scores.${b.otherPairCurves ? ` ${plural(b.otherPairCurves, "curve")} paired with another token also took door tax; ${b.otherPairCurves === 1 ? "its amounts are" : "their amounts are"} in that token's units, so ${b.otherPairCurves === 1 ? "it is" : "they are"} left out of these totals rather than added to ${esc(qd.symbol)}.` : ""}</p></section>
       <section class="sec"><h2>Deployers</h2>${b.topDeployers.length ? `<div class="tbl"><table class="buys"><thead><tr><th>deployer</th><th class="num">launched</th><th class="num">graduated</th><th class="num">swept</th></tr></thead><tbody>${b.topDeployers.map((r) => `<tr><td>${dev(r.deployer)}</td><td class="num">${r.launched}</td><td class="num">${r.graduated}</td><td class="num">${Math.max(0, r.swept - r.graduated)}</td></tr>`).join("")}</tbody></table></div>` : none("No launches in the window.")}
         ${b.serial.length ? `<h2 style="margin-top:14px">Serial, no graduation</h2><div class="tbl"><table class="buys"><tbody>${b.serial.map((r) => `<tr><td>${dev(r.deployer)}</td><td>${r.launched} launched, none graduated</td></tr>`).join("")}</tbody></table></div>` : ""}</section>
       <section class="sec"><h2>Door tax by token</h2>${b.topCurves.length ? `<div class="tbl"><table class="buys"><thead><tr><th>token</th><th class="num">collected</th><th class="num">buys</th><th class="num">highest</th><th class="num">creator tax</th></tr></thead><tbody>${b.topCurves.map((r) => `<tr><td>${link(r.token ?? r.curve)}</td><td class="num">${amt(r.coverCollected)}</td><td class="num">${r.taxedBuys}</td><td class="num">${(r.highestBps / 100).toFixed(1)}%</td><td class="num">${formatBps(r.creatorTaxBps)}</td></tr>`).join("")}</tbody></table></div>` : none("No buy in the window paid above the creator rate.")}</section>
@@ -2043,6 +2044,33 @@ function quoteUsdNow(native: boolean): number | null {
 
 type Quote = { symbol: string; decimals: number; native: boolean };
 
+/**
+ * A money figure that can be rewritten in place. The coin's dollar price is
+ * read alongside the chain and sometimes lands after a view is drawn; the
+ * figures drawn before it carried the coin alone, and a page then mixed
+ * "$1.98K (0.8 ETH)" with bare "0.4 ETH". Every figure keeps its raw amount
+ * on the element, and refreshMoney() rewrites them all when the price lands.
+ */
+function mny(v: bigint, decimals: number, symbol: string, native: boolean, opts: { plus?: boolean; price?: boolean } = {}): string {
+  const text = moneyText(v, decimals, symbol, native ? quoteUsdNow(true) : null, opts);
+  return `<span class="m" data-raw="${v}" data-dec="${decimals}" data-sym="${esc(symbol)}"${native ? ' data-n="1"' : ""}${opts.plus ? ' data-plus="1"' : ""}${opts.price ? ' data-price="1"' : ""}>${esc(text)}</span>`;
+}
+
+function moneyText(v: bigint, decimals: number, symbol: string, usd: number | null, opts: { plus?: boolean; price?: boolean }): string {
+  const text = opts.price ? formatPriceMoney(v, decimals, symbol, usd) : formatMoney(v, decimals, symbol, usd);
+  // A gain carries its sign in both units, the way a loss already does.
+  return opts.plus && v > 0n ? `+${text.replace("(", "(+")}` : text;
+}
+
+/** Rewrites every tagged figure on the page with the price now in hand. */
+function rewriteMoney(): void {
+  const usd = quoteUsdNow(true);
+  if (usd === null) return;
+  for (const el of document.querySelectorAll<HTMLElement>(".m[data-n]")) {
+    el.textContent = moneyText(BigInt(el.dataset.raw ?? "0"), Number(el.dataset.dec ?? 18), el.dataset.sym ?? "", usd, { plus: el.dataset.plus === "1", price: el.dataset.price === "1" });
+  }
+}
+
 /** The coin a launch trades against, the way the house rules resolve it. */
 async function quoteOfLaunch(rpc: RpcClient, pairToken: string, block: number): Promise<Quote> {
   if (pairToken.toLowerCase() === ZERO_ADDRESS) return { ...chain().native, native: true };
@@ -2095,6 +2123,9 @@ function fillVolume(): void {
 
 /** Redraws every money figure on the open token with the dollar price now known. */
 function refreshMoney(): void {
+  // Every view's tagged figures first: the board, a wallet, a receipt and the
+  // planner have no slip, and used to stay coin-only for good.
+  rewriteMoney();
   if (!shown) return;
   const m = marketFacts(shown.slip, { quoteUsd: quoteUsdNow(slipNative(shown.slip)) });
   shown = { ...shown, m };
@@ -2107,6 +2138,7 @@ function refreshMoney(): void {
   const exitValue = document.querySelector<HTMLElement>("#q-exit .qv");
   if (exit && exitValue) exitValue.textContent = exit.value;
   if (tape) paintTape();
+  paintMinibar();
 }
 
 /**
@@ -2771,6 +2803,8 @@ function tapeRole(wallet: string): "dev" | "creator" | null {
 /** A share of supply with the precision it deserves: 0.05%, 0.29%, 1.8%, 35%. */
 function shareText(bps: number): string {
   const pct = bps / 100;
+  // A sliver is not nothing: "0%" of supply for a real holding reads as none.
+  if (bps > 0 && pct < 0.01) return "<0.01%";
   const text = pct >= 10 ? pct.toFixed(0) : pct >= 1 ? pct.toFixed(1) : pct.toFixed(2);
   return `${text.replace(/(\.\d*?)0+$/, "$1").replace(/\.$/, "")}%`;
 }
@@ -2806,6 +2840,51 @@ function tapeNone(why: string): string {
  * back to the top every fifteen seconds, which makes the one live thing on
  * the page the one thing you cannot read.
  */
+/**
+ * The pinned bar: built from what the token bar shows, so the two can never
+ * say different things, and shown only while the token bar is off screen.
+ */
+// The extension's popup has no page to scroll past, and no bar.
+const minibar = document.getElementById("minibar");
+const minibarWatch = new IntersectionObserver((entries) => {
+  for (const e of entries) {
+    const on = !e.isIntersecting && Boolean(minibar?.innerHTML) && e.boundingClientRect.top < 0;
+    minibar?.classList.toggle("on", on);
+    // The column and the rail stick under the header; with the bar down they
+    // stick under the bar instead, or their own heads hide behind it.
+    document.body.classList.toggle("mb-on", on);
+  }
+});
+function paintMinibar(): void {
+  if (!minibar) return;
+  const bar = document.querySelector<HTMLElement>(".doorway .tokbar");
+  const word = document.querySelector<HTMLElement>(".doorway .vword");
+  if (!bar || !word || document.querySelector(".doorway[data-pending]")) {
+    minibar.innerHTML = "";
+    minibar.classList.remove("on");
+    document.body.classList.remove("mb-on");
+    minibar.setAttribute("aria-hidden", "true");
+    minibarWatch.disconnect();
+    return;
+  }
+  const header = document.querySelector("header");
+  if (header) document.documentElement.style.setProperty("--hdr", `${Math.round(header.getBoundingClientRect().height)}px`);
+  const kind = ["stop", "watch", "clear", "unknown"].find((k) => word.classList.contains(k)) ?? "unknown";
+  const sym = bar.querySelector(".tokline .sym")?.textContent?.trim() ?? "";
+  const price = bar.querySelector(".tp-v")?.textContent?.trim() ?? "";
+  const move = bar.querySelector<HTMLElement>(".tp-s .move");
+  const tone = move ? (["up", "down", "flat"].find((t) => move.classList.contains(t)) ?? "flat") : "flat";
+  const address = bar.querySelector<HTMLElement>(".vaddr")?.dataset.copy ?? "";
+  minibar.innerHTML = `<span class="mb-sym">${esc(sym)}</span>
+    <span class="vmini ${kind}">${esc(word.textContent?.trim() ?? "")}</span>
+    ${price && price !== "no price" ? `<span class="mb-price">${esc(price)}</span>` : ""}
+    ${move ? `<span class="mb-move ${tone}">${esc(move.textContent ?? "")}</span>` : ""}
+    ${address ? `<button class="mb-copy" type="button" data-copy="${esc(address)}" aria-label="Copy the contract address ${esc(address)}">${esc(shortAddress(address))} ⧉</button>` : ""}`;
+  minibar.removeAttribute("aria-hidden");
+  minibarWatch.disconnect();
+  minibarWatch.observe(bar);
+}
+
 function paintTape(): void {
   const box = document.getElementById("tape");
   if (!box) { stopTape(); return; }
@@ -2816,6 +2895,7 @@ function paintTape(): void {
   if (after && at > 0) after.scrollTop = at;
   paintChart();
   fillVolume();
+  paintMinibar();
 }
 
 /**
@@ -2968,7 +3048,7 @@ function splFacts(slip: SplSlip): Fact[] {
  * Reserves, not a venue name alone: "Uniswap V3" tells a reader nothing about
  * whether they can get out, and twelve ETH tells them everything.
  */
-function venueList(pools: MarketPool[] | null | undefined, quote: { symbol: string; decimals: number }, tokenDecimals: number, usd: number | null = null): string {
+function venueList(pools: MarketPool[] | null | undefined, quote: { symbol: string; decimals: number }, tokenDecimals: number, native = true): string {
   if (pools === null || pools === undefined) return "";
   if (!pools.length) {
     return `<div class="venues"><div class="cap-l">Where it trades</div><div class="venue">nothing on this chain's known DEX factories</div></div>`;
@@ -2976,7 +3056,7 @@ function venueList(pools: MarketPool[] | null | undefined, quote: { symbol: stri
   const rows = pools
     .slice(0, 4)
     .map(
-      (p) => `<div class="venue"><span>${esc(p.dex)} · ${(p.feeBps / 100).toFixed(2)}%</span><b>${p.quoteReserve === null ? "unread" : esc(formatMoney(p.quoteReserve, quote.decimals, quote.symbol, usd))}</b></div>
+      (p) => `<div class="venue"><span>${esc(p.dex)} · ${(p.feeBps / 100).toFixed(2)}%</span><b>${p.quoteReserve === null ? "unread" : mny(p.quoteReserve, quote.decimals, quote.symbol, native)}</b></div>
         <div class="venue"><span>tokens inside</span><b>${p.tokenReserve === null ? "unread" : esc(formatCoin(p.tokenReserve, tokenDecimals))}</b></div>`,
     )
     .join("");
@@ -3434,11 +3514,11 @@ function wireExitCalc(decimals: number, quoteFor: (tokens: bigint) => SizeAnswer
     const said = readSizeQuote(q);
     const ofSupply = supply && supply > 0n ? ` · ${shareText(Number((tokens * 1_000_000n) / supply) / 100)} of supply` : "";
     out.innerHTML = `<div class="calc-res">
-      <div class="calc-fig"><span class="l">in hand</span><b class="v num">${esc(formatMoney(q.out, q.quoteDecimals, q.quoteSymbol, quoteUsdNow(nativeQuote)))}</b><span class="s">for ${esc(formatCoin(tokens, decimals))} tokens${ofSupply}</span></div>
+      <div class="calc-fig"><span class="l">in hand</span><b class="v num">${mny(q.out, q.quoteDecimals, q.quoteSymbol, nativeQuote)}</b><span class="s">for ${esc(formatCoin(tokens, decimals))} tokens${ofSupply}</span></div>
       <div class="calc-fig"><span class="l">you keep</span><b class="v num">${(q.realisedBps / 100).toFixed(1)}%</b><span class="s">of what the screen price says</span></div>
-      <div class="calc-fig"><span class="l">your size</span><b class="v num">${esc(shareText(q.shareOfPoolBps))}</b><span class="s">of the token side of ${esc(q.venue)}</span></div>
+      ${q.shareOfPoolBps !== null ? `<div class="calc-fig"><span class="l">your size</span><b class="v num">${esc(shareText(q.shareOfPoolBps))}</b><span class="s">of the token side of ${esc(q.venue)}</span></div>` : ""}
     </div>
-    <p class="calc-say ${said.level}">${esc(said.text)}</p>`;
+    <p class="calc-say ${said.level}">${esc(said.text)}${q.caveat ? ` ${esc(q.caveat)}` : ""}</p>`;
   };
   input.addEventListener("keydown", (e) => {
     if ((e as KeyboardEvent).key === "Enter") {
@@ -4123,9 +4203,7 @@ function renderSlip(slip: DoorSlip, opts: { stage?: Stage; source?: Source } = {
   const o = slip.open;
   const tradesText = o ? tradesBody(slip) : "";
   const qd = slip.rules?.quote ?? slip.chain.native;
-  const evUsd = quoteUsdNow(slipNative(slip));
-  const money = (v: bigint) => formatMoney(v, qd.decimals, qd.symbol, evUsd);
-  const amt = (v: bigint) => esc(formatMoney(v, qd.decimals, qd.symbol, evUsd));
+  const amt = (v: bigint) => mny(v, qd.decimals, qd.symbol, slipNative(slip));
   const c = slip.cover;
   const r = slip.rules;
   const room = slip.room;
@@ -4182,7 +4260,7 @@ function renderSlip(slip: DoorSlip, opts: { stage?: Stage; source?: Source } = {
   let coverBody = "";
   if (c) {
     const buys = c.observed
-      .map((b) => `<tr class="${b.creatorWallet ? "exempt" : ""}"><td>${b.secondsAfterLaunch.toFixed(1)} s</td><td><span class="mono">${shortAddress(b.buyer)}</span>${b.creatorWallet ? ' <span class="flag">creator</span>' : ""}</td><td class="num">${esc(money(b.quoteIn))}</td><td class="num">${b.creatorWallet ? "exempt" : b.doorBps > 0 ? `${(b.doorBps / 100).toFixed(1)}%` : "0%"}</td><td class="num">${((b.chargeBps - b.doorBps) / 100).toFixed(0)}%</td></tr>`)
+      .map((b) => `<tr class="${b.creatorWallet ? "exempt" : ""}"><td>${b.secondsAfterLaunch.toFixed(1)} s</td><td><span class="mono">${shortAddress(b.buyer)}</span>${b.creatorWallet ? ' <span class="flag">creator</span>' : ""}</td><td class="num">${amt(b.quoteIn)}</td><td class="num">${b.creatorWallet ? "exempt" : b.doorBps > 0 ? `${(b.doorBps / 100).toFixed(1)}%` : "0%"}</td><td class="num">${((b.chargeBps - b.doorBps) / 100).toFixed(0)}%</td></tr>`)
       .join("");
     coverBody = `${c.status === "open" ? `<div class="bar"><i id="cd-bar" style="width:${Math.round((c.secondsLeft / c.terms.seconds) * 100)}%"></i></div>` : ""}
       <dl class="kv">
@@ -4206,7 +4284,7 @@ function renderSlip(slip: DoorSlip, opts: { stage?: Stage; source?: Source } = {
           // bag nobody holds, beside a headline about the supply.
           const tokensIn = (e.position * BigInt(x.shareBps)) / 10_000n;
           const ofSupply = supplyOf > 0n ? shareText(Number((tokensIn * 1_000_000n) / supplyOf) / 100) : "";
-          return `<div><span>${esc(formatCoin(tokensIn, 18))} tokens${ofSupply ? ` · ${ofSupply} of supply` : ""}</span><b class="num">${esc(money(x.net))}</b><small>${(x.realisedBps / 100).toFixed(1)}% of the quote</small></div>`;
+          return `<div><span>${esc(formatCoin(tokensIn, 18))} tokens${ofSupply ? ` · ${ofSupply} of supply` : ""}</span><b class="num">${amt(x.net)}</b><small>${(x.realisedBps / 100).toFixed(1)}% of the quote</small></div>`;
         }).join("")}</div>` : ""}
         <p class="qdetail">${esc(e.note)}</p>
         <div class="wallet-row"><input id="wallet-q" placeholder="your wallet 0x… to see your own bag on this token" spellcheck="false"><button class="ghost" id="wallet-go" type="button">Show my bag</button></div>`
@@ -4277,7 +4355,7 @@ function renderSlip(slip: DoorSlip, opts: { stage?: Stage; source?: Source } = {
       stageTag: stageTag(slip),
       explorer: mode === "demo" ? null : explorerAddress(chain(), slip.subject),
       frames: "",
-      venues: venueList(slip.open?.pools, slip.rules?.quote ?? slip.chain.native, slip.id.meta?.decimals ?? 18, usdPer),
+      venues: venueList(slip.open?.pools, slip.rules?.quote ?? slip.chain.native, slip.id.meta?.decimals ?? 18, slipNative(slip)),
       alert: realOne(slip),
       bands: `${coverage ? coverageBand(coverage, stage0) : ""}${changes ?? ""}`,
       evidence,
@@ -4292,6 +4370,7 @@ function renderSlip(slip: DoorSlip, opts: { stage?: Stage; source?: Source } = {
     ${stage0 === "done" ? ("why" in picked ? tapeNone(picked.why) : `<section class="tape" id="tape"></section>`) : ""}
   </div>`;
 
+  paintMinibar();
   if (stage0 === "done") setPageTitle(`${meta?.symbol ?? shortAddress(slip.subject)} · ${verdictOf(slip.notes, "done", coverage).word} · BOUNCER`);
   // The tape opens itself. It is the answer to "why does this page not move",
   // and a live panel behind a button is a panel nobody presses.
@@ -4483,7 +4562,7 @@ function tradesBody(slip: DoorSlip): string {
   const explorer = chain().blockscout;
   const pools = o.pools
     ? o.pools.length
-      ? `<div class="tbl"><table class="buys"><thead><tr><th>pool</th><th>fee</th><th class="num">${esc(q.symbol)} side</th><th class="num">tokens</th></tr></thead><tbody>${o.pools.map((p) => `<tr><td>${explorer && mode !== "demo" ? `<a href="${esc(explorer)}/address/${esc(p.address)}" target="_blank" rel="noopener">${esc(p.dex)} · ${shortAddress(p.address)}</a>` : `${esc(p.dex)} · ${shortAddress(p.address)}`}</td><td>${(p.feeBps / 100).toFixed(2)}%</td><td class="num">${p.quoteReserve === null ? "unread" : esc(formatMoney(p.quoteReserve, q.decimals, q.symbol, quoteUsdNow(true)))}</td><td class="num">${p.tokenReserve === null ? "unread" : esc(formatCoin(p.tokenReserve, dec))}</td></tr>`).join("")}</tbody></table></div><p style="color:var(--dim);font-size:12px;margin:6px 0 0">Reserves are the pool's balances at this block. Whether the liquidity is locked is not read here, and pools on other venues or against other pairs are not counted.</p>`
+      ? `<div class="tbl"><table class="buys"><thead><tr><th>pool</th><th>fee</th><th class="num">${esc(q.symbol)} side</th><th class="num">tokens</th></tr></thead><tbody>${o.pools.map((p) => `<tr><td>${explorer && mode !== "demo" ? `<a href="${esc(explorer)}/address/${esc(p.address)}" target="_blank" rel="noopener">${esc(p.dex)} · ${shortAddress(p.address)}</a>` : `${esc(p.dex)} · ${shortAddress(p.address)}`}</td><td>${(p.feeBps / 100).toFixed(2)}%</td><td class="num">${p.quoteReserve === null ? "unread" : mny(p.quoteReserve, q.decimals, q.symbol, true)}</td><td class="num">${p.tokenReserve === null ? "unread" : esc(formatCoin(p.tokenReserve, dec))}</td></tr>`).join("")}</tbody></table></div><p style="color:var(--dim);font-size:12px;margin:6px 0 0">Reserves are the pool's balances at this block. Whether the liquidity is locked is not read here, and pools on other venues or against other pairs are not counted.</p>`
       : `<p style="color:var(--muted);font-size:13px;margin:0">No W${esc(q.symbol)} pool on the chain's known DEX factories. It may trade on another DEX, in a Uniswap V4 pool, against another pair, or not at all.</p>`
     : "";
   const feed =
@@ -4535,7 +4614,7 @@ function devSection(d: DevReport, subject: string | null, standalone: boolean, b
 }
 
 function renderPosition(p: Position, head: number, symbol: string | null, qd: Quote): void {
-  const money = (v: bigint) => esc(formatMoney(v, qd.decimals, qd.symbol, quoteUsdNow(qd.native)));
+  const money = (v: bigint) => mny(v, qd.decimals, qd.symbol, qd.native);
   const whole = p.exit.quotes.find((x) => x.shareBps === 10_000);
   const buys = p.trades.filter((t) => t.kind === "buy");
   const sells = p.trades.filter((t) => t.kind === "sell");
@@ -4543,7 +4622,7 @@ function renderPosition(p: Position, head: number, symbol: string | null, qd: Qu
   const sold = sells.reduce((a, t) => a + t.tokens, 0n);
   // The sign on both units: "−$857 (0.345 ETH)" reads as a loss in one
   // and a gain in the other.
-  const signed = (v: bigint) => (v > 0n ? `+${money(v).replace(/\(/, "(+")}` : money(v));
+  const signed = (v: bigint) => mny(v, qd.decimals, qd.symbol, qd.native, { plus: true });
   // With nothing left the figure is what the trades made or lost, not a
   // paper gain on a bag that is still held.
   const resultWord = p.balance === 0n ? "result so far" : "if sold now";
@@ -4583,7 +4662,7 @@ function renderPosition(p: Position, head: number, symbol: string | null, qd: Qu
 }
 
 function receiptSection(r: TradeReceipt, qd: Quote): string {
-  const amt = (v: bigint) => esc(formatMoney(v, qd.decimals, qd.symbol, quoteUsdNow(qd.native)));
+  const amt = (v: bigint) => mny(v, qd.decimals, qd.symbol, qd.native);
   // One precision for a share of the trade: 1%, 10%, 60% — never "10.0%".
   const share = (v: bigint) => (r.quote === 0n ? "0%" : formatBps((v * 10_000n) / r.quote));
   const token = r.launch ? `<a href="#/${mode === "demo" ? "demo" : "t"}/${r.launch.token.toLowerCase()}${routeChain()}">${esc(r.symbol ?? shortAddress(r.launch.token))}</a>` : `curve ${shortAddress(r.curve)} (no factory record)`;
@@ -4595,8 +4674,8 @@ function receiptSection(r: TradeReceipt, qd: Quote): string {
       <dt>protocol fee</dt><dd>${amt(r.fee)} · ${share(r.fee)}</dd>
       <dt>creator tax</dt><dd>${amt(r.creatorTaxPart)} · ${share(r.creatorTaxPart)}</dd>
       <dt>door tax</dt><dd>${amt(r.coverChargePart)} · ${share(r.coverChargePart)}<small class="gloss-line">the part of the tax above the creator's own rate</small></dd>
-      <dt>effective price</dt><dd>${esc(formatPriceMoney(r.effectivePrice, qd.decimals, qd.symbol, quoteUsdNow(qd.native)))} per token, fees included</dd>
-      <dt>curve price after</dt><dd>${r.marginalPriceAfter === null ? "not served by this RPC for that block" : `${esc(formatPriceMoney(r.marginalPriceAfter, qd.decimals, qd.symbol, quoteUsdNow(qd.native)))} per token`}</dd>
+      <dt>effective price</dt><dd>${mny(r.effectivePrice, qd.decimals, qd.symbol, qd.native, { price: true })} per token, fees included</dd>
+      <dt>curve price after</dt><dd>${r.marginalPriceAfter === null ? "not served by this RPC for that block" : `${mny(r.marginalPriceAfter, qd.decimals, qd.symbol, qd.native, { price: true })} per token`}</dd>
     </dl></section>`;
 }
 
@@ -4608,8 +4687,8 @@ function shortHash(hash: string): string {
 function renderPlan(plan: LaunchPlan): void {
   const qd = plan.quote;
   const c = chain();
-  const u = (v: bigint) => esc(formatMoney(v, qd.decimals, qd.symbol, quoteUsdNow(qd.native)));
-  const price = (v: bigint) => esc(formatPriceMoney(v, qd.decimals, qd.symbol, quoteUsdNow(qd.native)));
+  const u = (v: bigint) => mny(v, qd.decimals, qd.symbol, qd.native);
+  const price = (v: bigint) => mny(v, qd.decimals, qd.symbol, qd.native, { price: true });
   const tokens = (v: bigint) => `<span class="mono">${esc(formatCoin(v, 18))}</span>`;
   out.innerHTML = `<div class="slip">
     <div class="stamp-row"><div class="who"><div class="cap-l">Launch planner</div><div class="sym">Plan a launch</div><div class="name">${esc(c.name)} · ${esc(c.launchpad ?? "no launchpad")}${plan.configEnabled ? "" : " · this config is disabled"} · quote ${esc(qd.symbol)} · block ${plan.block.toLocaleString("en-US")}</div>
@@ -4622,7 +4701,7 @@ function renderPlan(plan: LaunchPlan): void {
       <div class="stamp">${formatBps(plan.creatorTaxBps)} TAX</div></div>
     <div class="grid">
       <section class="sec"><h2>Terms today</h2><dl class="kv">
-        <dt>launch fee</dt><dd>${esc(formatMoney(plan.launchFee, c.native.decimals, c.native.symbol, quoteUsdNow(true)))} to the protocol</dd>
+        <dt>launch fee</dt><dd>${mny(plan.launchFee, c.native.decimals, c.native.symbol, true)} to the protocol</dd>
         <dt>supply</dt><dd>${tokens(plan.supply)}</dd>
         <dt>curve</dt><dd>graduates at ${u(plan.graduationThreshold)} · priced from a ${u(plan.phantomQuote)} virtual reserve</dd>
         <dt>creator tax</dt><dd>${formatBps(plan.creatorTaxBps)} of every curve trade (ceiling ${formatBps(plan.maxCreatorTaxBps)})</dd>

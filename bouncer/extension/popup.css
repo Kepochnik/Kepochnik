@@ -82,3 +82,4 @@ table.trades th,table.trades td{padding-inline:16px}
    size in the quote asset and the share of supply say what the raw token
    count and the block number say, in less room. */
 table.trades .c-tok,table.trades .c-blk{display:none}
+.minibar{display:none}

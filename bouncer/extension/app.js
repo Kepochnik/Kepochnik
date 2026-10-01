@@ -6640,7 +6640,8 @@
       // formula is asymptotic, so it never returns the last unit and a
       // strict comparison would never fire.
       drainsPool: quoteReserve > 0n && out2 * 100n >= quoteReserve * 99n,
-      shareOfPoolBps: tokenReserve > 0n ? Number(tokensIn * 10000n / tokenReserve) : 0
+      shareOfPoolBps: tokenReserve > 0n ? Number(tokensIn * 10000n / tokenReserve) : 0,
+      caveat: null
     };
   }
   function evmExitFor(slip, tokensIn) {
@@ -6659,6 +6660,29 @@
           venue: exit.venue === "curve" ? "the bonding curve" : "the launch pool"
         })
       };
+    }
+    const market = slip.open?.market;
+    if (market?.best) {
+      const best = market.best;
+      const priced2 = quoteSale(best, tokensIn);
+      if (priced2) {
+        const decimals = slip.id?.meta?.decimals ?? 18;
+        const spotOut = market.spot !== null ? market.spot * tokensIn / 10n ** BigInt(decimals) : 0n;
+        const ranged = best.kind === "v3" || best.kind === "v4";
+        const quote = shaped(tokensIn, priced2.out, spotOut, ranged ? 0n : best.tokenReserve ?? 0n, ranged ? 0n : best.quoteReserve ?? 0n, {
+          quoteSymbol: native.symbol,
+          quoteDecimals: native.decimals,
+          venue: `${best.dex} (${best.kind})`
+        });
+        return {
+          ok: true,
+          quote: {
+            ...quote,
+            shareOfPoolBps: ranged ? null : quote.shareOfPoolBps,
+            caveat: !ranged ? null : priced2.beyondTick ? "This size leaves the pool's current price range. The liquidity past it was not read, so the real payout is likely lower than this." : "Exact inside the pool's current price range, which is where a sale this size stays."
+          }
+        };
+      }
     }
     const pool = priceableEvmPool(slip.open?.pools ?? null);
     if (pool) {
@@ -6729,7 +6753,7 @@
         text: `A sale this size takes essentially everything ${q2.venue} holds. Past that point the arithmetic stops being a quote: there would be no meaningful market left to sell the last of it into, and anybody selling ahead of you makes your share smaller.`
       };
     }
-    if (q2.shareOfPoolBps >= 3333) {
+    if (q2.shareOfPoolBps !== null && q2.shareOfPoolBps >= 3333) {
       return {
         level: "stop",
         text: `This position is ${pct3(q2.shareOfPoolBps)} of the token side of ${q2.venue}. A holding that large next to its own pool cannot leave at anything near the screen price, whatever the price says.`
@@ -7668,6 +7692,7 @@
     const byDeployer = /* @__PURE__ */ new Map();
     const tokenToDeployer = /* @__PURE__ */ new Map();
     const curveToToken = /* @__PURE__ */ new Map();
+    const curveNative = /* @__PURE__ */ new Map();
     let launches = 0;
     let graduations = 0;
     for (const l of ledger.logs) {
@@ -7677,6 +7702,7 @@
         launches++;
         tokenToDeployer.set(token, deployer);
         curveToToken.set(String(l.args.curve).toLowerCase(), token);
+        curveNative.set(String(l.args.curve).toLowerCase(), /^0x0{40}$/i.test(String(l.args.pairToken)));
         const row = byDeployer.get(deployer) ?? { deployer, launched: 0, swept: 0, graduated: 0, tokens: [] };
         row.launched++;
         row.tokens.push(token);
@@ -7698,6 +7724,7 @@
     let topCurves = [];
     let topPayers = [];
     let chunks = ledger.chunks;
+    let otherPairCurves = 0;
     if (!options.skipCover) {
       const buys = await readTapeAdaptive(
         rpc,
@@ -7707,21 +7734,31 @@
       chunks += buys.chunks;
       const curves = [...new Set(buys.logs.map((l) => l.address.toLowerCase()))];
       const rates = /* @__PURE__ */ new Map();
-      for (let i = 0; i < curves.length; i += 50) {
-        const slice = curves.slice(i, i + 50);
-        const raw = await rpc.callBatch(slice.map((c) => ({ to: c, data: encodeCall(CURVE_FUNCTIONS.creatorTaxBps, []) })), options.toBlock).catch(() => null);
+      for (let i = 0; i < curves.length; i += 25) {
+        const slice = curves.slice(i, i + 25);
+        const raw = await rpc.callBatch(slice.flatMap((c) => [{ to: c, data: encodeCall(CURVE_FUNCTIONS.creatorTaxBps, []) }, { to: c, data: encodeCall(CURVE_FUNCTIONS.isNativeQuote, []) }]), options.toBlock).catch(() => null);
         slice.forEach((c, j) => {
           try {
-            rates.set(c, raw ? decodeOutputs(CURVE_FUNCTIONS.creatorTaxBps, raw[j])[0] : 0n);
+            rates.set(c, raw ? decodeOutputs(CURVE_FUNCTIONS.creatorTaxBps, raw[j * 2])[0] : 0n);
           } catch {
             rates.set(c, 0n);
           }
+          try {
+            if (raw) curveNative.set(c, decodeOutputs(CURVE_FUNCTIONS.isNativeQuote, raw[j * 2 + 1])[0]);
+          } catch {
+          }
         });
       }
+      const otherPairs = /* @__PURE__ */ new Set();
       const perCurve = /* @__PURE__ */ new Map();
       const perPayer = /* @__PURE__ */ new Map();
       for (const l of buys.logs) {
         const curve = l.address.toLowerCase();
+        if (curveNative.get(curve) !== true) {
+          const t = l.args.tax;
+          if (t > l.args.quoteIn * (rates.get(curve) ?? 0n) / 10000n) otherPairs.add(curve);
+          continue;
+        }
         const rate = rates.get(curve) ?? 0n;
         const quoteIn = l.args.quoteIn;
         const tax = l.args.tax;
@@ -7745,8 +7782,9 @@
       }
       topCurves = [...perCurve.values()].filter((r) => r.coverCollected > 0n).sort((a, b) => b.coverCollected > a.coverCollected ? 1 : -1).slice(0, top);
       topPayers = [...perPayer.values()].sort((a, b) => b.coverPaid > a.coverPaid ? 1 : -1).slice(0, top);
+      otherPairCurves = otherPairs.size;
     }
-    return { window: { fromBlock: options.fromBlock, toBlock: options.toBlock }, launches, graduations, deployers: rows.length, topDeployers, serial, coverTotal, taxedBuys, topCurves, topPayers, chunks };
+    return { window: { fromBlock: options.fromBlock, toBlock: options.toBlock }, launches, graduations, deployers: rows.length, topDeployers, serial, coverTotal, taxedBuys, topCurves, topPayers, otherPairCurves, chunks };
   }
 
   // src/bouncer/watch.ts
@@ -8283,7 +8321,7 @@
         "exit",
         `Selling ${shareOfSupply(q2.shareBps)} of the supply pays ${amount}`,
         toneOf(mine),
-        `priced against the ${m.best.dex} pool's own reserves at this block, that is ${(q2.realisedBps / 100).toFixed(1)}% of the quoted price. The token's own transfer tax, if it has one, is not included. Sized as ${(q2.shareBps / 100).toFixed(0)}% of a reference position of 1% of the supply.`,
+        `${m.best.kind === "v3" || m.best.kind === "v4" ? `priced from the ${m.best.dex} pool's price and in-range liquidity at this block${q2.beyondTick ? " \u2014 this size leaves the current range, and the liquidity past it was not read, so the real payout is likely lower" : ", exact inside its current range"}` : `priced against the ${m.best.dex} pool's own reserves at this block`}, that is ${(q2.realisedBps / 100).toFixed(1)}% of the quoted price. The token's own transfer tax, if it has one, is not included. Sized as ${(q2.shareBps / 100).toFixed(0)}% of a reference position of 1% of the supply.`,
         mine,
         `${(q2.realisedBps / 100).toFixed(1)}% kept`
       );
@@ -8967,6 +9005,7 @@
     document.body.classList.toggle("answered", (document.getElementById("out")?.childElementCount ?? 0) > 0);
     fitRail();
     markScrollers();
+    paintMinibar();
   }).observe(document.getElementById("out"), { childList: true });
   var railWatch = new ResizeObserver(() => fitRail());
   function fitRail() {
@@ -9407,7 +9446,7 @@
   }
   function renderBoard(b, hours) {
     const qd = chain().native;
-    const amt = (v) => esc2(formatMoney(v, qd.decimals, qd.symbol, quoteUsdNow(true)));
+    const amt = (v) => mny(v, qd.decimals, qd.symbol, true);
     const link = (a) => `<a href="#/${mode === "demo" ? "demo" : "t"}/${a}${routeChain()}">${shortAddress(a)}</a>`;
     const dev = (a) => `<a href="#/dev/${a}${routeChain()}">${shortAddress(a)}</a>`;
     const windows = [1, 6, 24].map((h) => `<a class="frame${h === hours ? " on" : ""}" href="#/board?hours=${h}&chain=${mode === "demo" ? "demo" : chain().key}" aria-current="${h === hours ? "true" : "false"}">${h}h</a>`).join("");
@@ -9421,7 +9460,7 @@
         <div><span>graduations</span><b class="num">${b.graduations}</b></div>
         <div><span>deployers</span><b class="num">${b.deployers}</b></div>
         <div><span>door tax paid</span><b class="num">${amt(b.coverTotal)}</b><span>${b.taxedBuys} buy${b.taxedBuys === 1 ? "" : "s"}</span></div>
-      </div><p class="qdetail">Door tax = the part of a buy's tax above the curve's own creator rate, as the curve's CurveBuy event reports it. Counts, not scores.</p></section>
+      </div><p class="qdetail">Door tax = the part of a buy's tax above the curve's own creator rate, as the curve's CurveBuy event reports it. Counts, not scores.${b.otherPairCurves ? ` ${plural(b.otherPairCurves, "curve")} paired with another token also took door tax; ${b.otherPairCurves === 1 ? "its amounts are" : "their amounts are"} in that token's units, so ${b.otherPairCurves === 1 ? "it is" : "they are"} left out of these totals rather than added to ${esc2(qd.symbol)}.` : ""}</p></section>
       <section class="sec"><h2>Deployers</h2>${b.topDeployers.length ? `<div class="tbl"><table class="buys"><thead><tr><th>deployer</th><th class="num">launched</th><th class="num">graduated</th><th class="num">swept</th></tr></thead><tbody>${b.topDeployers.map((r) => `<tr><td>${dev(r.deployer)}</td><td class="num">${r.launched}</td><td class="num">${r.graduated}</td><td class="num">${Math.max(0, r.swept - r.graduated)}</td></tr>`).join("")}</tbody></table></div>` : none("No launches in the window.")}
         ${b.serial.length ? `<h2 style="margin-top:14px">Serial, no graduation</h2><div class="tbl"><table class="buys"><tbody>${b.serial.map((r) => `<tr><td>${dev(r.deployer)}</td><td>${r.launched} launched, none graduated</td></tr>`).join("")}</tbody></table></div>` : ""}</section>
       <section class="sec"><h2>Door tax by token</h2>${b.topCurves.length ? `<div class="tbl"><table class="buys"><thead><tr><th>token</th><th class="num">collected</th><th class="num">buys</th><th class="num">highest</th><th class="num">creator tax</th></tr></thead><tbody>${b.topCurves.map((r) => `<tr><td>${link(r.token ?? r.curve)}</td><td class="num">${amt(r.coverCollected)}</td><td class="num">${r.taxedBuys}</td><td class="num">${(r.highestBps / 100).toFixed(1)}%</td><td class="num">${formatBps(r.creatorTaxBps)}</td></tr>`).join("")}</tbody></table></div>` : none("No buy in the window paid above the creator rate.")}</section>
@@ -9823,6 +9862,21 @@
   function quoteUsdNow(native) {
     return native ? QUOTE_USD.get(quoteUsdKey())?.usd ?? null : null;
   }
+  function mny(v, decimals, symbol, native, opts = {}) {
+    const text = moneyText(v, decimals, symbol, native ? quoteUsdNow(true) : null, opts);
+    return `<span class="m" data-raw="${v}" data-dec="${decimals}" data-sym="${esc2(symbol)}"${native ? ' data-n="1"' : ""}${opts.plus ? ' data-plus="1"' : ""}${opts.price ? ' data-price="1"' : ""}>${esc2(text)}</span>`;
+  }
+  function moneyText(v, decimals, symbol, usd2, opts) {
+    const text = opts.price ? formatPriceMoney(v, decimals, symbol, usd2) : formatMoney(v, decimals, symbol, usd2);
+    return opts.plus && v > 0n ? `+${text.replace("(", "(+")}` : text;
+  }
+  function rewriteMoney() {
+    const usd2 = quoteUsdNow(true);
+    if (usd2 === null) return;
+    for (const el of document.querySelectorAll(".m[data-n]")) {
+      el.textContent = moneyText(BigInt(el.dataset.raw ?? "0"), Number(el.dataset.dec ?? 18), el.dataset.sym ?? "", usd2, { plus: el.dataset.plus === "1", price: el.dataset.price === "1" });
+    }
+  }
   async function quoteOfLaunch(rpc, pairToken, block) {
     if (pairToken.toLowerCase() === ZERO_ADDRESS) return { ...chain().native, native: true };
     return { ...await readTokenMeta(rpc, pairToken, block), native: false };
@@ -9860,6 +9914,7 @@
     cell.dataset.fact = "Volume 24h";
   }
   function refreshMoney() {
+    rewriteMoney();
     if (!shown) return;
     const m = marketFacts(shown.slip, { quoteUsd: quoteUsdNow(slipNative(shown.slip)) });
     shown = { ...shown, m };
@@ -9872,6 +9927,7 @@
     const exitValue = document.querySelector("#q-exit .qv");
     if (exit && exitValue) exitValue.textContent = exit.value;
     if (tape) paintTape();
+    paintMinibar();
   }
   function moveBasis(series) {
     const first = series.points[0];
@@ -10295,6 +10351,7 @@
   }
   function shareText(bps3) {
     const pct3 = bps3 / 100;
+    if (bps3 > 0 && pct3 < 0.01) return "<0.01%";
     const text = pct3 >= 10 ? pct3.toFixed(0) : pct3 >= 1 ? pct3.toFixed(1) : pct3.toFixed(2);
     return `${text.replace(/(\.\d*?)0+$/, "$1").replace(/\.$/, "")}%`;
   }
@@ -10318,6 +10375,43 @@
     <div class="tape-empty"><b>There are no trades to show</b>${esc2(why)}</div>
   </section>`;
   }
+  var minibar = document.getElementById("minibar");
+  var minibarWatch = new IntersectionObserver((entries) => {
+    for (const e of entries) {
+      const on = !e.isIntersecting && Boolean(minibar?.innerHTML) && e.boundingClientRect.top < 0;
+      minibar?.classList.toggle("on", on);
+      document.body.classList.toggle("mb-on", on);
+    }
+  });
+  function paintMinibar() {
+    if (!minibar) return;
+    const bar2 = document.querySelector(".doorway .tokbar");
+    const word = document.querySelector(".doorway .vword");
+    if (!bar2 || !word || document.querySelector(".doorway[data-pending]")) {
+      minibar.innerHTML = "";
+      minibar.classList.remove("on");
+      document.body.classList.remove("mb-on");
+      minibar.setAttribute("aria-hidden", "true");
+      minibarWatch.disconnect();
+      return;
+    }
+    const header = document.querySelector("header");
+    if (header) document.documentElement.style.setProperty("--hdr", `${Math.round(header.getBoundingClientRect().height)}px`);
+    const kind = ["stop", "watch", "clear", "unknown"].find((k) => word.classList.contains(k)) ?? "unknown";
+    const sym = bar2.querySelector(".tokline .sym")?.textContent?.trim() ?? "";
+    const price = bar2.querySelector(".tp-v")?.textContent?.trim() ?? "";
+    const move = bar2.querySelector(".tp-s .move");
+    const tone = move ? ["up", "down", "flat"].find((t) => move.classList.contains(t)) ?? "flat" : "flat";
+    const address = bar2.querySelector(".vaddr")?.dataset.copy ?? "";
+    minibar.innerHTML = `<span class="mb-sym">${esc2(sym)}</span>
+    <span class="vmini ${kind}">${esc2(word.textContent?.trim() ?? "")}</span>
+    ${price && price !== "no price" ? `<span class="mb-price">${esc2(price)}</span>` : ""}
+    ${move ? `<span class="mb-move ${tone}">${esc2(move.textContent ?? "")}</span>` : ""}
+    ${address ? `<button class="mb-copy" type="button" data-copy="${esc2(address)}" aria-label="Copy the contract address ${esc2(address)}">${esc2(shortAddress(address))} \u29C9</button>` : ""}`;
+    minibar.removeAttribute("aria-hidden");
+    minibarWatch.disconnect();
+    minibarWatch.observe(bar2);
+  }
   function paintTape() {
     const box = document.getElementById("tape");
     if (!box) {
@@ -10331,6 +10425,7 @@
     if (after2 && at > 0) after2.scrollTop = at;
     paintChart();
     fillVolume();
+    paintMinibar();
   }
   function startTape(slip, picked, m, keepFrame = false) {
     stopTape();
@@ -10448,13 +10543,13 @@
       }
     ];
   }
-  function venueList(pools, quote, tokenDecimals, usd2 = null) {
+  function venueList(pools, quote, tokenDecimals, native = true) {
     if (pools === null || pools === void 0) return "";
     if (!pools.length) {
       return `<div class="venues"><div class="cap-l">Where it trades</div><div class="venue">nothing on this chain's known DEX factories</div></div>`;
     }
     const rows = pools.slice(0, 4).map(
-      (p) => `<div class="venue"><span>${esc2(p.dex)} \xB7 ${(p.feeBps / 100).toFixed(2)}%</span><b>${p.quoteReserve === null ? "unread" : esc2(formatMoney(p.quoteReserve, quote.decimals, quote.symbol, usd2))}</b></div>
+      (p) => `<div class="venue"><span>${esc2(p.dex)} \xB7 ${(p.feeBps / 100).toFixed(2)}%</span><b>${p.quoteReserve === null ? "unread" : mny(p.quoteReserve, quote.decimals, quote.symbol, native)}</b></div>
         <div class="venue"><span>tokens inside</span><b>${p.tokenReserve === null ? "unread" : esc2(formatCoin(p.tokenReserve, tokenDecimals))}</b></div>`
     ).join("");
     return `<div class="venues"><div class="cap-l">Where it trades</div>${rows}</div>`;
@@ -10665,11 +10760,11 @@
       const said = readSizeQuote(q2);
       const ofSupply = supply && supply > 0n ? ` \xB7 ${shareText(Number(tokens * 1000000n / supply) / 100)} of supply` : "";
       out2.innerHTML = `<div class="calc-res">
-      <div class="calc-fig"><span class="l">in hand</span><b class="v num">${esc2(formatMoney(q2.out, q2.quoteDecimals, q2.quoteSymbol, quoteUsdNow(nativeQuote)))}</b><span class="s">for ${esc2(formatCoin(tokens, decimals))} tokens${ofSupply}</span></div>
+      <div class="calc-fig"><span class="l">in hand</span><b class="v num">${mny(q2.out, q2.quoteDecimals, q2.quoteSymbol, nativeQuote)}</b><span class="s">for ${esc2(formatCoin(tokens, decimals))} tokens${ofSupply}</span></div>
       <div class="calc-fig"><span class="l">you keep</span><b class="v num">${(q2.realisedBps / 100).toFixed(1)}%</b><span class="s">of what the screen price says</span></div>
-      <div class="calc-fig"><span class="l">your size</span><b class="v num">${esc2(shareText(q2.shareOfPoolBps))}</b><span class="s">of the token side of ${esc2(q2.venue)}</span></div>
+      ${q2.shareOfPoolBps !== null ? `<div class="calc-fig"><span class="l">your size</span><b class="v num">${esc2(shareText(q2.shareOfPoolBps))}</b><span class="s">of the token side of ${esc2(q2.venue)}</span></div>` : ""}
     </div>
-    <p class="calc-say ${said.level}">${esc2(said.text)}</p>`;
+    <p class="calc-say ${said.level}">${esc2(said.text)}${q2.caveat ? ` ${esc2(q2.caveat)}` : ""}</p>`;
     };
     input.addEventListener("keydown", (e) => {
       if (e.key === "Enter") {
@@ -11063,9 +11158,7 @@
     const o = slip.open;
     const tradesText = o ? tradesBody(slip) : "";
     const qd = slip.rules?.quote ?? slip.chain.native;
-    const evUsd = quoteUsdNow(slipNative(slip));
-    const money2 = (v) => formatMoney(v, qd.decimals, qd.symbol, evUsd);
-    const amt = (v) => esc2(formatMoney(v, qd.decimals, qd.symbol, evUsd));
+    const amt = (v) => mny(v, qd.decimals, qd.symbol, slipNative(slip));
     const c = slip.cover;
     const r = slip.rules;
     const room = slip.room;
@@ -11108,7 +11201,7 @@
   </dl>`;
     let coverBody = "";
     if (c) {
-      const buys = c.observed.map((b) => `<tr class="${b.creatorWallet ? "exempt" : ""}"><td>${b.secondsAfterLaunch.toFixed(1)} s</td><td><span class="mono">${shortAddress(b.buyer)}</span>${b.creatorWallet ? ' <span class="flag">creator</span>' : ""}</td><td class="num">${esc2(money2(b.quoteIn))}</td><td class="num">${b.creatorWallet ? "exempt" : b.doorBps > 0 ? `${(b.doorBps / 100).toFixed(1)}%` : "0%"}</td><td class="num">${((b.chargeBps - b.doorBps) / 100).toFixed(0)}%</td></tr>`).join("");
+      const buys = c.observed.map((b) => `<tr class="${b.creatorWallet ? "exempt" : ""}"><td>${b.secondsAfterLaunch.toFixed(1)} s</td><td><span class="mono">${shortAddress(b.buyer)}</span>${b.creatorWallet ? ' <span class="flag">creator</span>' : ""}</td><td class="num">${amt(b.quoteIn)}</td><td class="num">${b.creatorWallet ? "exempt" : b.doorBps > 0 ? `${(b.doorBps / 100).toFixed(1)}%` : "0%"}</td><td class="num">${((b.chargeBps - b.doorBps) / 100).toFixed(0)}%</td></tr>`).join("");
       coverBody = `${c.status === "open" ? `<div class="bar"><i id="cd-bar" style="width:${Math.round(c.secondsLeft / c.terms.seconds * 100)}%"></i></div>` : ""}
       <dl class="kv">
         <dt>the rule</dt><dd>In the first ${c.terms.seconds} s after launch, a buy pays up to ${formatBps(c.terms.startBps)} of its money to the creator on top of normal fees, falling to zero over the window. The creator's own wallets never pay it.${c.termsChangedSinceLaunch ? ' <span class="flag bad">the factory changed these terms after this launch</span>' : ""}</dd>
@@ -11125,7 +11218,7 @@
         ${e.quotes.length ? `<div class="exit-grid">${e.quotes.map((x) => {
       const tokensIn = e.position * BigInt(x.shareBps) / 10000n;
       const ofSupply = supplyOf > 0n ? shareText(Number(tokensIn * 1000000n / supplyOf) / 100) : "";
-      return `<div><span>${esc2(formatCoin(tokensIn, 18))} tokens${ofSupply ? ` \xB7 ${ofSupply} of supply` : ""}</span><b class="num">${esc2(money2(x.net))}</b><small>${(x.realisedBps / 100).toFixed(1)}% of the quote</small></div>`;
+      return `<div><span>${esc2(formatCoin(tokensIn, 18))} tokens${ofSupply ? ` \xB7 ${ofSupply} of supply` : ""}</span><b class="num">${amt(x.net)}</b><small>${(x.realisedBps / 100).toFixed(1)}% of the quote</small></div>`;
     }).join("")}</div>` : ""}
         <p class="qdetail">${esc2(e.note)}</p>
         <div class="wallet-row"><input id="wallet-q" placeholder="your wallet 0x\u2026 to see your own bag on this token" spellcheck="false"><button class="ghost" id="wallet-go" type="button">Show my bag</button></div>` : "";
@@ -11170,7 +11263,7 @@
       stageTag: stageTag(slip),
       explorer: mode === "demo" ? null : explorerAddress(chain(), slip.subject),
       frames: "",
-      venues: venueList(slip.open?.pools, slip.rules?.quote ?? slip.chain.native, slip.id.meta?.decimals ?? 18, usdPer),
+      venues: venueList(slip.open?.pools, slip.rules?.quote ?? slip.chain.native, slip.id.meta?.decimals ?? 18, slipNative(slip)),
       alert: realOne(slip),
       bands: `${coverage ? coverageBand(coverage, stage0) : ""}${changes ?? ""}`,
       evidence,
@@ -11184,6 +11277,7 @@
     ${stage0 === "done" ? buyStrip(mode === "demo" ? "" : slip.chain.key, slip.subject, Boolean(slip.id.meta) && slip.open?.transferFunction !== false, verdictOf(slip.notes, "done", coverage).kind) : ""}
     ${stage0 === "done" ? "why" in picked ? tapeNone(picked.why) : `<section class="tape" id="tape"></section>` : ""}
   </div>`;
+    paintMinibar();
     if (stage0 === "done") setPageTitle(`${meta?.symbol ?? shortAddress(slip.subject)} \xB7 ${verdictOf(slip.notes, "done", coverage).word} \xB7 BOUNCER`);
     shown = { slip, m, picked };
     if (stage0 === "done" && !("why" in picked)) startTape(slip, picked, m);
@@ -11339,7 +11433,7 @@
     const q2 = slip.chain.native;
     const dec = slip.id.meta?.decimals ?? 18;
     const explorer = chain().blockscout;
-    const pools = o.pools ? o.pools.length ? `<div class="tbl"><table class="buys"><thead><tr><th>pool</th><th>fee</th><th class="num">${esc2(q2.symbol)} side</th><th class="num">tokens</th></tr></thead><tbody>${o.pools.map((p) => `<tr><td>${explorer && mode !== "demo" ? `<a href="${esc2(explorer)}/address/${esc2(p.address)}" target="_blank" rel="noopener">${esc2(p.dex)} \xB7 ${shortAddress(p.address)}</a>` : `${esc2(p.dex)} \xB7 ${shortAddress(p.address)}`}</td><td>${(p.feeBps / 100).toFixed(2)}%</td><td class="num">${p.quoteReserve === null ? "unread" : esc2(formatMoney(p.quoteReserve, q2.decimals, q2.symbol, quoteUsdNow(true)))}</td><td class="num">${p.tokenReserve === null ? "unread" : esc2(formatCoin(p.tokenReserve, dec))}</td></tr>`).join("")}</tbody></table></div><p style="color:var(--dim);font-size:12px;margin:6px 0 0">Reserves are the pool's balances at this block. Whether the liquidity is locked is not read here, and pools on other venues or against other pairs are not counted.</p>` : `<p style="color:var(--muted);font-size:13px;margin:0">No W${esc2(q2.symbol)} pool on the chain's known DEX factories. It may trade on another DEX, in a Uniswap V4 pool, against another pair, or not at all.</p>` : "";
+    const pools = o.pools ? o.pools.length ? `<div class="tbl"><table class="buys"><thead><tr><th>pool</th><th>fee</th><th class="num">${esc2(q2.symbol)} side</th><th class="num">tokens</th></tr></thead><tbody>${o.pools.map((p) => `<tr><td>${explorer && mode !== "demo" ? `<a href="${esc2(explorer)}/address/${esc2(p.address)}" target="_blank" rel="noopener">${esc2(p.dex)} \xB7 ${shortAddress(p.address)}</a>` : `${esc2(p.dex)} \xB7 ${shortAddress(p.address)}`}</td><td>${(p.feeBps / 100).toFixed(2)}%</td><td class="num">${p.quoteReserve === null ? "unread" : mny(p.quoteReserve, q2.decimals, q2.symbol, true)}</td><td class="num">${p.tokenReserve === null ? "unread" : esc2(formatCoin(p.tokenReserve, dec))}</td></tr>`).join("")}</tbody></table></div><p style="color:var(--dim);font-size:12px;margin:6px 0 0">Reserves are the pool's balances at this block. Whether the liquidity is locked is not read here, and pools on other venues or against other pairs are not counted.</p>` : `<p style="color:var(--muted);font-size:13px;margin:0">No W${esc2(q2.symbol)} pool on the chain's known DEX factories. It may trade on another DEX, in a Uniswap V4 pool, against another pair, or not at all.</p>` : "";
     const feed = o.explorer && o.explorer.priceUsd != null ? `<dl class="kv"><dt>explorer price</dt><dd>${esc2(formatUsdPrice(o.explorer.priceUsd))}${o.explorer.volume24hUsd !== null ? ` \xB7 ${esc2(formatUsd(o.explorer.volume24hUsd))} in 24 h` : ""}${o.explorer.marketCapUsd !== null ? ` \xB7 ${esc2(formatUsd(o.explorer.marketCapUsd))} market cap` : ""} <small style="color:var(--dim)">the explorer's feed, not the chain's</small></dd></dl>` : "";
     return `${feed}${pools}`;
   }
@@ -11366,13 +11460,13 @@
     return bodyOnly ? inner : `<section class="sec wide"><h2>This dev before</h2>${inner}</section>`;
   }
   function renderPosition(p, head, symbol, qd) {
-    const money2 = (v) => esc2(formatMoney(v, qd.decimals, qd.symbol, quoteUsdNow(qd.native)));
+    const money2 = (v) => mny(v, qd.decimals, qd.symbol, qd.native);
     const whole = p.exit.quotes.find((x) => x.shareBps === 1e4);
     const buys = p.trades.filter((t) => t.kind === "buy");
     const sells = p.trades.filter((t) => t.kind === "sell");
     const bought = buys.reduce((a, t) => a + t.tokens, 0n);
     const sold = sells.reduce((a, t) => a + t.tokens, 0n);
-    const signed = (v) => v > 0n ? `+${money2(v).replace(/\(/, "(+")}` : money2(v);
+    const signed = (v) => mny(v, qd.decimals, qd.symbol, qd.native, { plus: true });
     const resultWord = p.balance === 0n ? "result so far" : "if sold now";
     const drift = bought - sold !== p.balance;
     const tokenLabel = symbol ?? shortAddress(p.token);
@@ -11406,7 +11500,7 @@
     </div></div>`;
   }
   function receiptSection(r, qd) {
-    const amt = (v) => esc2(formatMoney(v, qd.decimals, qd.symbol, quoteUsdNow(qd.native)));
+    const amt = (v) => mny(v, qd.decimals, qd.symbol, qd.native);
     const share = (v) => r.quote === 0n ? "0%" : formatBps(v * 10000n / r.quote);
     const token = r.launch ? `<a href="#/${mode === "demo" ? "demo" : "t"}/${r.launch.token.toLowerCase()}${routeChain()}">${esc2(r.symbol ?? shortAddress(r.launch.token))}</a>` : `curve ${shortAddress(r.curve)} (no factory record)`;
     return `<div class="stamp-row"><div class="who"><div class="cap-l">Trade receipt</div><div class="sym"><span class="t-${r.kind}"><span class="t-side">${r.kind}</span></span> ${token}</div><div class="name">by <span class="mono">${shortAddress(r.wallet)}</span> \xB7 block ${r.block.toLocaleString("en-US")}</div><button class="vaddr tokact" type="button" data-copy="${esc2(r.hash)}" title="Copy ${esc2(r.hash)}"><span class="mono">${esc2(shortHash(r.hash))}</span><span class="tokact-i" aria-hidden="true">\u29C9</span></button></div>
@@ -11417,8 +11511,8 @@
       <dt>protocol fee</dt><dd>${amt(r.fee)} \xB7 ${share(r.fee)}</dd>
       <dt>creator tax</dt><dd>${amt(r.creatorTaxPart)} \xB7 ${share(r.creatorTaxPart)}</dd>
       <dt>door tax</dt><dd>${amt(r.coverChargePart)} \xB7 ${share(r.coverChargePart)}<small class="gloss-line">the part of the tax above the creator's own rate</small></dd>
-      <dt>effective price</dt><dd>${esc2(formatPriceMoney(r.effectivePrice, qd.decimals, qd.symbol, quoteUsdNow(qd.native)))} per token, fees included</dd>
-      <dt>curve price after</dt><dd>${r.marginalPriceAfter === null ? "not served by this RPC for that block" : `${esc2(formatPriceMoney(r.marginalPriceAfter, qd.decimals, qd.symbol, quoteUsdNow(qd.native)))} per token`}</dd>
+      <dt>effective price</dt><dd>${mny(r.effectivePrice, qd.decimals, qd.symbol, qd.native, { price: true })} per token, fees included</dd>
+      <dt>curve price after</dt><dd>${r.marginalPriceAfter === null ? "not served by this RPC for that block" : `${mny(r.marginalPriceAfter, qd.decimals, qd.symbol, qd.native, { price: true })} per token`}</dd>
     </dl></section>`;
   }
   function shortHash(hash) {
@@ -11427,8 +11521,8 @@
   function renderPlan(plan) {
     const qd = plan.quote;
     const c = chain();
-    const u = (v) => esc2(formatMoney(v, qd.decimals, qd.symbol, quoteUsdNow(qd.native)));
-    const price = (v) => esc2(formatPriceMoney(v, qd.decimals, qd.symbol, quoteUsdNow(qd.native)));
+    const u = (v) => mny(v, qd.decimals, qd.symbol, qd.native);
+    const price = (v) => mny(v, qd.decimals, qd.symbol, qd.native, { price: true });
     const tokens = (v) => `<span class="mono">${esc2(formatCoin(v, 18))}</span>`;
     out.innerHTML = `<div class="slip">
     <div class="stamp-row"><div class="who"><div class="cap-l">Launch planner</div><div class="sym">Plan a launch</div><div class="name">${esc2(c.name)} \xB7 ${esc2(c.launchpad ?? "no launchpad")}${plan.configEnabled ? "" : " \xB7 this config is disabled"} \xB7 quote ${esc2(qd.symbol)} \xB7 block ${plan.block.toLocaleString("en-US")}</div>
@@ -11441,7 +11535,7 @@
       <div class="stamp">${formatBps(plan.creatorTaxBps)} TAX</div></div>
     <div class="grid">
       <section class="sec"><h2>Terms today</h2><dl class="kv">
-        <dt>launch fee</dt><dd>${esc2(formatMoney(plan.launchFee, c.native.decimals, c.native.symbol, quoteUsdNow(true)))} to the protocol</dd>
+        <dt>launch fee</dt><dd>${mny(plan.launchFee, c.native.decimals, c.native.symbol, true)} to the protocol</dd>
         <dt>supply</dt><dd>${tokens(plan.supply)}</dd>
         <dt>curve</dt><dd>graduates at ${u(plan.graduationThreshold)} \xB7 priced from a ${u(plan.phantomQuote)} virtual reserve</dd>
         <dt>creator tax</dt><dd>${formatBps(plan.creatorTaxBps)} of every curve trade (ceiling ${formatBps(plan.maxCreatorTaxBps)})</dd>

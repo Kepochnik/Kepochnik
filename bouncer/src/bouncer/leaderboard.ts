@@ -46,6 +46,12 @@ export interface Board {
   taxedBuys: number;
   topCurves: CoverRow[];
   topPayers: PayerRow[];
+  /**
+   * Curves with door tax in the window whose quote is not the chain's coin,
+   * or could not be told. Their amounts are in another token's units, so
+   * they are counted here and left out of every total and table above.
+   */
+  otherPairCurves: number;
   chunks: number;
 }
 
@@ -71,6 +77,7 @@ export async function readBoard(rpc: RpcClient, options: BoardOptions): Promise<
   const byDeployer = new Map<string, DevRow>();
   const tokenToDeployer = new Map<string, string>();
   const curveToToken = new Map<string, string>();
+  const curveNative = new Map<string, boolean>();
   let launches = 0;
   let graduations = 0;
   for (const l of ledger.logs) {
@@ -80,6 +87,7 @@ export async function readBoard(rpc: RpcClient, options: BoardOptions): Promise<
       launches++;
       tokenToDeployer.set(token, deployer);
       curveToToken.set(String(l.args.curve).toLowerCase(), token);
+      curveNative.set(String(l.args.curve).toLowerCase(), /^0x0{40}$/i.test(String(l.args.pairToken)));
       const row = byDeployer.get(deployer) ?? { deployer, launched: 0, swept: 0, graduated: 0, tokens: [] };
       row.launched++;
       row.tokens.push(token);
@@ -102,6 +110,7 @@ export async function readBoard(rpc: RpcClient, options: BoardOptions): Promise<
   let topCurves: CoverRow[] = [];
   let topPayers: PayerRow[] = [];
   let chunks = ledger.chunks;
+  let otherPairCurves = 0;
   if (!options.skipCover) {
     const buys = await readTapeAdaptive(
       rpc,
@@ -111,21 +120,37 @@ export async function readBoard(rpc: RpcClient, options: BoardOptions): Promise<
     chunks += buys.chunks;
     const curves = [...new Set(buys.logs.map((l) => l.address.toLowerCase()))];
     const rates = new Map<string, bigint>();
-    for (let i = 0; i < curves.length; i += 50) {
-      const slice = curves.slice(i, i + 50);
-      const raw = await rpc.callBatch(slice.map((c) => ({ to: c, data: encodeCall(CURVE_FUNCTIONS.creatorTaxBps, []) })), options.toBlock).catch(() => null);
+    for (let i = 0; i < curves.length; i += 25) {
+      const slice = curves.slice(i, i + 25);
+      // The rate, and whether the curve trades against the chain's own coin:
+      // a curve launched before the window is not in the ledger above, and
+      // its amounts cannot be added to ETH amounts without knowing that.
+      const raw = await rpc
+        .callBatch(slice.flatMap((c) => [{ to: c, data: encodeCall(CURVE_FUNCTIONS.creatorTaxBps, []) }, { to: c, data: encodeCall(CURVE_FUNCTIONS.isNativeQuote, []) }]), options.toBlock)
+        .catch(() => null);
       slice.forEach((c, j) => {
         try {
-          rates.set(c, raw ? (decodeOutputs(CURVE_FUNCTIONS.creatorTaxBps, raw[j])[0] as bigint) : 0n);
+          rates.set(c, raw ? (decodeOutputs(CURVE_FUNCTIONS.creatorTaxBps, raw[j * 2])[0] as bigint) : 0n);
         } catch {
           rates.set(c, 0n);
         }
+        try {
+          if (raw) curveNative.set(c, decodeOutputs(CURVE_FUNCTIONS.isNativeQuote, raw[j * 2 + 1])[0] as boolean);
+        } catch {
+          /* the ledger's answer stands, or none */
+        }
       });
     }
+    const otherPairs = new Set<string>();
     const perCurve = new Map<string, CoverRow>();
     const perPayer = new Map<string, PayerRow>();
     for (const l of buys.logs) {
       const curve = l.address.toLowerCase();
+      if (curveNative.get(curve) !== true) {
+        const t = l.args.tax as bigint;
+        if (t > ((l.args.quoteIn as bigint) * (rates.get(curve) ?? 0n)) / 10_000n) otherPairs.add(curve);
+        continue;
+      }
       const rate = rates.get(curve) ?? 0n;
       const quoteIn = l.args.quoteIn as bigint;
       const tax = l.args.tax as bigint;
@@ -149,8 +174,9 @@ export async function readBoard(rpc: RpcClient, options: BoardOptions): Promise<
     }
     topCurves = [...perCurve.values()].filter((r) => r.coverCollected > 0n).sort((a, b) => (b.coverCollected > a.coverCollected ? 1 : -1)).slice(0, top);
     topPayers = [...perPayer.values()].sort((a, b) => (b.coverPaid > a.coverPaid ? 1 : -1)).slice(0, top);
+    otherPairCurves = otherPairs.size;
   }
-  return { window: { fromBlock: options.fromBlock, toBlock: options.toBlock }, launches, graduations, deployers: rows.length, topDeployers, serial, coverTotal, taxedBuys, topCurves, topPayers, chunks };
+  return { window: { fromBlock: options.fromBlock, toBlock: options.toBlock }, launches, graduations, deployers: rows.length, topDeployers, serial, coverTotal, taxedBuys, topCurves, topPayers, otherPairCurves, chunks };
 }
 
 export { readTape };

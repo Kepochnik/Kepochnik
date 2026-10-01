@@ -313,7 +313,7 @@ function exitAnswer(slip: DoorSlip, notes: DoorNote[], quoteUsd: number | null =
       "exit",
       `Selling ${shareOfSupply(q.shareBps)} of the supply pays ${amount}`,
       toneOf(mine),
-      `priced against the ${m.best.dex} pool's own reserves at this block, that is ${(q.realisedBps / 100).toFixed(1)}% of the quoted price. The token's own transfer tax, if it has one, is not included. Sized as ${(q.shareBps / 100).toFixed(0)}% of a reference position of 1% of the supply.`,
+      `${m.best.kind === "v3" || m.best.kind === "v4" ? `priced from the ${m.best.dex} pool's price and in-range liquidity at this block${q.beyondTick ? " — this size leaves the current range, and the liquidity past it was not read, so the real payout is likely lower" : ", exact inside its current range"}` : `priced against the ${m.best.dex} pool's own reserves at this block`}, that is ${(q.realisedBps / 100).toFixed(1)}% of the quoted price. The token's own transfer tax, if it has one, is not included. Sized as ${(q.shareBps / 100).toFixed(0)}% of a reference position of 1% of the supply.`,
       mine,
       `${(q.realisedBps / 100).toFixed(1)}% kept`,
     );

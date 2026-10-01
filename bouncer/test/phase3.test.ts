@@ -5,7 +5,7 @@ import { BlockscoutClient } from "../src/chain/blockscout.js";
 import { CHAINS } from "../src/chain/chains.js";
 import { PONS_V2_FACTORY } from "../src/chain/pons.js";
 import { PonsReader } from "../src/chain/reader.js";
-import { DEMO, DEMO_BLOCKSCOUT, DEMO_V1, demoBlockscoutFetch, demoRpc } from "../src/bouncer/demo.js";
+import { DEMO, DEMO_BLOCKSCOUT, DEMO_V1, demoBlockscoutFetch, demoRpc, demoRpcWith } from "../src/bouncer/demo.js";
 import { readDoor } from "../src/bouncer/door.js";
 import { readBoard } from "../src/bouncer/leaderboard.js";
 import { readWatchEvents, watchLaunch } from "../src/bouncer/watch.js";
@@ -66,6 +66,22 @@ test("board: launches, graduations, cover charge per curve and per wallet", asyn
   const devOnly = await readBoard(rpc, { fromBlock: head - 300_000, toBlock: head, chunkSize: 100_000, skipCover: true });
   assert.equal(devOnly.coverTotal, 0n);
   assert.equal(devOnly.launches, 5);
+});
+
+test("board: a curve paired with another token is counted, never added to ETH", async () => {
+  const sel = "0x" + (await import("../src/chain/abi.js")).selector("isNativeQuote()").slice(2);
+  const fresh = DEMO.tokens.fresh.curve.toLowerCase();
+  const rpc = demoRpcWith((method, params) => {
+    const call = params[0] as { to?: string; data?: string } | undefined;
+    return method === "eth_call" && call?.to?.toLowerCase() === fresh && call.data?.startsWith(sel) ? { result: "0x" + "0".repeat(64) } : null;
+  });
+  const head = await rpc.blockNumber();
+  const b = await readBoard(rpc, { fromBlock: head - 300_000, toBlock: head, chunkSize: 100_000 });
+  assert.equal(b.otherPairCurves, 1);
+  // Both taxed buys in the demo window were on FRESH, so nothing is left to total.
+  assert.equal(b.coverTotal, 0n);
+  assert.equal(b.taxedBuys, 0);
+  assert.ok(b.topCurves.every((r) => r.curve !== fresh));
 });
 
 test("mcp: initialize, list, call, unknown method, notifications are silent", async () => {

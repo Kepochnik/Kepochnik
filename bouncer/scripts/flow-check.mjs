@@ -520,8 +520,8 @@ await walk("the exit calculator answers for a size, or says why it cannot", asyn
   const empty = await page.$eval("#calc-out", (el) => el.textContent.trim());
   if (empty) throw new Error(`an empty box produced an answer: "${empty.slice(0, 80)}"`);
 
-  // And where it cannot price, it says so in a sentence rather than
-  // quoting zero — the failure this whole release is about.
+  // And on a range pool it says how far the arithmetic holds, and never
+  // quotes zero — the failure this whole release is about.
   await page.goto(`${url}#/demo/0x0000000000000000000000000000000000f1a1a1`, { waitUntil: "load" });
   await waitForDone(page);
   await page.evaluate(() => document.querySelector("#q-exit")?.setAttribute("open", ""));
@@ -530,7 +530,10 @@ await walk("the exit calculator answers for a size, or says why it cannot", asyn
   await page.waitForTimeout(250);
   const said = await page.$eval("#calc-out", (el) => el.textContent.replace(/\s+/g, " ").trim());
   if (/^0\b/.test(said)) throw new Error(`a token it cannot price was quoted at zero: "${said.slice(0, 120)}"`);
-  if (!/ranges|no pool|could not/i.test(said)) throw new Error(`the refusal does not say why: "${said.slice(0, 160)}"`);
+  // A range pool is now priced the way the exit answer row prices it, from
+  // its price and in-range liquidity; it has to say where that stops being
+  // exact. Anything it still cannot price must say why.
+  if (!/range|no pool|could not/i.test(said)) throw new Error(`the answer does not say where it stops being exact, or why it cannot price: "${said.slice(0, 160)}"`);
 });
 await walk("a second look says what moved since the first", async (page) => {
   // A slip is a photograph. It reads the same whether the token has sat

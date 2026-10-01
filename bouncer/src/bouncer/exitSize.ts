@@ -27,7 +27,7 @@
  */
 import { curveAmountOut } from "../chain/pons.js";
 import { quoteCurveSale, quotePoolSale, type SolanaMarket, type SolanaPool } from "../chain/solanaPools.js";
-import type { MarketPool } from "../chain/market.js";
+import { quoteSale, type MarketPool } from "../chain/market.js";
 import type { DoorSlip } from "./door.js";
 import type { SplSlip } from "./spl.js";
 
@@ -53,7 +53,12 @@ export interface SizeQuote {
    * third, the arithmetic stops being a quote and starts being a story
    * about what the pool looks like afterwards.
    */
-  shareOfPoolBps: number;
+  shareOfPoolBps: number | null;
+  /**
+   * Said beside the figure when the arithmetic has a known blind spot: a
+   * range pool is exact inside its current range and optimistic past it.
+   */
+  caveat: string | null;
 }
 
 export type SizeAnswer = { ok: true; quote: SizeQuote } | { ok: false; why: string };
@@ -88,6 +93,7 @@ function shaped(tokensIn: bigint, out: bigint, spotOut: bigint, tokenReserve: bi
     // strict comparison would never fire.
     drainsPool: quoteReserve > 0n && out * 100n >= quoteReserve * 99n,
     shareOfPoolBps: tokenReserve > 0n ? Number((tokensIn * 10_000n) / tokenReserve) : 0,
+    caveat: null,
   };
 }
 
@@ -111,6 +117,38 @@ export function evmExitFor(slip: DoorSlip, tokensIn: bigint): SizeAnswer {
         venue: exit.venue === "curve" ? "the bonding curve" : "the launch pool",
       }),
     };
+  }
+
+  // The pool the slip's own exit answer priced, with the same arithmetic, so
+  // the calculator and the answer row above it cannot disagree. A range pool
+  // is priced from its price and in-range liquidity — never its vault
+  // balances — and says where that stops being exact.
+  const market = slip.open?.market;
+  if (market?.best) {
+    const best = market.best;
+    const priced = quoteSale(best, tokensIn);
+    if (priced) {
+      const decimals = slip.id?.meta?.decimals ?? 18;
+      const spotOut = market.spot !== null ? (market.spot * tokensIn) / 10n ** BigInt(decimals) : 0n;
+      const ranged = best.kind === "v3" || best.kind === "v4";
+      const quote = shaped(tokensIn, priced.out, spotOut, ranged ? 0n : best.tokenReserve ?? 0n, ranged ? 0n : best.quoteReserve ?? 0n, {
+        quoteSymbol: native.symbol,
+        quoteDecimals: native.decimals,
+        venue: `${best.dex} (${best.kind})`,
+      });
+      return {
+        ok: true,
+        quote: {
+          ...quote,
+          shareOfPoolBps: ranged ? null : quote.shareOfPoolBps,
+          caveat: !ranged
+            ? null
+            : priced.beyondTick
+              ? "This size leaves the pool's current price range. The liquidity past it was not read, so the real payout is likely lower than this."
+              : "Exact inside the pool's current price range, which is where a sale this size stays.",
+        },
+      };
+    }
   }
 
   const pool = priceableEvmPool(slip.open?.pools ?? null);
@@ -198,7 +236,7 @@ export function readSizeQuote(q: SizeQuote): { level: "stop" | "watch" | "info";
       text: `A sale this size takes essentially everything ${q.venue} holds. Past that point the arithmetic stops being a quote: there would be no meaningful market left to sell the last of it into, and anybody selling ahead of you makes your share smaller.`,
     };
   }
-  if (q.shareOfPoolBps >= 3_333) {
+  if (q.shareOfPoolBps !== null && q.shareOfPoolBps >= 3_333) {
     return {
       level: "stop",
       text: `This position is ${pct(q.shareOfPoolBps)} of the token side of ${q.venue}. A holding that large next to its own pool cannot leave at anything near the screen price, whatever the price says.`,

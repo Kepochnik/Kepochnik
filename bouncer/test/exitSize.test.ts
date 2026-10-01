@@ -3,6 +3,7 @@ import { test } from "node:test";
 import { evmExitFor, splExitFor, readSizeQuote } from "../src/bouncer/exitSize.js";
 import type { SplSlip } from "../src/bouncer/spl.js";
 import type { DoorSlip } from "../src/bouncer/door.js";
+import type { MarketPool } from "../src/chain/market.js";
 
 const E = 10n ** 18n;
 
@@ -54,7 +55,7 @@ test("a position too big for its pool is called out on size, not just on slippag
   const slip = splWithPool(1_000n * E, 10n * E);
   const answer = splExitFor(slip, 500n * E);
   assert.ok(answer.ok);
-  assert.ok(answer.quote.shareOfPoolBps >= 3_333, `500 of 1000 is half the pool; got ${answer.quote.shareOfPoolBps} bps`);
+  assert.ok((answer.quote.shareOfPoolBps ?? 0) >= 3_333, `500 of 1000 is half the pool; got ${answer.quote.shareOfPoolBps} bps`);
   const said = readSizeQuote(answer.quote);
   assert.equal(said.level, "stop");
   assert.match(said.text, /whatever the price says|cannot leave/i);
@@ -129,4 +130,24 @@ test("asking for nothing is refused rather than answered with a zero", () => {
     const answer = splExitFor(slip, size);
     assert.equal(answer.ok, false, `${size} should not produce a quote`);
   }
+});
+
+test("a range pool the slip priced is priced the same way here, with its caveat", async () => {
+  const { readMarket } = await import("../src/chain/market.js");
+  const Q96 = 2n ** 96n;
+  // token0 at 1 quote per 10 000 tokens: sqrt(1e-4) = 0.01.
+  const pool = { dex: "Uniswap", kind: "v3", address: "0x", feeBps: 30, tokenIsToken0: true, tokenReserve: null, quoteReserve: null, sqrtPriceX96: Q96 / 100n, liquidity: 10n ** 24n } as unknown as MarketPool;
+  const market = readMarket([pool], 1_000_000n * E, 18, "ETH");
+  const slip = {
+    chain: { key: "base", name: "Base", chainId: 8453, launchpad: null, native: { symbol: "ETH", decimals: 18 } },
+    exit: null,
+    id: { meta: { decimals: 18 } },
+    open: { pools: [pool], market },
+  } as unknown as DoorSlip;
+  const answer = evmExitFor(slip, market.quotes[0].tokensIn);
+  assert.ok(answer.ok);
+  // The calculator and the exit answer row read the same number.
+  assert.equal(answer.quote.out, market.quotes[0].out);
+  assert.equal(answer.quote.shareOfPoolBps, null, "a range pool has no token side to be a share of");
+  assert.match(answer.quote.caveat ?? "", /range/);
 });
