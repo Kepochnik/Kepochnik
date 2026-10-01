@@ -759,6 +759,7 @@
     "one-crew": "room",
     "owner-holds": "room",
     "room-wide": "room",
+    "dev-sold": "room",
     spread: "room",
     // ---- what could not be read
     "explorer-scam": "unread",
@@ -1016,6 +1017,20 @@
       stop,
       watch
     };
+    const impostor = notes.find((n) => n.code === "lookalike-impostor");
+    const doorOpen = notes.find((n) => n.code === "cover-open");
+    if (base.kind === "stop" && impostor) {
+      const rest = stop - 1;
+      const m = /^A real (.+?) launch is called (.+?) \(/.exec(impostor.text);
+      const head = m ? `Not the real ${m[2]} \u2014 a copy of an older ${m[1]} launch.` : "Not the token it is named after.";
+      const line = `${head}${rest ? ` ${rest} more thing${rest === 1 ? "" : "s"} here can cost you money outright.` : ""}`;
+      base.line = line;
+      base.short = "not the token it is named after";
+    } else if (base.kind === "watch" && doorOpen) {
+      const rest = watch - 1;
+      base.line = `${doorOpen.text}${rest ? ` After that, ${rest} more thing${rest === 1 ? "" : "s"} worth reading.` : ""}`;
+      base.short = "do not buy while the door tax is on";
+    }
     if (!coverage) return base;
     const kind = qualify(base.kind, coverage);
     if (kind === "incomplete") {
@@ -3874,11 +3889,12 @@
     const amount1 = state.liquidity * state.sqrtPriceX96 / Q96;
     return state.tokenIsCurrency0 ? { token: amount0, quote: amount1 } : { token: amount1, quote: amount0 };
   }
-  function quoteExit(position, reserves, feeBps, creatorTaxBps, shares = [1e3, 2500, 5e3, 1e4]) {
+  function quoteExit(position, reserves, feeBps, creatorTaxBps, shares = [1e3, 2500, 5e3, 1e4], realQuote) {
     const spot = reserves.token === 0n ? 0n : reserves.quote * 10n ** 18n / reserves.token;
     return shares.map((shareBps) => {
       const tokensIn = position * BigInt(shareBps) / 10000n;
-      const gross = curveAmountOut(tokensIn, reserves.token, reserves.quote, 0n);
+      const raw = curveAmountOut(tokensIn, reserves.token, reserves.quote, 0n);
+      const gross = realQuote !== void 0 && raw > realQuote ? realQuote : raw;
       const fee = gross * feeBps / 10000n;
       const tax = gross * creatorTaxBps / 10000n;
       const net = gross - fee - tax;
@@ -3900,7 +3916,8 @@
       const [feeBps] = decodeOutputs(CURVE_FUNCTIONS.feeBps, feeRaw);
       const [ready2] = decodeOutputs(CURVE_FUNCTIONS.readyToGraduate, readyRaw);
       const reserves2 = { token, quote };
-      const quotes2 = quoteExit(options.position, reserves2, feeBps, launch.creatorTaxBps);
+      const realQuote = await rpc.callBatch([{ to: launch.curve, data: encodeCall(CURVE_FUNCTIONS.realQuoteReserve, []) }], options.block).then(([raw]) => decodeOutputs(CURVE_FUNCTIONS.realQuoteReserve, raw)[0]).catch(() => void 0);
+      const quotes2 = quoteExit(options.position, reserves2, feeBps, launch.creatorTaxBps, void 0, realQuote);
       return {
         venue: ready2 ? "closed" : "curve",
         position: options.position,
@@ -3909,6 +3926,7 @@
         creatorTaxBps: launch.creatorTaxBps,
         spot: token === 0n ? 0n : quote * 10n ** 18n / token,
         quotes: quotes2,
+        realQuote,
         note: ready2 ? "The curve is full and waiting for graduate(); sells revert until the pool exists. Anyone can call graduate()." : "Priced with the curve's own sell arithmetic on reserves at this block: constant product, then protocol fee and creator tax on the quote leg."
       };
     }
@@ -4425,9 +4443,9 @@
     const out2 = [];
     const t = id.token;
     if (t.code.empty) out2.push("no bytecode at this address");
-    if (t.proxyImplementation) out2.push(`upgradeable proxy (EIP-1967 implementation ${t.proxyImplementation})`);
-    if (t.proxyBeacon) out2.push(`beacon proxy (EIP-1967 beacon ${t.proxyBeacon})`);
-    if (t.code.minimalProxyTarget) out2.push(`minimal proxy (EIP-1167) to ${t.code.minimalProxyTarget}`);
+    if (t.proxyImplementation) out2.push(`upgradeable proxy (EIP-1967 implementation ${shortAddress(t.proxyImplementation)})`);
+    if (t.proxyBeacon) out2.push(`beacon proxy (EIP-1967 beacon ${shortAddress(t.proxyBeacon)})`);
+    if (t.code.minimalProxyTarget) out2.push(`minimal proxy (EIP-1167) to ${shortAddress(t.code.minimalProxyTarget)}`);
     if (t.code.opcodes.selfdestruct) out2.push(`SELFDESTRUCT \xD7${t.code.opcodes.selfdestruct}`);
     if (t.code.opcodes.delegatecall) out2.push(`DELEGATECALL \xD7${t.code.opcodes.delegatecall}`);
     if (t.code.opcodes.callcode) out2.push(`CALLCODE \xD7${t.code.opcodes.callcode}`);
@@ -5828,7 +5846,7 @@
   function stampLabel(stamp, launchpad, v1 = false) {
     if (stamp === "ON THE LIST" && v1) return "PONS V1 LAUNCH";
     if (stamp === "ON THE LIST") return launchpad ? `${launchpad.toUpperCase()} LAUNCH` : "ON THE LIST";
-    if (stamp === "NOT ON THE LIST") return "NOT ON THE LIST";
+    if (stamp === "NOT ON THE LIST") return launchpad ? `COPY \xB7 NOT A ${launchpad.toUpperCase()} LAUNCH` : "NOT ON THE LIST";
     return launchpad ? `NOT A ${launchpad.toUpperCase()} LAUNCH` : "ORDINARY TOKEN";
   }
   function stampTone(stamp) {
@@ -6022,7 +6040,7 @@
     }
     const r = slip.rules;
     if (r) {
-      if (r.totalTradeBps >= 1000n) notes.push({ level: "watch", code: "high-tax", text: `Every trade pays ${formatBps(r.totalTradeBps)} in fees, ${formatBps(r.creatorTaxBps)} of it to the creator.` });
+      if (r.totalTradeBps >= 1000n) notes.push({ level: "watch", code: "high-tax", text: `Every trade pays ${formatBps(r.totalTradeBps)} in fees; ${formatBps(r.creatorTaxBps)} of the trade goes to the creator.` });
       if (r.creatorFeeRecipientChanges.length) notes.push({ level: "watch", code: "fee-recipient-moved", text: `The creator changed where their cut is paid ${r.creatorFeeRecipientChanges.length}\xD7 since launch, last to ${shortAddress(r.creatorFeeRecipientChanges[r.creatorFeeRecipientChanges.length - 1].to)}.` });
       if (r.deployerShareBps >= 2e3) notes.push({ level: "watch", code: "dev-holds", text: `The deployer holds ${(r.deployerShareBps / 100).toFixed(1)}% of supply.` });
       if (r.buybackEnabled) notes.push({ level: "info", code: "buyback-vests", text: "Buyback is on. It does not burn anything: bought-back tokens are locked and released to the creator and the protocol over five years." });
@@ -6031,6 +6049,13 @@
     }
     const room = slip.room;
     if (room && room.buys > 0) {
+      const devSold = room.wallets.filter((w) => w.creatorWallet && w.sells > 0);
+      if (devSold.length) {
+        const times = devSold.reduce((a, w) => a + w.sells, 0);
+        const out2 = devSold.reduce((a, w) => a + w.quoteOut, 0n);
+        const q3 = slip.rules?.quote ?? slip.chain.native;
+        notes.push({ level: "watch", code: "dev-sold", text: `The creator's own wallets have sold on the curve ${times === 1 ? "once" : `${times} times`}, taking out ${formatUnits(out2, q3.decimals, 4)} ${q3.symbol}.` });
+      }
       if (room.devShareBps >= 5e3) notes.push({ level: "watch", code: "dev-funded", text: `The creator's own wallets paid for ${(room.devShareBps / 100).toFixed(0)}% of everything bought so far.` });
       if (room.sharedBlocks.length >= 3) notes.push({ level: "watch", code: "bundled-blocks", text: `${room.sharedBlocks.length} times, several different wallets bought in the very same block: the shape of a bundled launch.` });
       if (room.buyers >= 25 && room.devShareBps < 2e3) notes.push({ level: "info", code: "room-wide", text: `${room.buyers} distinct buyers and the creator funded ${(room.devShareBps / 100).toFixed(0)}%.` });
@@ -6137,9 +6162,9 @@
     }
     const o = slip.open;
     for (const f of findings) {
-      if (f.startsWith("SELFDESTRUCT") || f.startsWith("CALLCODE")) notes.push({ level: "stop", code: "code", text: `Code can vanish: ${f}.` });
+      if (f.startsWith("SELFDESTRUCT") || f.startsWith("CALLCODE")) notes.push({ level: "stop", code: "code", text: `The contract can delete itself (${f}): if it does, the token stops working and whatever you hold in it is stuck.` });
       else if (f.startsWith("upgradeable proxy") || f.startsWith("beacon proxy") || f.startsWith("minimal proxy")) notes.push({ level: "watch", code: "code", text: `Code can be replaced: ${f}. Whoever controls the proxy decides what this token does tomorrow${o?.surfaceFrom === "implementation" ? "; the functions below were read from the current implementation" : ""}.` });
-      else if (f.startsWith("DELEGATECALL")) notes.push({ level: "watch", code: "code", text: `Runs other contracts' code in its own storage: ${f}.` });
+      else if (f.startsWith("DELEGATECALL")) notes.push({ level: "watch", code: "code", text: `It runs another contract's code as its own (${f}), so what it does can change without the address changing.` });
       else notes.push({ level: "info", code: "code", text: `${f.charAt(0).toUpperCase()}${f.slice(1)}.` });
     }
     if (!o) return withSkipped(slip, notes);
@@ -6428,16 +6453,19 @@
     const o = slip.open;
     const out2 = [];
     if (o) {
-      const owner = o.ownerUnread ? "UNREAD" : o.owner === null ? "NONE" : o.owner.renounced ? "RENOUNCED" : "HAS KEYS";
+      const unreadable = o.surfaceFrom === "implementation-unreadable";
+      const owner = unreadable || o.ownerUnread ? "UNREAD" : o.owner === null ? "NONE" : o.owner.renounced ? "RENOUNCED" : "HAS KEYS";
       out2.push({
         label: "OWNER",
         value: owner,
         bad: Boolean(o.owner && !o.owner.renounced),
-        note: o.ownerUnread ? "owner() would not answer" : o.owner === null ? "no owner() in the code" : o.owner.renounced ? "nobody can call owner-only code" : shortAddress(o.owner.address)
+        note: unreadable ? "the code that runs could not be read" : o.ownerUnread ? "owner() would not answer" : o.owner === null ? "no owner() in the code" : o.owner.renounced ? "nobody can call owner-only code" : shortAddress(o.owner.address)
       });
       const kinds = o.powers.filter((p) => p.kind !== "exempt" && p.kind !== "sweep");
       const names = [...new Set(kinds.map((p) => p.kind))];
-      out2.push({ label: "CODE CAN", value: String(kinds.length), bad: kinds.length > 0, note: names.length ? names.join(", ") : "nothing owner-only found" });
+      out2.push(
+        unreadable ? { label: "CODE CAN", value: "?", bad: false, note: "implementation not readable" } : { label: "CODE CAN", value: String(kinds.length), bad: kinds.length > 0, note: names.length ? names.join(", ") : "nothing owner-only found" }
+      );
       const sells = o.probes.filter((p) => p.target === "pool");
       const ok = sells.filter((p) => p.status === "ok").length;
       const sale = !sells.length ? "NOT RUN" : sells.every((p) => p.status === "ok") ? "ALL PASS" : sells.some((p) => p.status === "reverts") ? `${ok}/${sells.length}` : "UNREAD";
@@ -6455,8 +6483,10 @@
         note: o.holders?.count ? `of supply \xB7 ${o.holders.count} holders` : "explorer not reachable"
       });
     } else if (slip.rules) {
-      out2.push({ label: "TRADE FEE", value: formatBps(slip.rules.totalTradeBps), bad: slip.rules.totalTradeBps >= 1e3, note: "on every buy and sell" });
-      out2.push({ label: "CREATOR TAX", value: formatBps(slip.rules.creatorTaxBps), bad: slip.rules.creatorTaxBps >= 500, note: "of the fee, to the creator" });
+      const e = slip.exit;
+      const fee = e?.venue === "pool" ? e.feeBps + e.creatorTaxBps : slip.rules.totalTradeBps;
+      out2.push({ label: "TRADE FEE", value: formatBps(fee), bad: fee >= 1000n, note: e?.venue === "pool" ? "on every trade, in the pool" : "on every buy and sell" });
+      out2.push({ label: "CREATOR TAX", value: formatBps(slip.rules.creatorTaxBps), bad: slip.rules.creatorTaxBps >= 500, note: "of every trade, to the creator" });
       out2.push({ label: "DEV HOLDS", value: `${(slip.rules.deployerShareBps / 100).toFixed(1)}%`, bad: slip.rules.deployerShareBps >= 2e3, note: "of supply" });
       out2.push({ label: "BUYBACK", value: slip.rules.buybackEnabled ? "VESTS" : "NONE", bad: slip.rules.buybackEnabled, note: slip.rules.buybackEnabled ? "bought back, not burned" : "no buyback in the rules" });
     }
@@ -6552,7 +6582,7 @@
       <text x="170" y="${mid}" font-size="17" fill="${n.level === "info" ? c.muted : c.text}">${esc(clip(n.text, 98))}</text>`;
     }).join("");
     const stamp = model.stamp;
-    const stampColor = /NOT ON THE LIST/.test(stamp) ? c.stop : /ORDINARY TOKEN|^NOT A /.test(stamp) ? c.dim : c.ok;
+    const stampColor = /NOT ON THE LIST|^COPY/.test(stamp) ? c.stop : /ORDINARY TOKEN|^NOT A /.test(stamp) ? c.dim : c.ok;
     const stampW = stamp.length * 8.4 + 22;
     const found = model.notes.filter((n) => topicOf(n.code) !== "unread").length;
     const counts = `${found} finding${found === 1 ? "" : "s"}`;
@@ -6649,7 +6679,12 @@
     const native = slip.chain.native;
     const exit = slip.exit;
     if (exit && exit.venue !== "closed" && exit.reserves.token > 0n && exit.reserves.quote > 0n) {
-      const gross = curveAmountOut(tokensIn, exit.reserves.token, exit.reserves.quote, 0n);
+      const supply = slip.id?.meta?.totalSupply ?? null;
+      if (exit.venue === "curve" && supply !== null && supply > exit.reserves.token && tokensIn > supply - exit.reserves.token) {
+        return { ok: false, why: `that is more than exists outside the curve (${formatCoin(supply - exit.reserves.token, 18)} tokens), so it could never be sold into it` };
+      }
+      const raw = curveAmountOut(tokensIn, exit.reserves.token, exit.reserves.quote, 0n);
+      const gross = exit.realQuote !== void 0 && raw > exit.realQuote ? exit.realQuote : raw;
       const out2 = gross - gross * exit.feeBps / 10000n - gross * exit.creatorTaxBps / 10000n;
       const spotOut = tokensIn * exit.spot / 10n ** 18n;
       return {
@@ -8330,7 +8365,7 @@
       return plain("exit", "Not checked \u2014 the pool read did not finish", "unknown", "so nothing can be said about getting out; this is worth one retry", mine);
     }
     if (slip.open && (slip.open.pools ?? []).length === 0) {
-      return plain("exit", "Nowhere to sell it that this can see", toneOf(mine), "no pool on this chain's known DEX factories. It may trade on a venue this does not read, against another pair, or not at all.", mine, "no pool");
+      return plain("exit", "Nowhere to sell it that this can see", toneOf(mine, "unknown"), "no pool on this chain's known DEX factories. It may trade on a venue this does not read, against another pair, or not at all.", mine, "no pool");
     }
     return plain("exit", "A pool exists but nothing in it could be priced", "unknown", "the reserves did not come back, so a sale cannot be quoted", mine);
   }
@@ -8529,6 +8564,12 @@
     facts2.push(
       supply ? { label: "Supply", value: formatCoin(supply, decimals), note: `${grouped(supply, decimals)} \xB7 ${decimals} decimals`, source: "chain" } : { label: "Supply", value: null, note: "tokens", source: "chain", why: "totalSupply did not answer" }
     );
+    const devBps = slip.rules ? slip.rules.deployerShareBps : o?.deployer?.bps ?? null;
+    if (slip.rules || o) {
+      facts2.push(
+        devBps !== null ? { label: "Dev holds", value: `${(devBps / 100).toFixed(devBps < 1e3 ? 1 : 0)}%`, note: `of supply \xB7 the deployer's wallet at block ${slip.at.block}`, source: "chain", warn: devBps >= 2e3 } : { label: "Dev holds", value: null, note: "of supply", source: "chain", why: o?.deployer ? "the deployer's balance did not read" : "the deployer could not be found" }
+      );
+    }
     const holders = o?.holders?.count ?? null;
     const room = !o ? slip.room : null;
     facts2.push(
@@ -8737,6 +8778,7 @@
   var sourceText = $("source-text");
   var settingsToggle = $("settings-toggle");
   var toast = $("toast");
+  if (/^#\/(demo|t|tx|wallet|dev|board|plan)\//.test(location.hash) || /^#\/(board|plan)/.test(location.hash)) document.documentElement.classList.add("deep");
   var deck = $("deck");
   var feedBox = $("feed");
   var feedToggle = $("feed-toggle");
@@ -8784,6 +8826,13 @@
       board: "Tonight's board"
     };
     $("door-label").textContent = labels[next];
+  }
+  function narrow() {
+    try {
+      return window.matchMedia("(max-width:600px)").matches;
+    } catch {
+      return false;
+    }
   }
   function detect(raw) {
     const parts = raw.trim().split(/[\s,]+/).filter(Boolean);
@@ -8936,6 +8985,9 @@
     { label: "A trade receipt", hint: "one buy, itemised", hash: `#/tx/0xdemoFRESH${DEMO.tokens.fresh.launched + 22}?chain=demo` },
     { label: "A Pons V1 token", hint: "the older launchpad, caps still on", hash: `#/demo/${DEMO_V1.token}` }
   ];
+  function kindOf(word) {
+    return word === "STOP" ? "stop" : word === "WATCH" ? "watch" : word === "CLEAR" ? "clear" : "unknown";
+  }
   function renderSeen() {
     const host = document.getElementById("seen");
     if (!host) return;
@@ -8956,12 +9008,13 @@
     <summary class="seen-head"><span>Checked before</span><span class="seen-n">${rows.length}</span><span class="chev" aria-hidden="true"></span></summary>
     <ul class="seen-list">${rows.map((sn) => {
       const href = `#/${mode === "demo" ? "demo" : "t"}/${sn.address}${mode === "demo" ? "" : `?chain=${esc2(sn.chain)}`}`;
+      const fake = sn.codes.some((c) => c.code === "lookalike-impostor");
       return `<li class="seen-row">
           <a href="${href}">
             ${mark(sn.chain)}
-            <span class="seen-sym">${esc2(sn.symbol || shortAddress(sn.address))}</span>
+            <span class="seen-sym${fake ? " fake" : ""}">${esc2(sn.symbol || shortAddress(sn.address))}${fake ? ` <small>not the real one</small>` : ""}</span>
             <span class="seen-addr mono">${esc2(shortAddress(sn.address))}</span>
-            <span class="seen-was">read ${esc2(sn.verdict)} ${esc2(ago(now - sn.at))} ago</span>
+            <span class="seen-was">read <span class="vmini ${kindOf(sn.verdict)}">${esc2(sn.verdict)}</span> ${esc2(ago(now - sn.at))} ago</span>
             <span class="seen-go">check again</span>
           </a>
         </li>`;
@@ -8977,11 +9030,11 @@
   function renderChips() {
     const chips = $("chips");
     chips.innerHTML = "";
-    if (mode === "demo") {
+    {
       const label = document.createElement("span");
-      label.textContent = "Try an example:";
+      label.textContent = mode === "demo" ? "Try an example:" : "New here? Open an invented example:";
       chips.appendChild(label);
-      for (const e of EXAMPLES) {
+      for (const e of mode === "demo" ? EXAMPLES : EXAMPLES.slice(0, 3)) {
         const b = document.createElement("button");
         b.type = "button";
         b.className = "chip";
@@ -9196,12 +9249,12 @@
   }
   function paintSelectedChain() {
     if (chainSelect.value === "auto") {
-      q.placeholder = "0x\u2026 or a Solana mint \u2014 BOUNCER finds the chain";
+      q.placeholder = narrow() ? "Paste a token address" : "0x\u2026 or a Solana mint \u2014 BOUNCER finds the chain";
       $("chain-hint").textContent = `BOUNCER asks every chain it knows where this address lives: ${searchableChains().map((c2) => c2.name).join(", ")}, and Solana by the shape of the address. Pick one from the menu to skip the search and read it directly.`;
       return;
     }
     const c = chainByKey(chainSelect.value);
-    q.placeholder = c.family === "solana" ? "a Solana mint address (base58, like EPjFWdd5\u2026yTDt1v)" : "0x\u2026 (a token, its curve, a wallet or a transaction hash)";
+    q.placeholder = narrow() ? c.family === "solana" ? "Paste a Solana mint" : "Paste a token address" : c.family === "solana" ? "a Solana mint address (base58, like EPjFWdd5\u2026yTDt1v)" : "0x\u2026 (a token, its curve, a wallet or a transaction hash)";
     $("chain-hint").textContent = `${c.name}${c.chainId ? ` (${c.chainId})` : ""}${c.launchpad ? ` \xB7 ${c.launchpad}` : " \xB7 no launchpad known here"} \xB7 RPC ${c.rpc[0]}${c.blockscout ? ` \xB7 explorer ${c.blockscout}` : " \xB7 no explorer known, the funder check and same-name search are off"}${c.notes ? ` \xB7 ${c.notes}` : ""}`;
   }
   function paintChain() {
@@ -9346,6 +9399,7 @@
     go.disabled = false;
   }
   async function runDev(address) {
+    const run = doorRun;
     if (refuseFeature("dev", "The deployer's history")) return;
     if (!ADDR.test(address)) return bad("Paste the deployer's address.");
     busy("reading the deployer's launches\u2026");
@@ -9354,15 +9408,18 @@
       const head = await rpc.getBlock("latest");
       const fromBlock = mode === "demo" ? Math.max(0, head.number - 3e5) : await findBlockByTimestamp(rpc, head.timestamp - 24 * 3600, head.number);
       const d = await readDevReport(rpc, address, { fromBlock, toBlock: head.number, factory: factoryFor(), chunking: mode === "demo" ? { startChunk: 1e5, maxChunk: 1e5 } : void 0 });
+      if (run !== doorRun) return;
       done(`block ${head.number} \xB7 last ${mode === "demo" ? "8" : "24"} h`);
       out.innerHTML = `<div class="slip">${devSection(d, null, true)}</div>`;
     } catch (error) {
+      if (run !== doorRun) return;
       failed(error, address);
     } finally {
-      go.disabled = false;
+      if (run === doorRun) go.disabled = false;
     }
   }
   async function runWallet(token, wallet) {
+    const run = doorRun;
     if (refuseFeature("wallet", "A wallet's bag")) return;
     if (!ADDR.test(token) || !ADDR.test(wallet)) return bad("Paste the token address and the wallet address.");
     busy("reading the wallet's trades\u2026");
@@ -9380,15 +9437,18 @@
       } catch {
       }
       const quote = await quoteOfLaunch(rpc, launch.pairToken, head);
+      if (run !== doorRun) return;
       done(`block ${head}`);
       renderPosition(p, head, symbol, quote);
     } catch (error) {
+      if (run !== doorRun) return;
       failed(error, token);
     } finally {
-      go.disabled = false;
+      if (run === doorRun) go.disabled = false;
     }
   }
   async function runTx(hash) {
+    const run = doorRun;
     if (refuseFeature("tx", "A transaction receipt")) return;
     if (!hash.startsWith("0x")) return bad("Paste a transaction hash.");
     busy("decoding the trade\u2026");
@@ -9396,15 +9456,18 @@
       const rpc = rpcFor();
       const receipts = await readTradeReceipt(rpc, hash, factoryOrFail());
       const quotes = await Promise.all(receipts.map((r) => r.launch ? quoteOfLaunch(rpc, r.launch.pairToken, r.block) : Promise.resolve({ ...chain().native, native: true })));
+      if (run !== doorRun) return;
       done(`block ${receipts[0].block}`);
       out.innerHTML = `<div class="slip">${receipts.map((r, i) => receiptSection(r, quotes[i])).join("")}</div>`;
     } catch (error) {
+      if (run !== doorRun) return;
       failed(error, hash);
     } finally {
-      go.disabled = false;
+      if (run === doorRun) go.disabled = false;
     }
   }
   async function runPlan(taxBps, params) {
+    const run = doorRun;
     if (refuseFeature("plan", "Plan a launch")) return;
     busy("reading the factory's terms\u2026");
     try {
@@ -9420,15 +9483,18 @@
         pairToken: params.get("quote") ?? void 0,
         sampleBuy: buy ? BigInt(Math.round(Number(buy) * 1e6)) * 10n ** 12n : void 0
       });
+      if (run !== doorRun) return;
       done(`block ${plan.block} \xB7 config ${plan.configId}`);
       renderPlan(plan);
     } catch (error) {
+      if (run !== doorRun) return;
       failed(error, "plan");
     } finally {
-      go.disabled = false;
+      if (run === doorRun) go.disabled = false;
     }
   }
   async function runBoard(hours) {
+    const run = doorRun;
     if (refuseFeature("board", "Tonight's board")) return;
     busy("reading the window\u2026");
     try {
@@ -9436,18 +9502,35 @@
       const head = await rpc.getBlock("latest");
       const fromBlock = mode === "demo" ? Math.max(0, head.number - Math.round(hours * 3600 * chain().blocksPerSecond)) : await findBlockByTimestamp(rpc, head.timestamp - hours * 3600, head.number);
       const b = await readBoard(rpc, { fromBlock, toBlock: head.number, factory: factoryFor(), top: 10, chunkSize: mode === "demo" ? 1e5 : void 0 });
+      const tokens = [...new Set(b.topCurves.map((r) => r.token).filter((t) => Boolean(t)))];
+      const symbols = /* @__PURE__ */ new Map();
+      if (tokens.length) {
+        const raw = await rpc.callBatch(tokens.map((t) => ({ to: t, data: encodeCall(ERC20_FUNCTIONS.symbol, []) })), head.number).catch(() => null);
+        tokens.forEach((t, i) => {
+          try {
+            const sym = raw ? decodeOutputs(ERC20_FUNCTIONS.symbol, raw[i])[0].trim() : "";
+            if (sym) symbols.set(t.toLowerCase(), sym.slice(0, 16));
+          } catch {
+          }
+        });
+      }
+      if (run !== doorRun) return;
       done(`blocks ${b.window.fromBlock}\u2013${b.window.toBlock} \xB7 ${b.chunks} log reads`);
-      renderBoard(b, hours);
+      renderBoard(b, hours, symbols);
     } catch (error) {
+      if (run !== doorRun) return;
       failed(error, "board");
     } finally {
-      go.disabled = false;
+      if (run === doorRun) go.disabled = false;
     }
   }
-  function renderBoard(b, hours) {
+  function renderBoard(b, hours, symbols = /* @__PURE__ */ new Map()) {
     const qd = chain().native;
     const amt = (v) => mny(v, qd.decimals, qd.symbol, true);
-    const link = (a) => `<a href="#/${mode === "demo" ? "demo" : "t"}/${a}${routeChain()}">${shortAddress(a)}</a>`;
+    const link = (a) => {
+      const sym = symbols.get(a.toLowerCase());
+      return `<a href="#/${mode === "demo" ? "demo" : "t"}/${a}${routeChain()}">${sym ? `${esc2(sym)} <span class="mono dim">${shortAddress(a)}</span>` : shortAddress(a)}</a>`;
+    };
     const dev = (a) => `<a href="#/dev/${a}${routeChain()}">${shortAddress(a)}</a>`;
     const windows = [1, 6, 24].map((h) => `<a class="frame${h === hours ? " on" : ""}" href="#/board?hours=${h}&chain=${mode === "demo" ? "demo" : chain().key}" aria-current="${h === hours ? "true" : "false"}">${h}h</a>`).join("");
     const none = (text) => `<p class="qdetail">${text}</p>`;
@@ -9460,10 +9543,10 @@
         <div><span>graduations</span><b class="num">${b.graduations}</b></div>
         <div><span>deployers</span><b class="num">${b.deployers}</b></div>
         <div><span>door tax paid</span><b class="num">${amt(b.coverTotal)}</b><span>${b.taxedBuys} buy${b.taxedBuys === 1 ? "" : "s"}</span></div>
-      </div><p class="qdetail">Door tax = the part of a buy's tax above the curve's own creator rate, as the curve's CurveBuy event reports it. Counts, not scores.${b.otherPairCurves ? ` ${plural(b.otherPairCurves, "curve")} paired with another token also took door tax; ${b.otherPairCurves === 1 ? "its amounts are" : "their amounts are"} in that token's units, so ${b.otherPairCurves === 1 ? "it is" : "they are"} left out of these totals rather than added to ${esc2(qd.symbol)}.` : ""}</p></section>
+      </div><p class="qdetail">Door tax = the extra a buyer paid to the creator in a launch's first seconds, on top of the normal fees \u2014 read from each curve's own CurveBuy events. Counts, not scores.${b.otherPairCurves ? ` ${plural(b.otherPairCurves, "curve")} paired with another token also took door tax; ${b.otherPairCurves === 1 ? "its amounts are" : "their amounts are"} in that token's units, so ${b.otherPairCurves === 1 ? "it is" : "they are"} left out of these totals rather than added to ${esc2(qd.symbol)}.` : ""}</p></section>
       <section class="sec"><h2>Deployers</h2>${b.topDeployers.length ? `<div class="tbl"><table class="buys"><thead><tr><th>deployer</th><th class="num">launched</th><th class="num">graduated</th><th class="num">swept</th></tr></thead><tbody>${b.topDeployers.map((r) => `<tr><td>${dev(r.deployer)}</td><td class="num">${r.launched}</td><td class="num">${r.graduated}</td><td class="num">${Math.max(0, r.swept - r.graduated)}</td></tr>`).join("")}</tbody></table></div>` : none("No launches in the window.")}
         ${b.serial.length ? `<h2 style="margin-top:14px">Serial, no graduation</h2><div class="tbl"><table class="buys"><tbody>${b.serial.map((r) => `<tr><td>${dev(r.deployer)}</td><td>${r.launched} launched, none graduated</td></tr>`).join("")}</tbody></table></div>` : ""}</section>
-      <section class="sec"><h2>Door tax by token</h2>${b.topCurves.length ? `<div class="tbl"><table class="buys"><thead><tr><th>token</th><th class="num">collected</th><th class="num">buys</th><th class="num">highest</th><th class="num">creator tax</th></tr></thead><tbody>${b.topCurves.map((r) => `<tr><td>${link(r.token ?? r.curve)}</td><td class="num">${amt(r.coverCollected)}</td><td class="num">${r.taxedBuys}</td><td class="num">${(r.highestBps / 100).toFixed(1)}%</td><td class="num">${formatBps(r.creatorTaxBps)}</td></tr>`).join("")}</tbody></table></div>` : none("No buy in the window paid above the creator rate.")}</section>
+      <section class="sec wide"><h2>Door tax by token</h2>${b.topCurves.length ? `<div class="tbl"><table class="buys"><thead><tr><th>token</th><th class="num">collected</th><th class="num">buys</th><th class="num">highest</th><th class="num">creator tax</th></tr></thead><tbody>${b.topCurves.map((r) => `<tr><td>${link(r.token ?? r.curve)}</td><td class="num">${amt(r.coverCollected)}</td><td class="num">${r.taxedBuys}</td><td class="num">${(r.highestBps / 100).toFixed(1)}%</td><td class="num">${formatBps(r.creatorTaxBps)}</td></tr>`).join("")}</tbody></table></div>` : none("No buy in the window paid above the creator rate.")}</section>
       <section class="sec"><h2>Door tax by wallet</h2>${b.topPayers.length ? `<div class="tbl"><table class="buys"><thead><tr><th>wallet</th><th class="num">door tax paid</th><th class="num">buys</th></tr></thead><tbody>${b.topPayers.map((r) => `<tr><td><span class="mono">${shortAddress(r.wallet)}</span></td><td class="num">${amt(r.coverPaid)}</td><td class="num">${r.buys}</td></tr>`).join("")}</tbody></table></div>` : none("Nobody paid door tax in the window.")}</section>
     </div></div>`;
   }
@@ -9523,6 +9606,7 @@
     let lag = null;
     let failing = null;
     let seen = 0;
+    let clock = 0;
     const add = (html, quiet = false) => {
       const el = document.createElement("div");
       el.className = `event${quiet ? " quiet" : ""}`;
@@ -9532,7 +9616,8 @@
     };
     const paint = () => {
       if (!state.isConnected) {
-        stopWatch();
+        if (watchClock === clock) stopWatch();
+        else clearInterval(clock);
         return;
       }
       const since = Math.max(0, Math.round((Date.now() - lastAt) / 1e3));
@@ -9583,7 +9668,8 @@
     }
     void tick();
     watcher = window.setInterval(() => void tick(), everyMs);
-    watchClock = window.setInterval(paint, 1e3);
+    clock = window.setInterval(paint, 1e3);
+    watchClock = clock;
   }
   function bad(text, typo = false) {
     if (typo) {
@@ -9796,9 +9882,9 @@
           <p class="lead">${esc2(v.line)}${pending}</p>
         </div>
       </div>
+      ${opts.alert ?? ""}
       ${opts.bands ?? ""}
       ${stage === "done" ? keyFindings(opts.notes, v.word) : ""}
-      ${opts.alert ?? ""}
       ${opts.facts?.length ? factsBlock(opts.facts) : ""}
       ${opts.venues ?? ""}
     </aside>
@@ -10202,8 +10288,8 @@
       (x) => `<button class="fchip${x.key === feedFilter ? " on" : ""}" type="button" data-filter="${x.key}" aria-pressed="${x.key === feedFilter}" title="${esc2(x.hint)}">${esc2(x.label)}</button>`
     ).join("")}</div>
     ${body}
-    <div class="feed-note"${f.failing ? ` title="${esc2(f.failing)}"` : ""}>${esc2(
-      f.failing ? `Stalled: ${f.failing.length > 90 ? `${f.failing.slice(0, 88).replace(/\s+\S*$/, "")}\u2026` : f.failing}` : `j / k to move, Enter to open. ${chain().launchpad ?? "The launchpad"} on ${chain().name}. ${f.rows.length ? `${feedFilter === "all" ? `The newest ${f.rows.length}` : `${kept.length} of ${f.rows.length}`}` : "Nothing"} between block ${f.from ?? "?"} and ${f.head ?? "?"}${f.unread ? `; blocks ${f.unread.fromBlock}\u2013${f.unread.toBlock} were not opened` : ""}.`
+    <div class="feed-note"${f.failing ? ` title="${esc2(f.failing)}"` : ""}>${f.failing || f.head === null ? "" : `<span class="hint-hover">j / k to move, Enter to open. </span><span class="hint-touch">Tap a launch to check it. </span>`}${esc2(
+      f.failing ? `Stalled: ${f.failing.length > 90 ? `${f.failing.slice(0, 88).replace(/\s+\S*$/, "")}\u2026` : f.failing}` : f.head === null ? "Reading the newest blocks\u2026" : `${chain().launchpad ?? "The launchpad"} on ${chain().name}. ${f.rows.length ? `${feedFilter === "all" ? `The newest ${f.rows.length}` : `${kept.length} of ${f.rows.length}`}` : "Nothing"} between block ${f.from ?? "?"} and ${f.head ?? "?"}${f.unread ? `; blocks ${f.unread.fromBlock}\u2013${f.unread.toBlock} were not opened` : ""}.`
     )}</div>`;
     const rows = feedBox.querySelector(".feed-rows");
     if (rows && at > 0) rows.scrollTop = at;
@@ -10222,7 +10308,7 @@
     <b>${blocked ? "Paste a token to check it" : "Pick a launch to check it"}</b>
     <p>${blocked ? "There is no launchpad column on this chain, so paste any token address above \u2014 BOUNCER reads the chain itself and answers the five questions you would ask before buying." : "Every launch in the column opens here with its verdict, its figures and a live tape of who is buying and who is selling. Or paste any token address above."}</p>
     <ul class="pick-words">${words.map(([kind, word, meaning]) => `<li><span class="vmini ${kind}">${word}</span><span>${esc2(meaning)}</span></li>`).join("")}</ul>
-    <p class="pick-keys"><kbd>/</kbd> search <kbd>j</kbd><kbd>k</kbd> move down the column <kbd>Enter</kbd> open</p>
+    <p class="pick-keys"><kbd>Ctrl</kbd><kbd>V</kbd> anywhere checks an address <kbd>/</kbd> search <kbd>j</kbd><kbd>k</kbd> move down the column <kbd>Enter</kbd> open</p>
   </div>`;
   }
   function feedRow(r, here) {
@@ -10294,7 +10380,7 @@
     <div class="flow-bar"><i class="in" style="width:${total > 0n ? inPct : 0}%"></i><i class="out" style="width:${total > 0n ? 100 - inPct : 0}%"></i></div>
   </div>`;
     const body = t.trades.length ? `<div class="tape-rows"><table class="trades">
-        <thead><tr><th>ago</th><th>side</th>${usdPer !== null ? "<th>value</th>" : ""}<th${usdPer !== null ? ' class="c-coin"' : ""}>${esc2(sym)}</th><th class="c-tok">tokens</th><th>of supply</th><th>${t.source.kind === "curve" ? "trader" : t.source.pool.kind === "v4" ? "via" : "to"}</th><th class="c-blk">block</th></tr></thead>
+        <thead><tr><th>ago</th><th>side</th>${usdPer !== null ? "<th>value</th>" : ""}<th${usdPer !== null ? ' class="c-coin"' : ""}>${esc2(sym)}</th><th class="c-tok">tokens</th><th class="c-share">of supply</th><th>${t.source.kind === "curve" ? "trader" : t.source.pool.kind === "v4" ? "via" : "to"}</th><th class="c-blk">block</th></tr></thead>
         <tbody>${t.trades.map((x) => tradeRow(x, t)).join("")}</tbody>
       </table></div>` : `<div class="tape-empty">${t.opening ? "<b>Reading the trades\u2026</b>the first round is walking the log" : t.head === null ? "<b>Could not read the trades</b>the chain did not answer, so this is not a quiet token \u2014 it is an unread one. The tape keeps trying." : `<b>Nothing traded in ${esc2(FRAME_WORD[frame])}</b>no buy and no sell between block ${t.from} and ${t.head}${widerFrames()}`}</div>`;
     return `${flow}${body}
@@ -11225,7 +11311,7 @@
     const roomBody = room ? `<dl class="kv">
         <dt>since launch</dt><dd>${esc2(roomLine(room))}</dd>
         <dt>bought</dt><dd>${amt(room.totalQuoteIn)} after fees \xB7 ${plural(room.buys, "buy")} \xB7 ${plural(room.sells, "sell")}</dd></dl>
-        ${room.wallets.length ? `<div class="tbl"><table class="buys"><thead><tr><th>wallet</th><th>in, after fees</th><th>out</th><th>buys</th></tr></thead><tbody>${[...room.wallets].sort((a, b) => b.quoteIn > a.quoteIn ? 1 : b.quoteIn < a.quoteIn ? -1 : 0).slice(0, 8).map((w) => `<tr><td>${shortAddress(w.address)}${w.creatorWallet ? ' <span class="flag">creator</span>' : ""}</td><td>${amt(w.quoteIn)}</td><td>${w.quoteOut ? amt(w.quoteOut) : "\u2014"}</td><td>${w.buys}</td></tr>`).join("")}</tbody></table></div>${moreRows(room.wallets.length, 8, "wallet")}` : ""}` : "";
+        ${room.wallets.length ? `<div class="tbl"><table class="buys"><thead><tr><th>wallet</th><th>in, after fees</th><th>out</th><th>buys</th></tr></thead><tbody>${[...room.wallets].sort((a, b) => Number(b.creatorWallet) - Number(a.creatorWallet) || (b.quoteIn > a.quoteIn ? 1 : b.quoteIn < a.quoteIn ? -1 : 0)).slice(0, 8).map((w) => `<tr><td>${shortAddress(w.address)}${w.creatorWallet ? ' <span class="flag">creator</span>' : ""}</td><td>${amt(w.quoteIn)}</td><td>${w.quoteOut ? amt(w.quoteOut) : "\u2014"}</td><td>${w.buys}</td></tr>`).join("")}</tbody></table></div>${moreRows(room.wallets.length, 8, "wallet")}` : ""}` : "";
     const crewBody = crew ? `<dl class="kv"><dt>first buyers</dt><dd>${esc2(oneCrewLine(crew))}</dd>
         ${crew.crews.slice(0, 3).map((cr, i) => `<dt>group ${i + 1}</dt><dd>${plural(cr.wallets.length, "wallet")} ${cr.wallets.length === 1 ? "was" : "were all"} funded by <span class="mono">${shortAddress(cr.funder)}</span> before the launch \xB7 together ${(cr.shareBps / 100).toFixed(1)}% of all buys</dd>`).join("")}</dl>
         <div class="tbl"><table class="buys"><thead><tr><th>wallet</th><th>got its money from</th><th>bought, after fees</th></tr></thead><tbody>${crew.wallets.slice(0, 10).map((w) => `<tr><td>${shortAddress(w.address)}</td><td>${w.creatorWallet ? '<span class="flag">creator wallet</span>' : w.funder ? `<span class="mono">${shortAddress(w.funder)}</span> <small style="color:var(--dim)">block ${w.fundedAtBlock}</small>` : '<span style="color:var(--dim)">not traced</span>'}</td><td>${amt(w.quoteIn)}</td></tr>`).join("")}</tbody></table></div>${moreRows(crew.wallets.length, 10, "wallet", "first")}` : "";
@@ -11341,6 +11427,8 @@
           stopWatch();
           watchButton.setAttribute("aria-pressed", "false");
           watchButton.textContent = "Start watching";
+          const state = document.querySelector("#s-watch .watch-state");
+          if (state) state.innerHTML = `<span class="watch-live stalled">stopped</span><span>nothing is being read now \xB7 start again to resume</span>`;
           return;
         }
         startWatch(slip, plan, $("s-watch"), watchButton);
@@ -11350,31 +11438,41 @@
     if (slip.cover?.status === "open") {
       const cc = slip.cover;
       const started = Date.now();
-      ticker = window.setInterval(() => {
-        const left = Math.max(0, cc.secondsLeft - Math.floor((Date.now() - started) / 1e3));
+      if (ticker) {
+        clearInterval(ticker);
+        ticker = null;
+      }
+      const run = doorRun;
+      const subject = slip.subject;
+      const id = window.setInterval(() => {
         const row = document.getElementById("q-keep");
-        if (!row) {
-          if (ticker) clearInterval(ticker);
-          ticker = null;
+        if (run !== doorRun || shown?.slip.subject !== subject || !row) {
+          clearInterval(id);
+          if (ticker === id) ticker = null;
           return;
         }
+        const left = Math.max(0, cc.secondsLeft - Math.floor((Date.now() - started) / 1e3));
         const value = row.querySelector(".qv");
         const fig = row.querySelector(".qfig");
         const bar2 = document.getElementById("cd-bar");
         const key = document.querySelector('.keyf-row[data-code="cover-open"] .keyf-t');
+        const lead = document.querySelector(".doorway .lead");
         if (bar2) bar2.style.width = `${Math.round(left / cc.terms.seconds * 100)}%`;
         if (left > 0) {
           if (value) value.textContent = `Yes, on a buy \u2014 the door tax is on for ${left} more second${left === 1 ? "" : "s"}`;
           if (fig) fig.textContent = `${left}s`;
           if (key) key.textContent = (key.textContent ?? "").replace(/for \d+ s\b/, `for ${left} s`);
+          if (lead) lead.textContent = (lead.textContent ?? "").replace(/still on for \d+ s\b/, `still on for ${left} s`);
           return;
         }
         if (value) value.textContent = "The door tax ended while you were looking \u2014 check again to see who paid it";
         if (fig) fig.textContent = "ended";
         if (key) key.textContent = "The door tax ended while you were looking \u2014 check again to see who paid it.";
-        if (ticker) clearInterval(ticker);
-        ticker = null;
+        if (lead) lead.textContent = (lead.textContent ?? "").replace(/The door tax is still on for \d+ s:.*?Wait for it to end\./, "The door tax ended while you were looking \u2014 check again to see who paid it.");
+        clearInterval(id);
+        if (ticker === id) ticker = null;
       }, 1e3);
+      ticker = id;
     }
   }
   function clean(text, max = 160) {
@@ -11412,7 +11510,7 @@
     const o = slip.open;
     const powers = o.powers.length ? `<h3 class="cap">What the code can do <b>\xB7 read off the bytecode</b></h3><div class="tbl"><table class="buys"><thead><tr><th>function in the code</th><th>lets whoever may call it</th></tr></thead><tbody>${o.powers.map((p) => `<tr><td><span class="mono">${esc2(p.signature)}</span></td><td>${esc2(/^unpause|^resume/i.test(p.signature) ? "turn transfers back on after a pause" : POWER_MEANING[p.kind])}</td></tr>`).join("")}</tbody></table></div><p class="qdetail">A name in the dispatcher is not a permission. Whether each is guarded by the owner, by a role, or by nothing at all is not readable from bytecode.</p>` : o.surfaceFrom === "implementation-unreadable" ? `<p class="qdetail">The code this proxy points at could not be read, so no function list is shown. Its switches are unknown, not absent.</p>` : `<p class="qdetail">No mint, pause, blacklist, fee, limit, trading or upgrade function was seen among the ${o.selectors} four-byte selectors in the code.</p>`;
     return `<h3 class="cap">What the chain answered</h3><dl class="kv">
-    <dt>owner</dt><dd>${o.ownerUnread ? "owner() is in the code but the chain would not answer it" : o.owner === null ? "no owner() function in the code" : o.owner.renounced ? '<span class="flag ok">renounced</span> nobody can call owner-only functions' : `<span class="mono">${esc2(o.owner.address)}</span>${o.owner.isContract ? " (a contract)" : ""}${o.ownerBalance?.bps != null ? ` \xB7 holds ${pctText(o.ownerBalance.bps)}` : ""}${o.ownable ? "" : " \xB7 no renounceOwnership()"}`}</dd>
+    <dt>owner</dt><dd>${o.surfaceFrom === "implementation-unreadable" ? "unknown \u2014 the proxy's implementation could not be read, so whether it has owner() is not known" : o.ownerUnread ? "owner() is in the code but the chain would not answer it" : o.owner === null ? "no owner() function in the code" : o.owner.renounced ? '<span class="flag ok">renounced</span> nobody can call owner-only functions' : `<span class="mono">${esc2(o.owner.address)}</span>${o.owner.isContract ? " (a contract)" : ""}${o.ownerBalance?.bps != null ? ` \xB7 holds ${pctText(o.ownerBalance.bps)}` : ""}${o.ownable ? "" : " \xB7 no renounceOwnership()"}`}</dd>
     ${o.paused !== null ? `<dt>paused</dt><dd>${o.paused ? '<span class="flag bad">yes</span>' : '<span class="flag ok">no</span>'}</dd>` : ""}
     ${o.tradingOpen ? `<dt>${esc2(o.tradingOpen.view)}</dt><dd>${o.tradingOpen.open ? '<span class="flag ok">true</span> trading is open' : '<span class="flag bad">false</span> trading is switched off'}</dd>` : ""}
     <dt>source</dt><dd>${o.verified === null ? "explorer not reachable" : o.verified ? '<span class="flag ok">verified</span> the code can be read on the explorer' : '<span class="flag bad">not verified</span> only the bytes can be read'}</dd>
@@ -11469,6 +11567,12 @@
     const signed = (v) => mny(v, qd.decimals, qd.symbol, qd.native, { plus: true });
     const resultWord = p.balance === 0n ? "result so far" : "if sold now";
     const drift = bought - sold !== p.balance;
+    const onCurve = bought - sold;
+    const result = !drift ? p.unrealised : p.balance > 0n && onCurve > 0n && whole ? (() => {
+      const held = p.balance < onCurve ? p.balance : onCurve;
+      return whole.net * held / p.balance - p.costBasis * held / onCurve;
+    })() : null;
+    const resultLabel = !drift ? resultWord : "if sold now \xB7 only what was bought here";
     const tokenLabel = symbol ?? shortAddress(p.token);
     const tokenHref = `#/${mode === "demo" ? "demo" : "t"}/${p.token}${routeChain()}`;
     const rows = p.trades.slice(-20).reverse().map((t) => `<tr class="t-${t.kind}">
@@ -11483,7 +11587,7 @@
         <div class="cap-l">Wallet in <a href="${tokenHref}">${esc2(tokenLabel)}</a></div>
         <div class="sym"><button class="vaddr tokact" type="button" data-copy="${esc2(p.wallet)}" title="Copy ${esc2(p.wallet)}"><span class="mono">${esc2(shortAddress(p.wallet))}</span><span class="tokact-i" aria-hidden="true">\u29C9</span></button></div>
         <div class="at">block ${head.toLocaleString("en-US")} \xB7 ${esc2(p.exit.venue)}</div></div>
-      <div class="stamp ${p.unrealised < 0n ? "no" : ""}" title="${esc2(resultWord)}">${signed(p.unrealised)}</div></div>
+      <div class="stamp ${result !== null && result < 0n ? "no" : ""}" title="${esc2(resultLabel)}">${result === null ? "P&amp;L n/a" : signed(result)}</div></div>
     <div class="grid">
       <section class="sec"><h2>Position</h2><dl class="kv">
         <dt>holds now</dt><dd class="num">${esc2(formatCoin(p.balance, 18))} ${esc2(tokenLabel)}</dd>
@@ -11494,7 +11598,7 @@
         <dt>taxes paid</dt><dd>${money2(p.taxesPaid)} <small style="color:var(--dim)">creator tax plus any door tax</small></dd>
         <dt>net in</dt><dd>${money2(p.costBasis)}${p.costBasis < 0n ? " \xB7 took out more than put in" : ""}</dd>
         <dt>sell it all now</dt><dd>${p.balance === 0n ? "nothing left to sell" : whole ? money2(whole.net) : "n/a"}</dd>
-        <dt>${esc2(resultWord)}</dt><dd>${signed(p.unrealised)}</dd>
+        <dt>${esc2(resultLabel)}</dt><dd>${result === null ? "not computable: what was bought here has all moved out by transfer" : signed(result)}</dd>
       </dl><p style="margin:10px 0 0;color:var(--dim);font-size:12px">${esc2(p.exit.note)}</p></section>
       <section class="sec"><h2>Trades</h2>${p.trades.length ? `<div class="tbl"><table class="buys trades"><thead><tr><th>block</th><th>side</th><th class="num">paid / received</th><th class="num">tokens</th><th class="num">fee + tax</th></tr></thead><tbody>${rows}</tbody></table></div>` : `<p style="color:var(--muted);margin:0">No curve trades by this wallet on this launch.</p>`}</section>
     </div></div>`;
@@ -11576,14 +11680,15 @@
     return mode === "demo" ? "" : `?chain=${chain().key}`;
   }
   function start(begin) {
-    doorRun++;
+    const run = ++doorRun;
     void begin().catch((error) => {
-      failed(error, q.value.trim());
+      if (run === doorRun) failed(error, q.value.trim());
     }).finally(() => {
-      go.disabled = false;
+      if (run === doorRun) go.disabled = false;
     });
   }
   function home() {
+    document.body.classList.add("front");
     setPageTitle(BASE_TITLE);
     stopTape();
     stopWatch();
@@ -11604,6 +11709,7 @@
     const params = new URLSearchParams(query);
     const parts = path.split("/").filter(Boolean);
     if (!parts.length) return home();
+    document.body.classList.remove("front");
     const chainParam = params.get("chain");
     const wantDemo = parts[0] === "demo" || chainParam === "demo";
     if (wantDemo && mode !== "demo") setMode("demo", true);
@@ -11639,13 +11745,24 @@
       case "plan":
         setView("plan");
         q.value = "";
-        start(() => runPlan(Number(params.get("tax") ?? 100), params));
+        {
+          const tax = params.get("tax") ?? "100";
+          const buy = params.get("buy");
+          if (!/^\d{1,5}$/.test(tax) || Number(tax) > 1e4 || buy !== null && !(Number(buy) > 0)) {
+            out.innerHTML = `<div class="error"><strong>The planner needs a creator tax in bps and a positive buy size.</strong><p>Creator tax is a whole number of basis points from 0 to 10000 (100 = 1%); the buy is an amount of ${esc2(chain().native.symbol)} above zero. Got tax "${esc2(tax)}"${buy !== null ? ` and buy "${esc2(buy)}"` : ""}.</p><div class="err-acts"><a class="ghost" href="#/plan?tax=100&chain=${mode === "demo" ? "demo" : chain().key}">Open it with 1%</a></div></div>`;
+            break;
+          }
+          start(() => runPlan(Number(tax), params));
+        }
         break;
       case "board":
         setView("board");
         q.value = "";
-        start(() => runBoard(Number(params.get("hours") ?? 1) || 1));
+        start(() => runBoard([1, 6, 24].includes(Number(params.get("hours"))) ? Number(params.get("hours")) : 1));
         break;
+      default:
+        home();
+        showToast("That link is not a page here, so this is the front page");
     }
   }
   function pastedSubject(text) {
@@ -11685,6 +11802,7 @@
     }
     if (location.hash === hash) route();
     else location.hash = hash;
+    q.blur();
   }
   function boot() {
     $("mark").src = `data:image/svg+xml;utf8,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" shape-rendering="crispEdges">${MASCOT_SVG_INNER}</svg>`)}`;
@@ -11723,11 +11841,35 @@
     q.addEventListener("input", () => {
       qhint.hidden = true;
     });
+    q.addEventListener("paste", () => {
+      setTimeout(() => {
+        const v = q.value.trim();
+        if (pastedSubject(v) || detect(v) && /^(0x|[1-9A-HJ-NP-Za-km-z]{32,})/.test(v)) submit();
+      }, 0);
+    });
+    document.addEventListener("paste", (event) => {
+      const t = event.target;
+      if (t && (t.closest("input, textarea, select") || t.isContentEditable)) return;
+      const text = event.clipboardData?.getData("text") ?? "";
+      if (!pastedSubject(text)) return;
+      event.preventDefault();
+      q.value = text.trim();
+      submit();
+    });
     form.addEventListener("submit", (e) => {
       e.preventDefault();
       submit();
     });
-    feedToggle.addEventListener("click", () => setFeed(!feedOn));
+    feedToggle.addEventListener("click", () => {
+      if (feedOn) {
+        const box = feedBox.getBoundingClientRect();
+        if (box.top > window.innerHeight || box.bottom < 0) {
+          feedBox.scrollIntoView({ block: "start", behavior: "smooth" });
+          return;
+        }
+      }
+      setFeed(!feedOn);
+    });
     out.addEventListener("pointermove", (event) => {
       const plot = event.target.closest(".chart-plot");
       if (!plot) return;
@@ -11819,6 +11961,7 @@
     setView("door");
     if (location.hash) route();
     else {
+      document.body.classList.add("front");
       q.focus();
     }
     if (!IN_POPUP && storage("bouncer.feed") !== "0") setFeed(true, false);
